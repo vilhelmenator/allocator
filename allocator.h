@@ -66,15 +66,23 @@ uint64_t rdtsc() {
 #define MAX_RAW_ALLOC_SIZE 256 * MIN_ALLOC_SIZE
 
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
-#define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4    // 16k
-#define DEFAULT_PAGE_SIZE SMALL_OBJECT_SIZE * 4       // 64kb
-#define MEDIUM_OBJECT_SIZE DEFAULT_PAGE_SIZE * 4      // 128k
-#define DEFAULT_MID_PAGE_SIZE MEDIUM_OBJECT_SIZE * 4  // 512kb
-#define LARGE_OBJECT_SIZE DEFAULT_MID_PAGE_SIZE * 4   // 2 megs
-#define DEFAULT_LARGE_PAGE_SIZE LARGE_OBJECT_SIZE * 2 // 4meg
 
-#define BASE_PAGE_EXPONENT 16
-#define BASE_PAGE_EXPONENT_INCR 3
+#define SMALL_OBJECT_SIZE                                                      \
+  DEFAULT_OS_PAGE_SIZE * 4 // 16k      max size of small objects
+#define DEFAULT_PAGE_SIZE                                                      \
+  SMALL_OBJECT_SIZE * 8 // 128kb    small pool size             32 per section
+#define MEDIUM_OBJECT_SIZE                                                     \
+  DEFAULT_PAGE_SIZE // 128kb    max size of mediusm object size
+#define DEFAULT_MID_PAGE_SIZE                                                  \
+  MEDIUM_OBJECT_SIZE * 4 // 512kb    medium pool size            8 per section
+#define LARGE_OBJECT_SIZE                                                      \
+  DEFAULT_MID_PAGE_SIZE * 4 // 2Mb      max size of large objects
+#define DEFAULT_LARGE_PAGE_SIZE                                                \
+  LARGE_OBJECT_SIZE * 2 // 4Mb      large pool size             1 per section
+
+#define SMALL_PAGE_EXPONENT 17
+#define MEDIUM_PAGE_EXPONENT 19
+#define LARGE_PAGE_EXPONENT 22
 
 // larger than 2 meg objects go into 1 section, the same size as the object.
 #define SECTION_SIZE (1ULL << 22ULL)
@@ -92,6 +100,8 @@ uint64_t rdtsc() {
 #define HINT_MAX                                                               \
   ((uintptr_t)30                                                               \
    << 40) // wrap after 30TiB (area after 32TiB is used for huge OS pages)
+
+#define POOL_BIN_COUNT 17 * 8 + 2
 
 // 4 bits to numtz bits
 const uint8_t lt_bit_count[16][2] = {
@@ -171,11 +181,11 @@ inline uint8_t co64(uint64_t c) {
 
 // leading trailing bit counts
 inline uint8_t clz8(uint8_t c) {
-  return c & 0xf ? lt_bit_count[c & 0xf][1] : 4 + lt_bit_count[c & 0xf0][1];
+  return c & 0xf ? lt_bit_count[c & 0xf][1] : 4 + lt_bit_count[c >> 4][1];
 }
 
 inline uint8_t ctz8(uint8_t c) {
-  return c & 0xf0 ? lt_bit_count[c & 0xf0][0] : 4 + lt_bit_count[c & 0xf][0];
+  return c & 0xf0 ? lt_bit_count[c & 0xf0][0] : 4 + lt_bit_count[c >> 4][0];
 }
 
 inline uint8_t clz16(uint16_t c) {
@@ -197,7 +207,7 @@ inline uint8_t ctz32(uint32_t c) {
 }
 
 inline uint8_t clz64(uint64_t c) {
-  return c & 0xffffffff ? clz16((uint32_t)(0x00000000ffffffff & c))
+  return c & 0xffffffff ? clz32((uint32_t)(0x00000000ffffffff & c))
                         : 32 + clz32((uint32_t)(c >> 32));
 }
 
@@ -217,25 +227,25 @@ typedef union bitmask {
 
   bool isEmpty() { return whole == 0; }
 
-  void reserve(uint8_t bit) { whole |= (1 << bit); }
+  void reserve(uint8_t bit) { whole |= ((uint64_t)1 << bit); }
 
-  int8_t firstFree() { return clz64(~whole); }
+  int8_t firstFree(uint64_t mask) { return clz64(~(whole | mask)); }
 
-  int8_t allocate_bits(uint8_t numBits) {
-    auto fidx = freeIdx(numBits);
+  int8_t allocate_bits(uint8_t numBits, uint64_t mask) {
+    auto fidx = freeIdx(numBits, mask);
     if (fidx != -1) {
-      uint64_t subMask = ((1 << numBits) - 1) << fidx;
+      uint64_t subMask = (((uint64_t)1 << numBits) - 1) << fidx;
       whole |= subMask;
     }
     return fidx;
   }
 
-  int8_t freeIdx(uint8_t numBits) {
+  int8_t freeIdx(uint8_t numBits, uint64_t mask) {
     if (numBits == 0)
       return -1;
     if (!isFull()) {
       const int max_bits = sizeof(whole) * CHAR_BIT;
-      auto firstZero = firstFree();
+      auto firstZero = firstFree(mask);
       if ((max_bits - firstZero) < numBits) {
         return -1;
       }
@@ -388,15 +398,19 @@ enum Partition {
   LARGE      // < 4megs
 };
 
-enum Exponent { EXP_SMALL = 16, EXP_MEDIUM = 19, EXP_LARGE = 22 };
+enum Exponent {
+  EXP_SMALL = SMALL_PAGE_EXPONENT,
+  EXP_MEDIUM = MEDIUM_PAGE_EXPONENT,
+  EXP_LARGE = LARGE_PAGE_EXPONENT
+};
 
 inline int16_t getPageExponent(size_t s) {
   if (s < SMALL_OBJECT_SIZE) {
-    return BASE_PAGE_EXPONENT;
+    return SMALL_PAGE_EXPONENT;
   } else if (s < MEDIUM_OBJECT_SIZE) {
-    return BASE_PAGE_EXPONENT + BASE_PAGE_EXPONENT_INCR;
+    return MEDIUM_PAGE_EXPONENT;
   } else {
-    return BASE_PAGE_EXPONENT + (BASE_PAGE_EXPONENT_INCR * 2);
+    return LARGE_PAGE_EXPONENT;
   }
 }
 
@@ -410,9 +424,9 @@ inline Partition getPartition(size_t s) {
   }
 }
 inline Partition getPartitionFromExponent(size_t exp) {
-  if (exp == BASE_PAGE_EXPONENT) {
+  if (exp == SMALL_PAGE_EXPONENT) {
     return SMALL;
-  } else if (exp == (BASE_PAGE_EXPONENT + 3)) {
+  } else if (exp == MEDIUM_PAGE_EXPONENT) {
     return MEDIUM;
   } else {
     return LARGE;
@@ -481,6 +495,7 @@ struct Pool {
   int32_t block_size;    //
   int32_t num_available; // num of available blocks. // num of committed blocks.
   int32_t num_committed; // the number of free blocks. page_size/block_size
+  int32_t num_used;
   Block
       *free; // the start of the free list. extend free by 1 os page at a time.
   Pool *prev;
@@ -488,20 +503,20 @@ struct Pool {
 
   bool isFull() { return num_committed >= num_available; }
 
+  bool isConnected() { return prev != NULL || next != NULL; }
+
   void freeBlock(void *p) {
     Block *new_free = (Block *)p;
     new_free->next = free;
     free = new_free;
+    num_used--;
   }
 
-  Block *getFreeBlock() {
-    extendPool();
-    if (free) {
-      auto res = free;
-      free = res->next;
-      return res;
-    }
-    return NULL;
+  inline Block *getFreeBlock() {
+    num_used++;
+    auto res = free;
+    free = res->next;
+    return res;
   }
 
   bool extendPool() {
@@ -524,7 +539,7 @@ struct Pool {
           auto offset = page_end - start;
           auto steps = min(offset / block_size, num_available - num_committed);
           Block *block = free;
-          for (int i = 1; i < steps; i++) {
+          for (int i = 1; i <= steps; i++) {
             uintptr_t block_addre = (uintptr_t)((uint8_t *)block + block_size);
             Block *next = (Block *)block_addre;
             block->next = next;
@@ -651,9 +666,10 @@ public:
 struct Section {
   typedef MemQueue<Section> Queue;
   // 24 bytes as the section header
-  bitmask mask; // 64 pages bit per page.
+  bitmask mask; // 32 pages bit per page.   // lower 32 bits per section/ high
+                // bits are for area
   size_t thread_id;
-  size_t size;
+  size_t size; // lower 32 bits per section/ high bits are for area
   // An area and section can overlap, and the prev next pointer of an area will
   // always be under the 32tb range. top 16 bits area always zero.
 private:
@@ -688,16 +704,19 @@ public:
   }
 
   uintptr_t allocate_pool(int16_t blockSize) {
-    auto pageIdx = mask.firstFree();
+    unsigned int pageIdx = mask.firstFree(0xffffffff00000000);
     mask.reserve(pageIdx);
     uintptr_t page = getPool(pageIdx);
     init_pool(page, pageIdx, blockSize);
     return page;
   }
 
+  bool isFull() { return (mask.whole & 0xffffffff) == 0xffffffff; }
+
   inline Pool *findPool(void *p) const {
     ptrdiff_t diff = (uint8_t *)p - (uint8_t *)this;
-    switch (getContainerExponent()) {
+    auto exp = getContainerExponent();
+    switch (exp) {
     case Exponent::EXP_SMALL: {
       return (Pool *)((uint8_t *)&pages[0] +
                       (1 << Exponent::EXP_SMALL) *
@@ -735,18 +754,19 @@ private:
   }
 
   void init_pool(uintptr_t paddr, int8_t pidx, int16_t blockSize) {
-    auto last_page = false;
     auto partition = getContainerExponent();
     auto psize = 1 << partition;
-    if ((partition == EXP_SMALL && pidx == 63) ||
-        (partition == EXP_MEDIUM && pidx == 7) || (partition == EXP_LARGE)) {
-      last_page = true;
-    }
+
+    uintptr_t section_end = align_up(paddr, SECTION_SIZE);
+    auto remaining_size = section_end - paddr;
+    auto block_memory = psize - sizeof(Pool);
+
     Pool *pool = (Pool *)paddr;
     pool->idx = pidx;
     pool->block_size = blockSize;
-    pool->num_available = (psize - sizeof(Pool)) / blockSize;
+    pool->num_available = (int)(min(remaining_size, block_memory) / blockSize);
     pool->num_committed = 0;
+    pool->num_used = 0;
     pool->next = NULL;
     pool->prev = NULL;
     pool->extendPool();
@@ -764,6 +784,8 @@ struct Area // 32 megs of memory.
 {
   // The area is overlapping with the first section. And they share some
   // attributes.
+  static const uintptr_t small_area_mask = 0xff;
+  static const uintptr_t large_area_mask = 0xffff;
   static const uintptr_t ptr_mask = 0x0000ffffffffffff;
   static const uintptr_t inv_ptr_mask = 0xffff000000000000;
   typedef MemQueue<Area> Queue;
@@ -778,6 +800,13 @@ private:
   Area *next;
 
 public:
+  bool isFull() {
+    if (size == AREA_SIZE) {
+      return (mask.whole >> 32) == small_area_mask;
+    } else {
+      return (mask.whole >> 32) == large_area_mask;
+    }
+  }
   inline Area *getPrev() const {
     return (Area *)((uintptr_t)prev & ptr_mask);
   } // remove the top 16 bits
@@ -930,32 +959,29 @@ private:
                  int32_t *outSectionCount) {
     // the areas are empty
     Area *newArea = NULL;
-    auto p = getPartition(size);
+    // mask out the section part of the mask.
+    uint64_t section_mask = 0xffffffff;
+    // mask out the lower 32 bits of the mask.
     if (previous_area != NULL) {
       Area *cur_area = previous_area;
       //
-      while (cur_area != NULL) {
-        auto idx = cur_area->mask.allocate_bits(1);
+      while (cur_area != NULL && !cur_area->isFull()) {
+        auto idx = cur_area->mask.allocate_bits(1, section_mask);
         if (idx != -1) {
           newArea = cur_area;
-          *outSectionIdx = idx;
+          *outSectionIdx = idx - 32;
           break;
         }
         cur_area = cur_area->getNext();
       }
     }
+    // reserve an index.
     if (newArea == NULL) {
       if (!alloc_area(&newArea)) {
         return NULL;
       }
-
-      if (p == MEDIUM) {
-        *outSectionIdx = 0;
-        newArea->mask.reserve(1);
-      } else {
-        *outSectionIdx = 1;
-        newArea->mask.reserve(2);
-      }
+      *outSectionIdx = 0;
+      newArea->mask.reserve(32);
       newArea->size = AREA_SIZE;
     }
 
@@ -985,8 +1011,8 @@ public:
   Page::Queue pages; // each block has a header and footer labelling size and
                      // allocation state.
 
-  Pool free_small_pools[NUM_FREE_FAST_PAGES]; // 8 - 256
-  Pool::Queue pools;
+  Pool::Queue pools[POOL_BIN_COUNT];
+  unsigned int poolCount;
 
   static inline size_t thread_id() { return (size_t)&_thread_id; }
 
@@ -1001,7 +1027,30 @@ public:
     pages = {NULL, NULL};
     local_sections = {NULL, NULL};
     local_areas = {NULL, NULL};
-    pools = {NULL, NULL, 8};
+    poolCount = 0;
+
+    //
+    for (int i = 0; i < 8; i++) {
+      pools[i] = {NULL, NULL, i * 8};
+    }
+    int base_nums[8] = {0b1000000, 0b1001000, 0b1010000, 0b1011000,
+                        0b1100000, 0b1101000, 0b1110000, 0b1111000};
+    for (int i = 0; i < 16; i++) {
+      int base = 8 + i * 8;
+      pools[base] = {NULL, NULL, base_nums[0]};
+      pools[base + 1] = {NULL, NULL, base_nums[1]};
+      pools[base + 2] = {NULL, NULL, base_nums[2]};
+      pools[base + 3] = {NULL, NULL, base_nums[3]};
+      pools[base + 4] = {NULL, NULL, base_nums[4]};
+      pools[base + 5] = {NULL, NULL, base_nums[5]};
+      pools[base + 6] = {NULL, NULL, base_nums[6]};
+      pools[base + 7] = {NULL, NULL, base_nums[7]};
+      for (int j = 0; j < 8; j++) {
+        base_nums[j] = base_nums[j] << 1;
+      }
+    }
+    pools[POOL_BIN_COUNT - 2] = {NULL, NULL, base_nums[0]};
+    pools[POOL_BIN_COUNT - 1] = {NULL, NULL, base_nums[1]};
   }
 
   void *align_base(size_t size) {
@@ -1037,61 +1086,6 @@ public:
       return small_page->getFreeBlock();
     }
     default: {
-      // [ ] - allocate large memory objects  ... see it allocate different page
-      // sizes. [ ] - free large memory objects.     ... see the areas get
-      // released back to the os. [ ] - ensure that it works with multiple
-      // threads. offset and areas. [ ] - structures, memory_block, raw_areas
-      // and pages. [ ] - allocation between 2 && 32 megs, go into raw areas
-      // with implicit lists. [ ] - perf tests and mimalloc tests. [ ] - memory
-      // stats and leak sanity test.å [ ] - integrate with allot library. [ ] -
-      // -
-      //
-      // address counter per thread. much like an index in a flat tree.
-      //  base address from what thread id.
-      //  subsequent address fields are derived from rules.
-      //
-
-      //
-      // alloc::pool_slots;
-      // alloc::misc_slots; ->ui threads, misc thread workers that are not part
-      // of the pool. auto thread_id = alloc.init_thread();
-      // alloc.release_thread();  // release allocation slot for thread.
-      //
-      //
-
-      //
-      //  alloc.push_arena() -> push work into the high address space.
-      //      do work.
-      //  void*p = alloc->pop_arena(); -> pop work back into the previous
-      //  address space.
-      //      move the parts from the arena that we want to keep.
-      //  alloc->release_arena(p);
-      //
-
-      //
-      // base memory hierarchy
-      //
-      // 32, 4 gigs per thred. high order area. 4tb / num threads. 64 gigs per
-      // thread. resource area. reserved for main thread. resource thread.
-      //
-
-      //
-      // 32*32    1gig    1 gig
-      // 32*256           8 gigs
-      // 32*1gb           32 gigs
-      // 32*4gb           128 gigs
-      //
-
-      // 32  2gigs   128 * 32
-      //    2gigs    128gigs
-      // [32 megs] [2gigs] [128 gigs]
-      // 32*64 [ 2gigs ] [ 128 gigs ]
-      // base area 32 megs. [32*1024] 3.2gig [1gb per thread] [1tb]
-      //
-      // extended area 1 gig per thread.
-      // allocate a section 32 megs aligned in the special part of vm.
-      // fit to the size... so area header plus the actual allocation size.
-      //
       break;
     }
     }
@@ -1106,7 +1100,19 @@ public:
     if (size <= AREA_SIZE) {
       Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
       if (_thread_idx == section->thread_id) {
-        section->findPool(p)->freeBlock(p);
+        auto pool = section->findPool(p);
+        pool->freeBlock(p);
+        auto queue = sizeToBin(pool->block_size);
+        // if the free pools list is empty.
+        if (queue->first == NULL) {
+          queue->enqueue(pool);
+        } else {
+          // if the pool is disconnected from the queue
+          if (!pool->isConnected()) {
+            // reconnect
+            queue->enqueue(pool);
+          }
+        }
       }
     } else {
       // large object allocation.
@@ -1138,6 +1144,19 @@ public:
   }
 
 private:
+  inline Pool::Queue *sizeToBin(size_t s) {
+    size_t as = align_up(s, 8);
+    int bmask = ~0x7f;
+    if ((bmask & as) == 0) {
+      return &pools[as >> 3];
+    } else {
+      int tz = __builtin_clzll(as);
+      size_t numWidth = 60 - tz;
+      auto bin = 8 + ((numWidth - 3) << 3) + ((as >> (numWidth)&0x7));
+      return &pools[bin];
+    }
+  }
+
   Pool *free_small_pool(size_t s) {
     // FixedPage* start = NULL;
     // auto bin = s/sizeof(uintptr_t);
@@ -1149,18 +1168,30 @@ private:
     return free_pool(s);
   }
 
+  int size_to_poolQueue(size_t s) {
+    int asize = align(s);
+    int index = asize / sizeof(uintptr_t) - 1;
+
+    //
+    return 0;
+  }
+
   Pool *free_pool(size_t s) {
     Pool *start = NULL;
-    // auto bin = s/sizeof(uintptr_t);
-    // FixedPage* start = &free_small_pages[bin];
-    // while(start != NULL && (start->free != NULL))
-    //{
-    //     return start;
-    // }
-    if (pools.first != NULL) {
-      start = pools.first;
+    auto queue = sizeToBin(s);
+    if (queue->first != NULL) {
+      start = queue->first;
       while (start != NULL && start->free == NULL) {
-        start = start->next;
+        auto next = start->next;
+        if (!start->isFull()) {
+          if (start->extendPool()) {
+            return start;
+          }
+        } else {
+          // disconnect a pool if it becomes completely full
+          queue->remove(start);
+        }
+        start = next;
       }
       if (start != NULL) {
         return start;
@@ -1172,7 +1203,7 @@ private:
       // find free section.
       while (free_section != NULL) {
         if (free_section->getContainerExponent() == page_exponent) {
-          if (!free_section->mask.isFull()) {
+          if (!free_section->isFull()) {
             break;
           }
         }
@@ -1194,7 +1225,8 @@ private:
       free_section = new_section;
     }
     start = (Pool *)free_section->allocate_pool(s);
-    pools.enqueue(start);
+    poolCount++;
+    queue->enqueue(start);
     return start;
   }
 };

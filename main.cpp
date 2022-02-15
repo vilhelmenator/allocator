@@ -11,7 +11,7 @@
 
 #include "allocator.h"
 
-const int NUMBER_OF_ITEMS = 100;
+const int NUMBER_OF_ITEMS = 1000;
 const int NUMBER_OF_ITERATIONS = 1000000;
 
 thread_local size_t myAllocator::_thread_id = 0;
