@@ -516,6 +516,8 @@ struct Page {
   Page *prev;
   Page *next;
 
+  inline bool isConnected() { return prev != NULL || next != NULL; }
+
   inline bool has_room(size_t s) {
     if (used_memory == total_memory) {
       return false;
@@ -526,7 +528,7 @@ struct Page {
     return false;
   }
 
-  void *getBlock(int32_t s) {
+  void *getBlock(uint32_t s) {
     void *ptr = NULL;
     if ((ptr = (char *)find_fit(s)) != NULL) {
       place(ptr, s);
@@ -595,7 +597,7 @@ struct Page {
     return bp;
   }
 
-  inline void place(void *bp, int32_t asize) {
+  inline void place(void *bp, uint32_t asize) {
     heap_block *hb = (heap_block *)bp;
     auto csize = hb->get_header() & ~0x7;
 
@@ -613,7 +615,7 @@ struct Page {
     }
   }
 
-  inline void *find_fit(int asize) {
+  inline void *find_fit(uint32_t asize) {
     void *oldrover = seek;
     heap_block *hb = (heap_block *)seek;
     auto bsize = hb->get_header() & ~0x7;
@@ -775,21 +777,21 @@ public:
     }
   }
 
-  inline Pool *findCollection(void *p) const {
+  inline void *findCollection(void *p) const {
     ptrdiff_t diff = (uint8_t *)p - (uint8_t *)this;
     switch (getContainerExponent()) {
     case Exponent::EXP_SMALL: {
-      return (Pool *)((uint8_t *)&collections[0] +
+      return (void *)((uint8_t *)&collections[0] +
                       (1 << Exponent::EXP_SMALL) *
                           ((size_t)diff >> Exponent::EXP_SMALL));
     }
     case Exponent::EXP_MEDIUM: {
-      return (Pool *)((uint8_t *)&collections[0] +
+      return (void *)((uint8_t *)&collections[0] +
                       (1 << Exponent::EXP_MEDIUM) *
                           ((size_t)diff >> Exponent::EXP_MEDIUM));
     }
     default: {
-      return (Pool *)((uint8_t *)&collections[0] +
+      return (void *)((uint8_t *)&collections[0] +
                       (1 << Exponent::EXP_LARGE) *
                           ((size_t)diff >> Exponent::EXP_LARGE));
     }
@@ -1195,7 +1197,8 @@ public:
         return pool->getFreeBlock();
       } else if (asize < (AREA_SIZE_SMALL - 64)) {
         // allocate form the huge page
-        // get from the implicit large page
+        auto page = free_page(asize);
+        return page->getBlock((uint32_t)asize);
       } else {
         // allocate directly from OS.
         // get a section from the os. Offset the allocations by 64bytes.
@@ -1230,7 +1233,7 @@ public:
     case 1: {
       // There are only pools in this area
       if (_thread_idx == section->thread_id) {
-        auto pool = section->findCollection(p);
+        auto pool = (Pool *)section->findCollection(p);
         pool->freeBlock(p);
         active_bin.attachPool(pool);
         auto queue = &pools[sizeToPool(pool->block_size)];
@@ -1251,11 +1254,20 @@ public:
       // if it is page section, free
       if (_thread_idx == section->thread_id) {
         if (section->getContainerType() == PAGE) {
-          // most likely a a large page
-          // get the page, release the memory
-          // coalesce memory.
+          auto page = (Page *)section->findCollection(p);
+          page->free(p, true);
+          // if the free pools list is empty.
+          if (free_pages.first == NULL) {
+            free_pages.enqueue(page);
+          } else {
+            // if the pool is disconnected from the queue
+            if (!page->isConnected()) {
+              // reconnect
+              free_pages.enqueue(page);
+            }
+          }
         } else {
-          auto pool = section->findCollection(p);
+          auto pool = (Pool *)section->findCollection(p);
           pool->freeBlock(p);
           active_bin.attachPool(pool);
           auto queue = &pools[sizeToPool(pool->block_size)];
@@ -1385,11 +1397,9 @@ private:
     }
 
     auto sfree_section = free_section(s, ContainerType::PAGE);
-    /*
-    start = (Page*)sfree_section->allocate_page((uint32_t)s);
+    start = (Page *)sfree_section->allocate_page();
     page_count++;
-    free_pages->enqueue(start);
-     */
+    free_pages.enqueue(start);
     return start;
   }
 
