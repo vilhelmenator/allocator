@@ -93,9 +93,11 @@ uint64_t rdtsc() {
 #define DEFAULT_LARGE_PAGE_SIZE                                                \
   LARGE_OBJECT_SIZE * 2 // 4Mb      large pool size             1 per section
 
-#define SMALL_PAGE_EXPONENT 17
-#define MEDIUM_PAGE_EXPONENT 19
-#define LARGE_PAGE_EXPONENT 22
+#define SIZE_CLS_1 17 // 2 ^ 17   // 16k
+#define SIZE_CLS_2 19 //          // 128k
+#define SIZE_CLS_3 22 //          // 4Mb
+#define SIZE_CLS_4 25 //          // 32Mb
+#define SIZE_CLS_5 27 //          // 128Mb
 
 #define SECTION_SIZE (1ULL << 22ULL)
 
@@ -332,18 +334,35 @@ enum Partition {
 };
 
 enum Exponent {
-  EXP_SMALL = SMALL_PAGE_EXPONENT,
-  EXP_MEDIUM = MEDIUM_PAGE_EXPONENT,
-  EXP_LARGE = LARGE_PAGE_EXPONENT
+  EXP_SMALL = SIZE_CLS_1,
+  EXP_MEDIUM = SIZE_CLS_2,
+  EXP_LARGE = SIZE_CLS_3,
+  EXP_HUGE = SIZE_CLS_4,
+  EXP_GIGANTIC = SIZE_CLS_5
 };
 
-inline int16_t getPageExponent(size_t s) {
-  if (s < SMALL_OBJECT_SIZE) {
-    return SMALL_PAGE_EXPONENT;
-  } else if (s < MEDIUM_OBJECT_SIZE) {
-    return MEDIUM_PAGE_EXPONENT;
+enum ContainerType {
+  PAGE,
+  POOL,
+};
+
+inline int32_t getContainerExponent(size_t s, ContainerType t) {
+  if (t == PAGE) {
+    if (s < SMALL_OBJECT_SIZE) {
+      return SIZE_CLS_3;
+    } else if (s < MEDIUM_OBJECT_SIZE) {
+      return SIZE_CLS_4;
+    } else {
+      return SIZE_CLS_5;
+    }
   } else {
-    return LARGE_PAGE_EXPONENT;
+    if (s < SMALL_OBJECT_SIZE) {
+      return SIZE_CLS_1;
+    } else if (s < MEDIUM_OBJECT_SIZE) {
+      return SIZE_CLS_2;
+    } else {
+      return SIZE_CLS_3;
+    }
   }
 }
 
@@ -356,25 +375,7 @@ inline Partition getPartition(size_t s) {
     return LARGE;
   }
 }
-inline Partition getPartitionFromExponent(size_t exp) {
-  if (exp == SMALL_PAGE_EXPONENT) {
-    return SMALL;
-  } else if (exp == MEDIUM_PAGE_EXPONENT) {
-    return MEDIUM;
-  } else {
-    return LARGE;
-  }
-}
-inline int32_t getPartitionSize(Partition p) {
-  switch (p) {
-  case SMALL:
-    return DEFAULT_PAGE_SIZE;
-  case MEDIUM:
-    return DEFAULT_MID_PAGE_SIZE;
-  default:
-    return DEFAULT_LARGE_PAGE_SIZE;
-  }
-}
+
 inline int8_t getPageCount(Partition p) {
   switch (p) {
   case SMALL:
@@ -385,11 +386,6 @@ inline int8_t getPageCount(Partition p) {
     return 1;
   }
 }
-
-enum ContainerType {
-  PAGE,
-  POOL,
-};
 
 template <typename T> struct MemQueue {
   T *first;
@@ -530,8 +526,8 @@ struct Page {
 
   void *getBlock(uint32_t s) {
     void *ptr = NULL;
-    if ((ptr = (char *)find_fit(s)) != NULL) {
-      place(ptr, s);
+    if ((ptr = (char *)find_fit(s >> 3)) != NULL) {
+      place(ptr, s >> 3);
     }
     return ptr;
   }
@@ -550,15 +546,11 @@ struct Page {
   }
 
   inline void extend() {
-    *start = 0;
-    *(start + WSIZE) = DSIZE | 1;   /* Prologue header */
-    *(start + DSIZE) = (DSIZE | 1); /* Prologue footer */
-    *(start + WSIZE + DSIZE) = 1;   /* Epilogue header */
-    seek = start + DSIZE;
-    ;
+    start += sizeof(uintptr_t);
+    seek = start;
     heap_block *hb = (heap_block *)start;
-    hb->set_header(total_memory, 0);
-    hb->set_footer(total_memory, 0);
+    hb->set_header(total_memory >> 3, 0);
+    hb->set_footer(total_memory >> 3, 0);
     hb->next()->set_header(0, 1);
   }
 
@@ -601,7 +593,7 @@ struct Page {
     heap_block *hb = (heap_block *)bp;
     auto csize = hb->get_header() & ~0x7;
 
-    if ((csize - asize) >= (2 * DSIZE)) {
+    if ((csize - asize) >= 2) {
       hb->set_header(asize, 1);
       hb->set_footer(asize, 1);
       hb = hb->next();
@@ -748,6 +740,7 @@ public:
   uintptr_t allocate_pool(uint32_t blockSize) {
     unsigned int coll_idx = mask.firstFree(0xffffffff00000000);
     mask.reserve(coll_idx);
+    coll_idx -= 32;
     auto exp = getContainerExponent();
     uintptr_t pool = getCollection(coll_idx, exp);
     init_pool(pool, coll_idx, blockSize, exp);
@@ -757,6 +750,7 @@ public:
   uintptr_t allocate_page() {
     unsigned int coll_idx = mask.firstFree(0xffffffff00000000);
     mask.reserve(coll_idx);
+    coll_idx -= 32;
     auto exp = getContainerExponent();
     uintptr_t page = getCollection(coll_idx, exp);
     init_page(page, coll_idx, exp);
@@ -779,7 +773,8 @@ public:
 
   inline void *findCollection(void *p) const {
     ptrdiff_t diff = (uint8_t *)p - (uint8_t *)this;
-    switch (getContainerExponent()) {
+    auto exp = getContainerExponent();
+    switch (exp) {
     case Exponent::EXP_SMALL: {
       return (void *)((uint8_t *)&collections[0] +
                       (1 << Exponent::EXP_SMALL) *
@@ -792,8 +787,7 @@ public:
     }
     default: {
       return (void *)((uint8_t *)&collections[0] +
-                      (1 << Exponent::EXP_LARGE) *
-                          ((size_t)diff >> Exponent::EXP_LARGE));
+                      (1 << exp) * ((size_t)diff >> exp));
     }
     }
   }
@@ -810,8 +804,7 @@ private:
                          (1 << Exponent::EXP_MEDIUM) * idx);
     }
     default: {
-      return (uintptr_t)((uint8_t *)&collections[0] +
-                         (1 << Exponent::EXP_LARGE) * idx);
+      return (uintptr_t)((uint8_t *)&collections[0] + (1 << exp) * idx);
     }
     }
   }
@@ -837,16 +830,16 @@ private:
   void init_page(uintptr_t paddr, int8_t pidx, Exponent partition) {
     auto psize = 1 << partition;
 
-    uintptr_t section_end = align_up(paddr, SECTION_SIZE);
+    uintptr_t section_end = align_up(paddr, psize);
     auto remaining_size = section_end - paddr;
-    auto block_memory = psize - sizeof(Pool);
-
+    auto block_memory = psize - sizeof(Page);
+    auto header_footer_offset = sizeof(uintptr_t) * 2;
     Page *page = (Page *)paddr;
     page->used_memory = 0;
-    page->total_memory = (int)(min(remaining_size, block_memory)) -
-                         sizeof(uintptr_t) * 2; // header and footer
-    page->min_block = page->total_memory;
-    page->max_block = page->min_block;
+    page->total_memory =
+        (uint32_t)((min(remaining_size, block_memory)) - header_footer_offset);
+    page->max_block = page->total_memory;
+    page->min_block = sizeof(uintptr_t);
     page->num_allocations = 0;
     page->start = &page->blocks[0];
     page->seek = page->start;
@@ -1036,7 +1029,7 @@ private:
                  int32_t *outSectionCount) {
     Area *previous_area = NULL;
     size_t area_size = AREA_SIZE_SMALL;
-    if (size <= AREA_SIZE_SMALL) {
+    if (size < SECTION_MAX_MEMORY) {
       if (small_area_count >= MAX_SMALL_AREAS) {
         // get a large area
         if (large_area_count >= MAX_LARGE_AREAS) {
@@ -1347,12 +1340,12 @@ private:
   }
 
   Section *free_section(size_t s, ContainerType t) {
-    auto page_exponent = getPageExponent(s);
+    auto exponent = getContainerExponent(s, t);
     auto free_section = local_sections.first;
     if (free_section) {
       // find free section.
       while (free_section != NULL) {
-        if (free_section->getContainerExponent() == page_exponent) {
+        if (free_section->getContainerExponent() == exponent) {
           if (!free_section->isFull()) {
             break;
           }
@@ -1367,7 +1360,7 @@ private:
         return NULL;
       }
       new_section->thread_id = _thread_idx;
-      new_section->setContainerExponent(page_exponent);
+      new_section->setContainerExponent(exponent);
       new_section->setContainerType(t);
       new_section->next = NULL;
       new_section->prev = NULL;
