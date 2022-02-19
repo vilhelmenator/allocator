@@ -503,13 +503,62 @@ public:
 
 struct Page {
   typedef MemQueue<Page> Queue;
-  // 64k(64) per segment.
-  uint8_t idx;
+  //
+  int32_t total_memory; // how much do we have available in total
+  int32_t used_memory;  // how much have we used
+  int32_t min_block;    // what is the minum size block available;
+  int32_t max_block;    // what is the maximum size block available;
+
   int32_t num_allocations;
+
   uint8_t *start;
   uint8_t *seek;
   Page *prev;
   Page *next;
+
+  inline bool has_room(size_t s) {
+    if (used_memory == total_memory) {
+      return false;
+    }
+    if (s <= max_block && s >= min_block) {
+      return true;
+    }
+    return false;
+  }
+
+  void *getBlock(int32_t s) {
+    void *ptr = NULL;
+    if ((ptr = (char *)find_fit(s)) != NULL) {
+      place(ptr, s);
+    }
+    return ptr;
+  }
+
+  void free(void *bp, bool should_coalesce) {
+    if (bp == 0)
+      return;
+
+    heap_block *hb = (heap_block *)bp;
+    auto size = hb->get_header() & ~0x7;
+    hb->set_header(size, 0);
+    hb->set_footer(size, 0);
+
+    if (should_coalesce)
+      coalesce(bp);
+  }
+
+  inline void extend() {
+    *start = 0;
+    *(start + WSIZE) = DSIZE | 1;   /* Prologue header */
+    *(start + DSIZE) = (DSIZE | 1); /* Prologue footer */
+    *(start + WSIZE + DSIZE) = 1;   /* Epilogue header */
+    seek = start + DSIZE;
+    ;
+    heap_block *hb = (heap_block *)start;
+    hb->set_header(total_memory, 0);
+    hb->set_footer(total_memory, 0);
+    hb->next()->set_header(0, 1);
+  }
 
   inline void *coalesce(void *bp) {
     heap_block *hb = (heap_block *)bp;
@@ -546,7 +595,7 @@ struct Page {
     return bp;
   }
 
-  inline void place(void *bp, int asize, int list) {
+  inline void place(void *bp, int32_t asize) {
     heap_block *hb = (heap_block *)bp;
     auto csize = hb->get_header() & ~0x7;
 
@@ -695,11 +744,20 @@ public:
   inline size_t getSize() { return asize; }
 
   uintptr_t allocate_pool(uint32_t blockSize) {
-    unsigned int pageIdx = mask.firstFree(0xffffffff00000000);
-    mask.reserve(pageIdx);
+    unsigned int coll_idx = mask.firstFree(0xffffffff00000000);
+    mask.reserve(coll_idx);
     auto exp = getContainerExponent();
-    uintptr_t page = getPool(pageIdx, exp);
-    init_pool(page, pageIdx, blockSize, exp);
+    uintptr_t pool = getCollection(coll_idx, exp);
+    init_pool(pool, coll_idx, blockSize, exp);
+    return pool;
+  }
+
+  uintptr_t allocate_page() {
+    unsigned int coll_idx = mask.firstFree(0xffffffff00000000);
+    mask.reserve(coll_idx);
+    auto exp = getContainerExponent();
+    uintptr_t page = getCollection(coll_idx, exp);
+    init_page(page, coll_idx, exp);
     return page;
   }
 
@@ -717,7 +775,7 @@ public:
     }
   }
 
-  inline Pool *findPool(void *p) const {
+  inline Pool *findCollection(void *p) const {
     ptrdiff_t diff = (uint8_t *)p - (uint8_t *)this;
     switch (getContainerExponent()) {
     case Exponent::EXP_SMALL: {
@@ -739,7 +797,7 @@ public:
   }
 
 private:
-  inline uintptr_t getPool(int8_t idx, Exponent exp) const {
+  inline uintptr_t getCollection(int8_t idx, Exponent exp) const {
     switch (exp) {
     case Exponent::EXP_SMALL: {
       return (uintptr_t)((uint8_t *)&collections[0] +
@@ -772,6 +830,27 @@ private:
     pool->next = NULL;
     pool->prev = NULL;
     pool->extendPool();
+  }
+
+  void init_page(uintptr_t paddr, int8_t pidx, Exponent partition) {
+    auto psize = 1 << partition;
+
+    uintptr_t section_end = align_up(paddr, SECTION_SIZE);
+    auto remaining_size = section_end - paddr;
+    auto block_memory = psize - sizeof(Pool);
+
+    Page *page = (Page *)paddr;
+    page->used_memory = 0;
+    page->total_memory = (int)(min(remaining_size, block_memory)) -
+                         sizeof(uintptr_t) * 2; // header and footer
+    page->min_block = page->total_memory;
+    page->max_block = page->min_block;
+    page->num_allocations = 0;
+    page->start = &page->blocks[0];
+    page->seek = page->start;
+    page->next = NULL;
+    page->prev = NULL;
+    page->extend();
   }
 };
 
@@ -1032,12 +1111,13 @@ public:
   Area::Queue large_areas; //  mid partition areas
   uint32_t large_area_count;
 
-  Page free_pages;   //
+  Page::Queue free_pages;
   Page::Queue pages; // each block has a header and footer labelling size and
                      // allocation state.
+  uint32_t page_count;
 
   Pool::Queue pools[POOL_BIN_COUNT];
-  uint32_t poolCount;
+  uint32_t pool_count;
 
   static inline size_t thread_id() { return (size_t)&_thread_id; }
 
@@ -1051,7 +1131,7 @@ public:
     _thread_idx = nidx + 1;
 
     local_heap_base = 0;
-    free_pages = {0, NULL, NULL, NULL, NULL};
+    free_pages = {NULL, NULL};
     pages = {NULL, NULL};
     local_sections = {NULL, NULL};
     small_areas = {NULL, NULL};
@@ -1059,7 +1139,7 @@ public:
     large_areas = {NULL, NULL};
     large_area_count = 0;
 
-    poolCount = 0;
+    pool_count = 0;
 
     //
     for (int i = 0; i < 8; i++) {
@@ -1106,13 +1186,13 @@ public:
     switch (getPartition(asize)) {
     case SMALL:
     case MEDIUM: {
-      auto small_page = free_pool(asize);
-      return small_page->getFreeBlock();
+      auto pool = free_pool(asize);
+      return pool->getFreeBlock();
     }
     case LARGE: {
       if (asize < (SECTION_SIZE - 64)) {
-        auto small_page = free_pool(asize);
-        return small_page->getFreeBlock();
+        auto pool = free_pool(asize);
+        return pool->getFreeBlock();
       } else if (asize < (AREA_SIZE_SMALL - 64)) {
         // allocate form the huge page
         // get from the implicit large page
@@ -1150,7 +1230,7 @@ public:
     case 1: {
       // There are only pools in this area
       if (_thread_idx == section->thread_id) {
-        auto pool = section->findPool(p);
+        auto pool = section->findCollection(p);
         pool->freeBlock(p);
         active_bin.attachPool(pool);
         auto queue = &pools[sizeToPool(pool->block_size)];
@@ -1175,7 +1255,7 @@ public:
           // get the page, release the memory
           // coalesce memory.
         } else {
-          auto pool = section->findPool(p);
+          auto pool = section->findCollection(p);
           pool->freeBlock(p);
           active_bin.attachPool(pool);
           auto queue = &pools[sizeToPool(pool->block_size)];
@@ -1254,27 +1334,7 @@ private:
     }
   }
 
-  Pool *free_pool(size_t s) {
-    Pool *start = NULL;
-    auto queue = &pools[sizeToPool(s)];
-    if (queue->first != NULL) {
-      start = queue->first;
-      while (start != NULL && start->free == NULL) {
-        auto next = start->next;
-        if (!start->isFull()) {
-          if (start->extendPool()) {
-            return start;
-          }
-        } else {
-          // disconnect a pool if it becomes completely full
-          queue->remove(start);
-        }
-        start = next;
-      }
-      if (start != NULL) {
-        return start;
-      }
-    }
+  Section *free_section(size_t s, ContainerType t) {
     auto page_exponent = getPageExponent(s);
     auto free_section = local_sections.first;
     if (free_section) {
@@ -1296,14 +1356,67 @@ private:
       }
       new_section->thread_id = _thread_idx;
       new_section->setContainerExponent(page_exponent);
-      new_section->setContainerType(ContainerType::POOL);
+      new_section->setContainerType(t);
       new_section->next = NULL;
       new_section->prev = NULL;
       local_sections.enqueue(new_section);
       free_section = new_section;
     }
-    start = (Pool *)free_section->allocate_pool((uint32_t)s);
-    poolCount++;
+    return free_section;
+  }
+
+  Page *free_page(size_t s) {
+    Page *start = NULL;
+    if (free_pages.first != NULL) {
+      start = free_pages.first;
+      while (start != NULL) {
+        auto next = start->next;
+        if (start->has_room(s)) {
+          return start;
+        } else {
+          // disconnect full pages
+          free_pages.remove(start);
+        }
+        start = next;
+      }
+      if (start != NULL) {
+        return start;
+      }
+    }
+
+    auto sfree_section = free_section(s, ContainerType::PAGE);
+    /*
+    start = (Page*)sfree_section->allocate_page((uint32_t)s);
+    page_count++;
+    free_pages->enqueue(start);
+     */
+    return start;
+  }
+
+  Pool *free_pool(size_t s) {
+    Pool *start = NULL;
+    auto queue = &pools[sizeToPool(s)];
+    if (queue->first != NULL) {
+      start = queue->first;
+      while (start != NULL && start->free == NULL) {
+        auto next = start->next;
+        if (!start->isFull()) {
+          if (start->extendPool()) {
+            return start;
+          }
+        } else {
+          // disconnect a pool if it becomes completely full
+          queue->remove(start);
+        }
+        start = next;
+      }
+      if (start != NULL) {
+        return start;
+      }
+    }
+    auto sfree_section = free_section(s, ContainerType::POOL);
+    start = (Pool *)sfree_section->allocate_pool((uint32_t)s);
+    pool_count++;
     queue->enqueue(start);
     return start;
   }
@@ -1390,354 +1503,6 @@ struct _MemoryBlock {
 
   void *realloc(size_t s) {
     //
-    return NULL;
-  }
-};
-
-#define MAX_HEAP (20 * (1 << 20)) /* 20 MB */
-
-//
-//  memory_block() -> controls where the allocated memory comes from.
-//      - otherwise, api needs to be aware of releasing the memory to the
-//      correct pool.
-//
-/*
- * Constants and macros
- */
-
-//#define USE_FREE_LISTS
-
-static const char LogTable256[256] = {
-#define LT(n) n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n
-    -1,    0,     1,     1,     2,     2,     2,     2,     3,     3,     3,
-    3,     3,     3,     3,     3,     LT(4), LT(5), LT(5), LT(6), LT(6), LT(6),
-    LT(6), LT(7), LT(7), LT(7), LT(7), LT(7), LT(7), LT(7), LT(7)};
-
-static inline int log2(unsigned int v) {
-  unsigned int t;
-  unsigned int tt = v >> 16;
-
-  if (tt) {
-    return (t = tt >> 8) ? 24 + LogTable256[t] : 16 + LogTable256[tt];
-  } else {
-    return (t = v >> 8) ? 8 + LogTable256[t] : LogTable256[v];
-  }
-}
-
-static const int max_size = 1 << 25;
-static const int pow_to_list[25] = {0,  0,  0,  0,  0,  0,  1,  2,  3,
-                                    4,  5,  6,  7,  8,  9,  10, 11, 12,
-                                    13, 14, 15, 16, 17, 18, 19};
-
-static inline int next_power_of_two(int size) {
-  size--;
-  size |= size >> 1;
-  size |= size >> 2;
-  size |= size >> 4;
-  size |= size >> 8;
-  size |= size >> 16;
-  size++;
-  return size;
-}
-static inline int adjusted_size(int size) {
-  if (size < DSIZE) {
-    return DSIZE;
-  }
-  /* Adjust block size to include boundary tags and alignment requirements */
-  if (size <= DSIZE) {
-    return 2 * DSIZE;
-  } else {
-    return DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-  }
-}
-
-static inline int size_to_power(int asize) {
-  if (!(asize && !(asize & (asize - 1)))) {
-    asize = next_power_of_two(asize) - 1;
-  }
-  return log2(asize);
-}
-
-class Allocator {
-  static const int minimum_allocation_size = 64;
-  static const int number_of_segl = 20; // segregated lookup lists.
-                                        //
-                                        // instanced per thread.
-                                        //
-private:
-  void *free_lists[number_of_segl]; // Array of pointers to segregated free
-                                    // lists
-  int free_lists_size[number_of_segl];
-  uint8_t *prologue_block; /* Pointer to prologue block */
-  uint8_t *mem_start_brk;  /* points to first byte of heap */
-  uint8_t *mem_brk;        /* points to last byte of heap */
-  uint8_t *mem_max_addr;   /* largest legal heap address */
-  uint8_t error;
-  void *seek_p;
-  void *first_free;
-  void *last_free;
-  void *alloc_memory(size_t size) {
-#ifdef WINDOWS
-    return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-#else
-    return mmap(NULL, size, (PROT_WRITE | PROT_READ),
-                (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
-#endif
-  }
-  void *mem_sbrk(size_t incr) {
-    uint8_t *old_brk = mem_brk;
-
-    if ((incr < 0) || ((mem_brk + incr) > mem_max_addr)) {
-      errno = ENOMEM;
-      fprintf(stderr, "ERROR: mem_sbrk failed. Ran out of memory...\n");
-      return (void *)-1;
-    }
-    mem_brk += incr;
-    return (void *)old_brk;
-  }
-
-public:
-  int max_iter;
-  Allocator() {
-    max_iter = 0;
-
-    if ((mem_start_brk = (uint8_t *)alloc_memory(MAX_HEAP)) == NULL) {
-      fprintf(stderr, "mem_init_vm: malloc error\n");
-      exit(1);
-    }
-
-    mem_max_addr = mem_start_brk + MAX_HEAP; /* max legal heap address */
-    mem_brk = mem_start_brk;                 /* heap is empty initially */
-    uint8_t *heap_start;                     // Pointer to beginning of heap
-
-    /* Initialize array of pointers to segregated free lists */
-    for (int list = 0; list < number_of_segl; list++) {
-      free_lists[list] = NULL;
-      free_lists_size[list] = 0;
-    }
-
-    /* Allocate memory for the initial empty heap */
-    if ((long)(heap_start = (uint8_t *)mem_sbrk(4 * WSIZE)) == -1) {
-      error = -1;
-      return;
-    }
-
-    *heap_start = 0;
-    *(heap_start + WSIZE) = DSIZE | 1;   /* Prologue header */
-    *(heap_start + DSIZE) = (DSIZE | 1); /* Prologue footer */
-    *(heap_start + WSIZE + DSIZE) = 1;   /* Epilogue header */
-    prologue_block = heap_start + DSIZE;
-    seek_p = prologue_block;
-
-    first_free = prologue_block;
-    last_free = prologue_block;
-
-    /* Extend the empty heap */
-    if (extend_heap(os_page_size * 40) == NULL) {
-      error = -1;
-      return;
-    }
-
-    /* Variables for checking function
-    line_count = LINE_OFFSET;
-    skip = 0;
-    */
-    error = 0;
-  }
-
-  void *mm_malloc(unsigned int size) {
-    //
-    //  allocate from a size class.
-    //  what list stores free nodes of certain size.
-    //
-    unsigned int asize = adjusted_size(size);
-    unsigned int extendsize;
-    void *ptr = NULL;
-    int list = 0;
-
-    if (size == 0 || size > max_size) {
-      return NULL;
-    }
-
-#ifdef USE_FREE_LISTS
-    int pow = size_to_power(size);
-    list = pow_to_list[pow];
-    ptr = free_lists[list];
-#else
-
-    if ((ptr = (char *)find_fit(asize)) != NULL) {
-      place(ptr, asize, list);
-      return ptr;
-    }
-#endif
-    if (ptr == NULL) {
-      int incr = (asize / os_page_size + 1);
-      extendsize = os_page_size * incr;
-      if ((ptr = extend_heap(extendsize)) == NULL)
-        return NULL;
-    }
-
-    place(ptr, asize, list);
-
-    return ptr;
-  }
-
-  void mm_free(void *bp) {
-    if (bp == 0)
-      return;
-
-    heap_block *hb = (heap_block *)bp;
-    auto size = hb->get_header() & ~0x7;
-    hb->set_header(size, 0);
-    hb->set_footer(size, 0);
-
-    coalesce(bp);
-  }
-
-  inline void *coalesce(void *bp) {
-    heap_block *hb = (heap_block *)bp;
-    auto size = hb->get_header() & ~0x7;
-
-    size_t prev_alloc = hb->prev()->get_header() & 0x1;
-    size_t next_alloc = hb->next()->get_header() & 0x1;
-
-    if (prev_alloc && next_alloc) {
-
-      return bp;
-    }
-    size_t prev_size = hb->prev()->get_header() & ~0x7;
-    size_t next_size = hb->next()->get_header() & ~0x7;
-    if ((size + next_size) > prev_size) {
-      return bp;
-    }
-    if (prev_alloc && !next_alloc) {
-      size += next_size;
-      hb->set_header(size, 0);
-      hb->set_footer(size, 0);
-    } else if (!prev_alloc && next_alloc) {
-      size += prev_size;
-      hb->set_footer(size, 0);
-      hb->prev()->set_header(size, 0);
-      bp = (void *)hb->prev();
-    } else {
-      size += prev_size + next_size;
-      hb->prev()->set_header(size, 0);
-      hb->next()->set_footer(size, 0);
-      bp = (void *)hb->prev();
-    }
-
-    return bp;
-  }
-
-  void *mm_realloc(void *ptr, int size) {
-    int oldsize;
-    void *newptr;
-
-    if (size == 0) {
-      mm_free(ptr);
-      return 0;
-    }
-
-    if (ptr == NULL) {
-      return mm_malloc(size);
-    }
-    newptr = mm_malloc(size);
-
-    if (!newptr) {
-      return 0;
-    }
-    heap_block *hb = (heap_block *)ptr;
-    oldsize = hb->get_header() & ~0x7;
-    if (size < oldsize)
-      oldsize = size;
-    memcpy(newptr, ptr, oldsize);
-
-    mm_free(ptr);
-
-    return newptr;
-  }
-  inline void update_bounds(void *p) {
-    if (p > last_free) {
-      last_free = p;
-    } else if (p < first_free) {
-      first_free = p;
-    }
-  }
-  inline void *extend_heap(int words) {
-    char *bp;
-    int size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
-    if ((long)(bp = (char *)mem_sbrk(size)) == -1)
-      return NULL;
-
-    heap_block *hb = (heap_block *)bp;
-    hb->set_header(size, 0);
-    hb->set_footer(size, 0);
-    hb->next()->set_header(0, 1);
-
-    return coalesce(bp);
-  }
-
-  inline void place(void *bp, int asize, int list) {
-    heap_block *hb = (heap_block *)bp;
-    auto csize = hb->get_header() & ~0x7;
-
-    if ((csize - asize) >= (2 * DSIZE)) {
-      hb->set_header(asize, 1);
-      hb->set_footer(asize, 1);
-      hb = hb->next();
-      hb->set_header(csize - asize, 0);
-      hb->set_footer(csize - asize, 0);
-
-      // seek_p = hb;
-    } else {
-      hb->set_header(csize, 1);
-      hb->set_footer(csize, 1);
-      // seek_p = hb->next();
-    }
-  }
-
-  inline void *find_fit(int asize) {
-    // if num_free == 0
-    //  return null
-    // if(asize > max_free_size) NULL
-    // if(asize < min_free_size) NULL;
-    // if(num_free > 2)
-    //      find_between min and max address.
-    // else if(num_free <= 2)
-    //      if 1:
-    //          if(min is free) return min;
-    //          if(max is free) return max;
-    //          else
-    //
-    // start form min and walk until max.
-    //
-    void *oldrover = seek_p;
-    heap_block *hb = (heap_block *)seek_p;
-    auto bsize = hb->get_header() & ~0x7;
-    // Search from the rover to the end of list
-    for (; bsize > 0; hb = hb->next(), bsize = hb->get_header() & ~0x7) {
-      auto free = !(hb->get_header() & 0x1);
-      if (free)
-        seek_p = hb;
-      if (free && (asize <= bsize)) {
-        update_bounds(hb);
-        return hb;
-      }
-    }
-
-    seek_p = prologue_block;
-    hb = (heap_block *)seek_p;
-    // search from start of list to old rover
-    for (; hb < oldrover; hb = hb->next(), bsize = hb->get_header() & ~0x7) {
-      auto free = !(hb->get_header() & 0x1);
-      if (free)
-        seek_p = hb;
-      if (free && (asize <= bsize)) {
-        update_bounds(hb);
-        return hb;
-      }
-    }
-    seek_p = prologue_block;
     return NULL;
   }
 };
