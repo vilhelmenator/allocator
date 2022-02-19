@@ -14,11 +14,11 @@
 const int NUMBER_OF_ITEMS = 1000;
 const int NUMBER_OF_ITERATIONS = 1000000;
 
-thread_local size_t myAllocator::_thread_id = 0;
-thread_local int32_t myAllocator::_thread_idx = 0;
+thread_local size_t Allocator::_thread_id = 0;
+thread_local int32_t Allocator::_thread_idx = 0;
 int main(int argc, const char *argv[]) {
 
-  myAllocator alloc;
+  Allocator alloc;
   char *variables[NUMBER_OF_ITEMS];
   char *variables_large[NUMBER_OF_ITERATIONS];
   auto t1 = std::chrono::high_resolution_clock::now();

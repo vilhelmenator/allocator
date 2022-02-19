@@ -951,7 +951,7 @@ static inline void *alloc_memory(void *base, size_t size, bool commit) {
 static uintptr_t aligned_heap_base = partitions_offsets[0];
 static std::atomic<int32_t> global_thread_idx = {-1};
 std::mutex windows_align_mutex;
-struct myAllocator {
+struct Allocator {
 private:
   static thread_local size_t _thread_id;
   static thread_local int32_t _thread_idx;
@@ -1121,7 +1121,7 @@ public:
 
   static inline size_t thread_id() { return (size_t)&_thread_id; }
 
-  myAllocator() {
+  Allocator() {
     local_heap_base = partitions_offsets[0];
     previous_small_area = NULL;
     previous_large_area = NULL;
