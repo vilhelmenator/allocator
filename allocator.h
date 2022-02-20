@@ -1,23 +1,81 @@
+//
+// Partition hints.
+//  - per partition.
+//  - os area. keep a rotated counter.          Aligned to 4megs.
+//  - resource area. keep a rotated counter.    Aligned to 4megs.
+//  - large pages. keep a rotated counter.      Aligned to 4megs.
+//
+
+//
+//  AreaList per partition
+//  AreaList per partition
+//
+//  AddressTracker
+//      - partition[7]
+//      - getNextAddress(partition)
+//      -
+//
+
+//
+//
+//
+// Per thread.
+//  P1: 64, 4Mb Areas.      2   // small, med, large
+//  P2: 128, 4Mb Areas.     4   // small, med, large
+//  P3: 64, 128Mb Areas.    8   // small, med, large, huge
+//  P4: 512, 32Mb+ Areas.   16  // os Large. Varied size alllocations.
+//
+// Per Process.
+//  P5: Resources.          32  // fixed addr resources
+//  P6: Gigantic Pages.     64  // huge OS pages.
+//
+
+//
+// Only main thread can allocate space from the resource and gig os page
+// partitions. P5:  resources.
+//                  Each thread initially just writes an object into local
+//                  space. Needs to get the size of memory needed. The main
+//                  thread is the one that gets memory from the resource
+//                  partition. Threads can then move the object in place without
+//                  conflict.
+// P6:  huge os pages. The main thread is the only one that is doing that.
+//
+// Os allocations:  For allocations. It allocates from the last item in the
+// list, until it runs out of space.
+//                  When out of space, it needs to search the list for memory
+//                  allocation.
+//
+
+// So to summize.
+//  all partitions keep an area list to account for all area allocations.
+//  the two last partitions can only be allocated from on the main thread.
 // TODO
 //
-//  1.
-//  [ ] allocate large area
-//  [ ] allocate PAGE for large objets
-//  [ ] allocate objects from large page
-//  [ ] free objects into large page
-//  [ ] coalesce memory in large page
-//  [ ] allocate memory for 4 - 32 megs.
+// Ensure allocations are coming for correct partitions for size.
+//  Sort areas by address.
+//  Need to walk over area list to find the next base address to use.
 //
-//  2.
+// 1.
+// [x] allocate large area
+// [x] allocate PAGE for large objets
+// [x] allocate objects from large page
+// [ ] on first area.. get base allocation address.
+// [ ] partition hints.
+// [ ] ensure that large page is allocated in correct partition.
+// [ ] free objects into large page
+// [ ] coalesce memory in large page
+// [ ] allocate memory for 4 - 32 megs.
 //
-//  [ ] Areas are in a sorted list by address
-//  [ ] allocate objects larger than 32 megs.
-//  [ ] keep a memory hint tracker for the last 3 partitions.
-//  3.
-//  [ ] thread_free
-//  [ ] thread_setup
-//  [ ] tests.
-//  [ ] stats.
+// 2.
+//
+// [ ] Areas are in a sorted list by address
+// [ ] allocate objects larger than 32 megs.
+// [ ] keep a memory hint tracker for the last 3 partitions.
+// 3.
+// [ ] thread_free
+// [ ] thread_setup
+// [ ] tests.
+// [ ] stats.
 
 #ifndef Malloc_h
 #define Malloc_h
@@ -49,7 +107,7 @@ uint64_t rdtsc() {
 #define DSIZE 8 /* Double word size in bytes */
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
-#define SZ_GB (SZ_MB * SZ_MB)
+#define SZ_GB (SZ_MB * SZ_KB)
 
 //
 // 32meg areas can only be 192 in 6 gigs.
@@ -116,6 +174,7 @@ uint64_t rdtsc() {
   ((uintptr_t)32                                                               \
    << 40) // wrap after 30TiB (area after 32TiB is used for huge OS pages)
 
+#define CACHED_POOL_COUNT 64
 #define POOL_BIN_COUNT 17 * 8 + 2
 #define HEADER_SIZE 64
 
@@ -127,6 +186,7 @@ uint64_t rdtsc() {
 #define MAX_LARGE_AREAS 64   // 128Mb over 8Gb
 #define MAX_HUGE_OBJECTS 512 // 32Mb+ over 16Gb
 
+#define MAX_THREADS 1024 // don't change this...
 //
 // partition counter
 //
@@ -327,7 +387,7 @@ union Block {
   Block *next;
 };
 
-enum Partition {
+enum AllocSize {
   SMALL = 0, // < 64k
   MEDIUM,    // < 512k
   LARGE      // < 4megs
@@ -366,7 +426,7 @@ inline int32_t getContainerExponent(size_t s, ContainerType t) {
   }
 }
 
-inline Partition getPartition(size_t s) {
+inline AllocSize getAllocSize(size_t s) {
   if (s < SMALL_OBJECT_SIZE) {
     return SMALL;
   } else if (s < MEDIUM_OBJECT_SIZE) {
@@ -376,21 +436,11 @@ inline Partition getPartition(size_t s) {
   }
 }
 
-inline int8_t getPageCount(Partition p) {
-  switch (p) {
-  case SMALL:
-    return 64;
-  case MEDIUM:
-    return 8;
-  default:
-    return 1;
-  }
-}
-
-template <typename T> struct MemQueue {
+template <typename T> struct MemList {
   T *first;
   T *last;
-  int32_t size;
+  size_t size;
+
   inline bool isEmpty() { return first == NULL; }
   inline void remove(T *a) {
     if (a->getPrev() != NULL)
@@ -404,6 +454,7 @@ template <typename T> struct MemQueue {
     a->setNext(NULL);
     a->setPrev(NULL);
   }
+
   inline void enqueue(T *a) {
     a->setNext(NULL);
     a->setPrev(last);
@@ -414,11 +465,26 @@ template <typename T> struct MemQueue {
       last = first = a;
     }
   }
+
+  inline void insert_sort(T *a) {
+    if (first == NULL || first >= a) {
+      a->setNext(first);
+      first = a;
+    } else {
+      T *current = first;
+      while (current->getNext() != NULL && current->getNext() < a) {
+        current = current->getNext();
+      }
+      a->setNext(current->getNext());
+      current->setNext(a);
+    }
+  }
 };
 
 struct Pool {
-  typedef MemQueue<Pool> Queue;
+  typedef MemList<Pool> Queue;
 
+  int32_t idx;
   int32_t block_size;    //
   int32_t num_available; // num of available blocks. // num of committed blocks.
   int32_t num_committed; // the number of free blocks. page_size/block_size
@@ -498,8 +564,9 @@ public:
 };
 
 struct Page {
-  typedef MemQueue<Page> Queue;
+  typedef MemList<Page> Queue;
   //
+  int32_t idx;
   int32_t total_memory; // how much do we have available in total
   int32_t used_memory;  // how much have we used
   int32_t min_block;    // what is the minum size block available;
@@ -695,7 +762,7 @@ struct GarbageBin {
 };
 
 struct Section {
-  typedef MemQueue<Section> Queue;
+  typedef MemList<Section> Queue;
   // 24 bytes as the section header
   bitmask mask; // 32 pages bit per page.   // lower 32 bits per section/ high
                 // bits are for area
@@ -856,15 +923,14 @@ struct RawSection {
   uint8_t buff[];
 };
 
-struct Area // 32 megs of memory.
-{
+struct Area {
   // The area is overlapping with the first section. And they share some
   // attributes.
   static const uintptr_t small_area_mask = 0xff;
   static const uintptr_t large_area_mask = 0xffff;
   static const uintptr_t ptr_mask = 0x0000ffffffffffff;
   static const uintptr_t inv_ptr_mask = 0xffff000000000000;
-  typedef MemQueue<Area> Queue;
+  typedef MemList<Area> List;
   bitmask mask;
   size_t thread_id;
 
@@ -899,6 +965,51 @@ public:
   inline void setSize(size_t s) { size |= s << 32; }
 };
 
+struct Partition {
+  Area::List area_01;
+  Area::List area_2;
+  Area::List area_3;
+  static Area::List area_4;
+  static Area::List area_5;
+
+  //
+  Area *getArea() { return NULL; }
+};
+
+#define PARTITION_01 ((uintptr_t)2 << 40)
+#define PARTITION_2 ((uintptr_t)8 << 40)
+#define PARTITION_3 ((uintptr_t)16 << 40)
+
+#define P1(tid)                                                                \
+  {                                                                            \
+    {NULL, NULL, (tid) * (SZ_GB * 6) + PARTITION_01},                          \
+        {NULL, NULL, (tid) * (SZ_GB * 8) + PARTITION_2}, {                     \
+      NULL, NULL, (tid) * (SZ_GB * 16) + PARTITION_3                           \
+    }                                                                          \
+  }
+#define P10(tid)                                                               \
+  P1(tid), P1(tid + 1), P1(tid + 2), P1(tid + 3), P1(tid + 4), P1(tid + 5),    \
+      P1(tid + 6), P1(tid + 7), P1(tid + 8), P1(tid + 9)
+#define P100(tid)                                                              \
+  P10(tid * 100), P10(tid * 100 + 10), P10(tid * 100 + 20),                    \
+      P10(tid * 100 + 30), P10(tid * 100 + 40), P10(tid * 100 + 50),           \
+      P10(tid * 100 + 60), P10(tid * 100 + 70), P10(tid * 100 + 80),           \
+      P10(tid * 100 + 90)
+#define P1000                                                                  \
+  P100(0), P100(1), P100(2), P100(3), P100(4), P100(5), P100(6), P100(7),      \
+      P100(8), P100(9)
+#define PART_LAYOUT                                                            \
+  {                                                                            \
+    P1000, P1(1000), P1(1001), P1(1002), P1(1003), P1(1004), P1(1005),         \
+        P1(1006), P1(1007), P1(1008), P1(1009), P1(1010), P1(1011), P1(1012),  \
+        P1(1013), P1(1014), P1(1015), P1(1016), P1(1017), P1(1018), P1(1019),  \
+        P1(1020), P1(1021), P1(1022), P1(1023)                                 \
+  }
+
+Area::List Partition::area_4 = {NULL, NULL, 0};
+Area::List Partition::area_5 = {NULL, NULL, 0};
+
+Partition memory_partitions[MAX_THREADS] = PART_LAYOUT;
 static inline bool commit_memory(void *base, size_t size) {
 #ifdef WINDOWS
   return VirtualAlloc(base, size, MEM_COMMIT, PAGE_READWRITE) == base;
@@ -945,7 +1056,7 @@ static inline void *alloc_memory(void *base, size_t size, bool commit) {
 
 static uintptr_t aligned_heap_base = partitions_offsets[0];
 static std::atomic<int32_t> global_thread_idx = {-1};
-std::mutex windows_align_mutex;
+
 struct Allocator {
 private:
   static thread_local size_t _thread_id;
@@ -957,6 +1068,8 @@ private:
 
   void *previous_pool;
   //
+  inline bool is_main() { return _thread_idx == 0; }
+
   static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
                                     bool commit) {
     // alignment is smaller than a page size or not a power of two.
@@ -982,11 +1095,8 @@ private:
         return ptr;
       }
       void *aligned_p = (void *)align_up((uintptr_t)ptr, alignment);
-      {
-        std::unique_lock<std::mutex> lock(windows_align_mutex);
-        release_memory(ptr, over_size, commit);
-        ptr = alloc_memory(aligned_p, size, commit);
-      }
+      release_memory(ptr, over_size, commit);
+      ptr = alloc_memory(aligned_p, size, commit);
     }
 
     return ptr;
@@ -1085,10 +1195,10 @@ private:
       return NULL;
     }
     if (new_area->getSize() == AREA_SIZE_SMALL) {
-      small_areas.enqueue(new_area);
+      small_areas.insert_sort(new_area);
       previous_small_area = new_area;
     } else {
-      large_areas.enqueue(new_area);
+      large_areas.insert_sort(new_area);
       previous_large_area = new_area;
     }
 
@@ -1099,24 +1209,38 @@ private:
   void free_section(Section *s) { free_memory(s, SECTION_SIZE); }
 
 public:
-  Section::Queue local_sections; // sections local to this thread.
-
-  Area::Queue small_areas; //  lower partition areas
+  // partitions [0,1,2,3]
+  // Areas for partitions 1, 2
+  Area::List small_areas; //  lower partition areas
   uint32_t small_area_count;
-  Area::Queue large_areas; //  mid partition areas
+  // Areas for partitions 3.
+  Area::List large_areas; //  mid partition areas
   uint32_t large_area_count;
 
-  Page::Queue free_pages;
-  Page::Queue pages; // each block has a header and footer labelling size and
-                     // allocation state.
-  uint32_t page_count;
+  // Areas for partitions 4. os partitions.
+  // Area size var.
 
-  Pool::Queue pools[POOL_BIN_COUNT];
-  uint32_t pool_count;
+  // Areas for partition 5. resources.
+  // static Area size var.
+  // Areas for partition 6. gigantic pages.
+  // static Area size var.
+
+  // queues of free items.
+  Section::Queue
+      sections;      // sections local to this thread with free pages or pools
+  Page::Queue pages; // free pages that have room for various size allocations.
+  uint32_t page_count; // how man pages in total have been allocated.
+
+  Pool::Queue pools[POOL_BIN_COUNT]; // free pools of various sizes.
+  uint32_t pool_count; // how many pools in total have been allocated.
+
+  // A fast path to pools of small sizes.
+  Pool *cached_pool[CACHED_POOL_COUNT];
 
   static inline size_t thread_id() { return (size_t)&_thread_id; }
 
   Allocator() {
+    Partition *pp = &memory_partitions[0];
     local_heap_base = partitions_offsets[0];
     previous_small_area = NULL;
     previous_large_area = NULL;
@@ -1126,38 +1250,15 @@ public:
     _thread_idx = nidx + 1;
 
     local_heap_base = 0;
-    free_pages = {NULL, NULL};
     pages = {NULL, NULL};
-    local_sections = {NULL, NULL};
+    sections = {NULL, NULL};
     small_areas = {NULL, NULL};
     small_area_count = 0;
     large_areas = {NULL, NULL};
     large_area_count = 0;
-
     pool_count = 0;
-
-    //
-    for (int i = 0; i < 8; i++) {
-      pools[i] = {NULL, NULL, i * 8};
-    }
-    int base_nums[8] = {0b1000000, 0b1001000, 0b1010000, 0b1011000,
-                        0b1100000, 0b1101000, 0b1110000, 0b1111000};
-    for (int i = 0; i < 16; i++) {
-      int base = 8 + i * 8;
-      pools[base] = {NULL, NULL, base_nums[0]};
-      pools[base + 1] = {NULL, NULL, base_nums[1]};
-      pools[base + 2] = {NULL, NULL, base_nums[2]};
-      pools[base + 3] = {NULL, NULL, base_nums[3]};
-      pools[base + 4] = {NULL, NULL, base_nums[4]};
-      pools[base + 5] = {NULL, NULL, base_nums[5]};
-      pools[base + 6] = {NULL, NULL, base_nums[6]};
-      pools[base + 7] = {NULL, NULL, base_nums[7]};
-      for (int j = 0; j < 8; j++) {
-        base_nums[j] = base_nums[j] << 1;
-      }
-    }
-    pools[POOL_BIN_COUNT - 2] = {NULL, NULL, base_nums[0]};
-    pools[POOL_BIN_COUNT - 1] = {NULL, NULL, base_nums[1]};
+    init_cache(); // pools and cached_pool
+                  // init_partitions();
   }
 
   void *align_base(size_t size) {
@@ -1169,7 +1270,6 @@ public:
     uintptr_t base = local_heap_base;
     if (base == 0 || base > HINT_MAX) {
       base = aligned_heap_base + os_num_hardware_threads * _thread_idx;
-      ;
     }
     if (base % SECTION_SIZE != 0)
       return NULL;
@@ -1177,8 +1277,24 @@ public:
   }
 
   void *malloc(size_t s) {
+    if (s == 0)
+      return NULL;
+
     auto asize = align(s);
-    switch (getPartition(asize)) {
+    auto cached_pool_idx = (asize >> 3) - 1;
+    if (cached_pool_idx < CACHED_POOL_COUNT) {
+      auto pool = cached_pool[cached_pool_idx];
+      if (pool != NULL) {
+        if (!pool->isFull()) {
+          pool->extendPool();
+          return pool->getFreeBlock();
+        } else {
+          cached_pool[cached_pool_idx] = NULL;
+        }
+      }
+    }
+
+    switch (getAllocSize(asize)) {
     case SMALL:
     case MEDIUM: {
       auto pool = free_pool(asize);
@@ -1250,13 +1366,13 @@ public:
           auto page = (Page *)section->findCollection(p);
           page->free(p, true);
           // if the free pools list is empty.
-          if (free_pages.first == NULL) {
-            free_pages.enqueue(page);
+          if (pages.first == NULL) {
+            pages.enqueue(page);
           } else {
             // if the pool is disconnected from the queue
             if (!page->isConnected()) {
               // reconnect
-              free_pages.enqueue(page);
+              pages.enqueue(page);
             }
           }
         } else {
@@ -1341,16 +1457,19 @@ private:
 
   Section *free_section(size_t s, ContainerType t) {
     auto exponent = getContainerExponent(s, t);
-    auto free_section = local_sections.first;
+    auto free_section = sections.first;
     if (free_section) {
       // find free section.
       while (free_section != NULL) {
+        auto next = free_section->next;
         if (free_section->getContainerExponent() == exponent) {
           if (!free_section->isFull()) {
             break;
+          } else {
+            sections.remove(free_section);
           }
         }
-        free_section = free_section->next;
+        free_section = next;
       }
     }
 
@@ -1364,7 +1483,7 @@ private:
       new_section->setContainerType(t);
       new_section->next = NULL;
       new_section->prev = NULL;
-      local_sections.enqueue(new_section);
+      sections.enqueue(new_section);
       free_section = new_section;
     }
     return free_section;
@@ -1372,15 +1491,15 @@ private:
 
   Page *free_page(size_t s) {
     Page *start = NULL;
-    if (free_pages.first != NULL) {
-      start = free_pages.first;
+    if (pages.first != NULL) {
+      start = pages.first;
       while (start != NULL) {
         auto next = start->next;
         if (start->has_room(s)) {
           return start;
         } else {
           // disconnect full pages
-          free_pages.remove(start);
+          pages.remove(start);
         }
         start = next;
       }
@@ -1392,7 +1511,7 @@ private:
     auto sfree_section = free_section(s, ContainerType::PAGE);
     start = (Page *)sfree_section->allocate_page();
     page_count++;
-    free_pages.enqueue(start);
+    pages.enqueue(start);
     return start;
   }
 
@@ -1421,9 +1540,44 @@ private:
     start = (Pool *)sfree_section->allocate_pool((uint32_t)s);
     pool_count++;
     queue->enqueue(start);
+    auto cached_idx = ((s >> 3) - 1);
+    if (cached_idx < CACHED_POOL_COUNT) {
+      cached_pool[cached_idx] = start;
+    }
     return start;
   }
+
+  void init_cache() {
+    //
+    for (int i = 0; i < 8; i++) {
+      pools[i] = {NULL, NULL, i * 8UL};
+    }
+    size_t base_nums[8] = {0b1000000, 0b1001000, 0b1010000, 0b1011000,
+                           0b1100000, 0b1101000, 0b1110000, 0b1111000};
+
+    for (int i = 0; i < CACHED_POOL_COUNT; i++) {
+      cached_pool[i] = NULL;
+    }
+
+    for (int i = 0; i < 16; i++) {
+      int base = 8 + i * 8;
+      pools[base] = {NULL, NULL, base_nums[0]};
+      pools[base + 1] = {NULL, NULL, base_nums[1]};
+      pools[base + 2] = {NULL, NULL, base_nums[2]};
+      pools[base + 3] = {NULL, NULL, base_nums[3]};
+      pools[base + 4] = {NULL, NULL, base_nums[4]};
+      pools[base + 5] = {NULL, NULL, base_nums[5]};
+      pools[base + 6] = {NULL, NULL, base_nums[6]};
+      pools[base + 7] = {NULL, NULL, base_nums[7]};
+      for (int j = 0; j < 8; j++) {
+        base_nums[j] = base_nums[j] << 1;
+      }
+    }
+    pools[POOL_BIN_COUNT - 2] = {NULL, NULL, base_nums[0]};
+    pools[POOL_BIN_COUNT - 1] = {NULL, NULL, base_nums[1]};
+  }
 };
+
 // MemoryBlock:
 // Buff, Vec, Str -- all have direct access to heap
 //  - reallocate. - reserve.
