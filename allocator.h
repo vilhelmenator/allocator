@@ -8,11 +8,11 @@
 //
 // 2.
 //
-// [ ] move get area to partition.
-// [ ] ensure that large page is allocated in correct partition.
-// [ ] free objects into large page
-// [ ] coalesce memory in large page
-// [ ] allocate memory for 4 - 32 megs.
+// [x] move get area to partition.
+// [x] ensure that large page is allocated in correct partition.
+// [x] free objects into large page
+// [x] coalesce memory in large page
+// [x] allocate memory for 4 - 32 megs.
 //
 // [ ] reset section
 // [ ] reset page
@@ -157,6 +157,8 @@ typedef union bitmask {
 
   inline bool isEmpty() { return whole == 0; }
 
+  inline void reserveAll() { whole = 0xFFFFFFFFFFFFFFFF; }
+
   inline void reserve(uint8_t bit) { whole |= ((uint64_t)1 << bit); }
 
   inline int8_t firstFree(uint64_t mask) {
@@ -276,45 +278,45 @@ struct spinlock {
 struct heap_node {
   size_t *_prev;
   size_t *_next;
-  inline void set_next(heap_node *p) { _next = (size_t *)p; }
-  inline void set_prev(heap_node *p) { _prev = (size_t *)p; }
-  inline heap_node *next() { return *(heap_node **)_next; }
-  inline heap_node *prev() { return *(heap_node **)_prev; }
+  inline void setNext(heap_node *p) { _next = (size_t *)p; }
+  inline void setPrev(heap_node *p) { _prev = (size_t *)p; }
+  inline heap_node *getNext() { return (heap_node *)_next; }
+  inline heap_node *getPrev() { return (heap_node *)_prev; }
 };
 
 struct heap_block {
   uint8_t *data;
 
-  inline unsigned int get_header() {
-    return *(unsigned int *)((char *)&data - WSIZE);
+  inline uint32_t get_header() {
+    return *(uint32_t *)((uint8_t *)&data - WSIZE);
   }
 
-  inline unsigned int get_footer() {
-    unsigned int size = *(unsigned int *)((char *)&data - WSIZE) & ~0x7;
-    return *(unsigned int *)((char *)&data + size - DSIZE);
+  inline uint32_t get_footer() {
+    uint32_t size = *(uint32_t *)((uint8_t *)&data - WSIZE) & ~0x7;
+    return *(uint32_t *)((uint8_t *)&data + (size)-DSIZE);
   }
 
-  inline unsigned int get_Alloc(unsigned int v) { return v & 0x1; }
+  inline uint32_t get_Alloc(uint32_t v) { return v & 0x1; }
 
-  inline unsigned int get_Size(unsigned v) { return v & ~0x7; }
+  inline uint32_t get_Size(uint32_t v) { return v & ~0x7; }
 
-  inline void set_header(unsigned int s, unsigned int v) {
-    *(unsigned int *)((char *)&data - WSIZE) = (s | v);
+  inline void set_header(uint32_t s, uint32_t v) {
+    *(uint32_t *)((uint8_t *)&data - WSIZE) = (s | v);
   }
 
-  inline void set_footer(unsigned int s, unsigned int v) {
-    unsigned int size = (*(unsigned int *)((char *)&data - WSIZE)) & ~0x7;
-    *(unsigned int *)((char *)(&data) + size - DSIZE) = (s | v);
+  inline void set_footer(uint32_t s, uint32_t v) {
+    uint32_t size = (*(uint32_t *)((uint8_t *)&data - WSIZE)) & ~0x7;
+    *(uint32_t *)((uint8_t *)(&data) + (size)-DSIZE) = (s | v);
   }
 
   inline heap_block *next() {
-    unsigned int size = *(unsigned int *)((char *)&data - WSIZE) & ~0x7;
-    return (heap_block *)((char *)&data + size);
+    uint32_t size = *(uint32_t *)((uint8_t *)&data - WSIZE) & ~0x7;
+    return (heap_block *)((uint8_t *)&data + (size));
   }
 
   inline heap_block *prev() {
-    unsigned int size = *(unsigned int *)((char *)&data - DSIZE) & ~0x7;
-    return (heap_block *)((char *)&data - size);
+    uint32_t size = *(uint32_t *)((uint8_t *)&data - DSIZE) & ~0x7;
+    return (heap_block *)((uint8_t *)&data - (size));
   }
 };
 
@@ -507,24 +509,28 @@ struct Page {
     Page *head;
     Page *tail;
   };
+  struct FreeQueue {
+    heap_node *head;
+    heap_node *tail;
+  };
   //
   int32_t idx;
   int32_t total_memory; // how much do we have available in total
   int32_t used_memory;  // how much have we used
   int32_t min_block;    // what is the minum size block available;
   int32_t max_block;    // what is the maximum size block available;
-
   int32_t num_allocations;
 
   uint8_t *start;
-  uint8_t *seek;
+  FreeQueue free_nodes;
+
   Page *prev;
   Page *next;
 
   inline bool isConnected() { return prev != NULL || next != NULL; }
 
   inline bool has_room(size_t s) {
-    if (used_memory == total_memory) {
+    if ((used_memory + s) > total_memory) {
       return false;
     }
     if (s <= max_block && s >= min_block) {
@@ -535,9 +541,11 @@ struct Page {
 
   void *getBlock(uint32_t s) {
     void *ptr = NULL;
-    if ((ptr = (char *)find_fit(s >> 3)) != NULL) {
-      place(ptr, s >> 3);
+    if ((ptr = (char *)find_fit(s)) != NULL) {
+      place(ptr, s);
     }
+    used_memory += s;
+    num_allocations++;
     return ptr;
   }
 
@@ -550,8 +558,13 @@ struct Page {
     hb->set_header(size, 0);
     hb->set_footer(size, 0);
 
-    if (should_coalesce)
+    if (should_coalesce) {
       coalesce(bp);
+    } else {
+      list_enqueue(free_nodes, (heap_node *)bp);
+    }
+    used_memory -= size;
+    num_allocations--;
   }
 
   inline void extend() {
@@ -559,95 +572,128 @@ struct Page {
     *(start + WSIZE) = DSIZE | 1;   /* Prologue header */
     *(start + DSIZE) = (DSIZE | 1); /* Prologue footer */
     *(start + WSIZE + DSIZE) = 1;   /* Epilogue header */
-    start = start + DSIZE;
-    seek = start;
+    start = start + DSIZE * 2;
 
     heap_block *hb = (heap_block *)start;
-    hb->set_header(total_memory >> 3, 0);
-    hb->set_footer(total_memory >> 3, 0);
+    list_enqueue(free_nodes, (heap_node *)start);
+    hb->set_header(total_memory, 0);
+    hb->set_footer(total_memory, 0);
     hb->next()->set_header(0, 1);
   }
 
   inline void *coalesce(void *bp) {
     heap_block *hb = (heap_block *)bp;
     auto size = hb->get_header() & ~0x7;
-    int prev_header = hb->prev()->get_header();
-    int next_header = hb->next()->get_header();
+    heap_block *prev_block = hb->prev();
+    heap_block *next_block = hb->next();
+    int prev_header = prev_block->get_header();
+    int next_header = next_block->get_header();
 
     size_t prev_alloc = prev_header & 0x1;
     size_t next_alloc = next_header & 0x1;
-    if (prev_alloc && next_alloc) {
-      return bp;
-    }
-    size_t prev_size = prev_header & ~0x7;
-    size_t next_size = next_header & ~0x7;
 
-    if (prev_alloc && !next_alloc) {
-      size += next_size;
-      hb->set_header(size, 0);
-      hb->set_footer(size, 0);
-      seek = (uint8_t *)bp;
-    } else if (!prev_alloc && next_alloc) {
-      size += prev_size;
-      hb->set_footer(size, 0);
-      hb->prev()->set_header(size, 0);
-      bp = (void *)hb->prev();
-      seek = (uint8_t *)bp;
+    heap_node *hn = (heap_node *)bp;
+    if (!(prev_alloc && next_alloc)) {
+      size_t prev_size = prev_header & ~0x7;
+      size_t next_size = next_header & ~0x7;
+
+      // next is free
+      if (prev_alloc && !next_alloc) {
+        size += next_size;
+        hb->set_header(size, 0);
+        hb->set_footer(size, 0);
+        heap_node *h_next = (heap_node *)next_block;
+        list_remove(free_nodes, h_next);
+        list_enqueue(free_nodes, hn);
+      } // prev is fre
+      else if (!prev_alloc && next_alloc) {
+        size += prev_size;
+        hb->set_footer(size, 0);
+        prev_block->set_header(size, 0);
+        bp = (void *)hb->prev();
+      } else { // both next and prev are free
+        size += prev_size + next_size;
+        prev_block->set_header(size, 0);
+        next_block->set_footer(size, 0);
+        bp = (void *)hb->prev();
+        heap_node *h_next = (heap_node *)next_block;
+        list_remove(free_nodes, h_next);
+      }
     } else {
-      size += prev_size + next_size;
-      hb->prev()->set_header(size, 0);
-      hb->next()->set_footer(size, 0);
-      bp = (void *)hb->prev();
-      seek = (uint8_t *)bp;
+      list_enqueue(free_nodes, hn);
     }
+
     return bp;
   }
 
   inline void place(void *bp, uint32_t asize) {
     heap_block *hb = (heap_block *)bp;
     auto csize = hb->get_header() & ~0x7;
-
-    if ((csize - asize) >= 2) {
+    list_remove(free_nodes, (heap_node *)bp);
+    if ((csize - asize) >= 16) {
       hb->set_header(asize, 1);
       hb->set_footer(asize, 1);
       hb = hb->next();
       hb->set_header(csize - asize, 0);
       hb->set_footer(csize - asize, 0);
-      seek = (uint8_t *)hb;
+      list_enqueue(free_nodes, (heap_node *)hb);
     } else {
       hb->set_header(csize, 1);
       hb->set_footer(csize, 1);
-      seek = (uint8_t *)hb->next();
     }
   }
 
   inline void *find_fit(uint32_t asize) {
-    void *oldrover = seek;
-    heap_block *hb = (heap_block *)seek;
-    auto bsize = hb->get_header() & ~0x7;
-    // Search from the rover to the end of list
-    for (; bsize > 0; hb = hb->next(), bsize = hb->get_header() & ~0x7) {
-      auto free = !(hb->get_header() & 0x1);
-      if (free)
-        seek = (uint8_t *)hb;
-      if (free && (asize <= bsize)) {
-        return hb;
+    auto current = free_nodes.head;
+    while (current != NULL) {
+      heap_block *hb = (heap_block *)current;
+      int header = hb->get_header();
+      auto bsize = header & ~0x7;
+      if (asize <= bsize) {
+        list_remove(free_nodes, current);
+        return current;
       }
+      current = current->getNext();
+    }
+    return NULL;
+    /*
+    void *oldrover = seek;
+    heap_block*hb = (heap_block*)seek;
+    int header = hb->get_header();
+    auto bsize =  header & ~0x7;
+    // Search from the rover to the end of list
+    while (bsize > 0)
+    {
+        bool free = !(header & 0x1);
+        if (free)
+        {
+            if(asize <= bsize)
+            {
+                seek = (uint8_t*)hb->next();
+                return hb;
+            }
+        }
+        hb = hb->next();
+        header = hb->get_header();
+        bsize = header & ~0x7;
     }
 
     seek = start;
-    hb = (heap_block *)seek;
+    hb = (heap_block*)seek;
     // search from start of list to old rover
-    for (; hb < oldrover; hb = hb->next(), bsize = hb->get_header() & ~0x7) {
-      auto free = !(hb->get_header() & 0x1);
-      if (free)
-        seek = (uint8_t *)hb;
-      if (free && (asize <= bsize)) {
-        return hb;
-      }
+    for (; hb < oldrover; hb = hb->next(), header = hb->get_header())
+    {
+        bsize = header & ~0x7;
+        auto free = !(header & 0x1);
+        if (free && (asize <= bsize))
+        {
+            seek = (uint8_t*)hb->next();
+            return hb;
+        }
     }
     seek = start;
     return NULL;
+     */
   }
 
 public:
@@ -706,6 +752,60 @@ struct GarbageBin {
       return collector->num_used > 0;
     return false;
   }
+};
+
+struct Area {
+  // The area is overlapping with the first section. And they share some
+  // attributes.
+  static const uintptr_t small_area_mask = 0xff;
+  static const uintptr_t large_area_mask = 0xffff;
+  static const uintptr_t ptr_mask = 0x0000ffffffffffff;
+  static const uintptr_t inv_ptr_mask = 0xffff000000000000;
+  struct List {
+    Area *head;
+    Area *tail;
+    uint32_t thread_id;
+    uintptr_t base_addr;
+    AreaType type;
+    size_t area_count;
+    Area *previous_area;
+  };
+
+  bitmask mask;
+  size_t thread_id;
+
+private:
+  // these members are shared with the first section in the memory block. so,
+  // the first high 16 bits are reserved by the section.
+  size_t size;
+  Area *prev;
+  Area *next;
+
+public:
+  bool isFull() {
+    if (mask.isFull()) {
+      return true;
+    }
+    if (getSize() == AREA_SIZE_SMALL) {
+      return ((mask.whole >> 32) & small_area_mask) == small_area_mask;
+    } else {
+      return ((mask.whole >> 32) & large_area_mask) == large_area_mask;
+    }
+  }
+  inline Area *getPrev() const {
+    return (Area *)((uintptr_t)prev & ptr_mask);
+  } // remove the top 16 bits
+  inline Area *getNext() const {
+    return (Area *)((uintptr_t)next & ptr_mask);
+  } // remove the top 16 bits
+  inline void setPrev(Area *p) {
+    prev = (Area *)(((inv_ptr_mask & (uintptr_t)prev) | (uintptr_t)p));
+  };
+  inline void setNext(Area *n) {
+    next = (Area *)(((inv_ptr_mask & (uintptr_t)next) | (uintptr_t)n));
+  };
+  inline size_t getSize() { return (size & 0xffffffff00000000) >> 32; }
+  inline void setSize(size_t s) { size |= s << 32; }
 };
 
 struct Section {
@@ -844,11 +944,11 @@ private:
 
   void init_page(uintptr_t paddr, int8_t pidx, Exponent partition) {
     auto psize = 1 << partition;
-
     uintptr_t section_end = align_up(paddr, psize);
     auto remaining_size = section_end - paddr;
-    auto block_memory = psize - sizeof(Page);
-    auto header_footer_offset = sizeof(uintptr_t) * 2;
+
+    auto block_memory = psize - sizeof(Page) - sizeof(Area);
+    auto header_footer_offset = sizeof(uintptr_t) * 5;
     Page *page = (Page *)paddr;
     page->used_memory = 0;
     page->total_memory =
@@ -857,69 +957,11 @@ private:
     page->min_block = sizeof(uintptr_t);
     page->num_allocations = 0;
     page->start = &page->blocks[0];
-    page->seek = page->start;
+    // page->seek = page->start;
     page->next = NULL;
     page->prev = NULL;
     page->extend();
   }
-};
-
-struct RawSection {
-  size_t addr_id;
-  uint8_t section_size; // 1 - 8* 4megs
-  size_t buff_size;
-  uint8_t buff[];
-};
-
-struct Area {
-  // The area is overlapping with the first section. And they share some
-  // attributes.
-  static const uintptr_t small_area_mask = 0xff;
-  static const uintptr_t large_area_mask = 0xffff;
-  static const uintptr_t ptr_mask = 0x0000ffffffffffff;
-  static const uintptr_t inv_ptr_mask = 0xffff000000000000;
-  struct List {
-    Area *head;
-    Area *tail;
-    uint32_t thread_id;
-    uintptr_t base_addr;
-    AreaType type;
-    size_t area_count;
-    Area *previous_area;
-  };
-
-  bitmask mask;
-  size_t thread_id;
-
-private:
-  // these members are shared with the first section in the memory block. so,
-  // the first high 16 bits are reserved by the section.
-  size_t size;
-  Area *prev;
-  Area *next;
-
-public:
-  bool isFull() {
-    if (size == AREA_SIZE_SMALL) {
-      return (mask.whole >> 32) == small_area_mask;
-    } else {
-      return (mask.whole >> 32) == large_area_mask;
-    }
-  }
-  inline Area *getPrev() const {
-    return (Area *)((uintptr_t)prev & ptr_mask);
-  } // remove the top 16 bits
-  inline Area *getNext() const {
-    return (Area *)((uintptr_t)next & ptr_mask);
-  } // remove the top 16 bits
-  inline void setPrev(Area *p) {
-    prev = (Area *)(((inv_ptr_mask & (uintptr_t)prev) | (uintptr_t)p));
-  };
-  inline void setNext(Area *n) {
-    next = (Area *)(((inv_ptr_mask & (uintptr_t)next) | (uintptr_t)n));
-  };
-  inline size_t getSize() { return (size & 0xffffffff00000000) >> 32; }
-  inline void setSize(size_t s) { size |= s << 32; }
 };
 
 static inline bool commit_memory(void *base, size_t size) {
@@ -1091,7 +1133,10 @@ struct Partition {
     if (previous_area != NULL) {
       Area *cur_area = previous_area;
       //
-      while (cur_area != NULL && cur_area->isFull()) {
+      while (cur_area != NULL) {
+        if (!cur_area->isFull()) {
+          break;
+        }
         cur_area = cur_area->getNext();
       }
       new_area = cur_area;
@@ -1209,9 +1254,9 @@ private:
 
   Area *get_area(size_t size, int32_t *outSectionIdx) {
     Area *curr_area = NULL;
-    if (size < SECTION_MAX_MEMORY) {
+    if (size < SECTION_SIZE - sizeof(Section)) {
       curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_32);
-    } else if (size < AREA_SMALL_MAX_MEMORY) {
+    } else if (size < AREA_SIZE_SMALL - sizeof(Area)) {
       curr_area =
           thread_partitions->get_free_area(size, AreaType::AT_FIXED_128);
     } else {
@@ -1356,6 +1401,7 @@ public:
       break;
     }
     case 2: {
+      Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_LARGE - 1));
       // if it is page section, free
       if (_thread_idx == section->thread_id) {
         if (section->getContainerType() == PAGE) {
@@ -1506,6 +1552,9 @@ private:
 
     auto sfree_section = free_section(s, ContainerType::PAGE);
     start = (Page *)sfree_section->allocate_page();
+    if (s >= SECTION_MAX_MEMORY) {
+      sfree_section->mask.reserveAll();
+    }
     page_count++;
     list_enqueue(pages, start);
     return start;
