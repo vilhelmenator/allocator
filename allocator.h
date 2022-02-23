@@ -13,6 +13,8 @@
 // [x] free objects into large page
 // [x] coalesce memory in large page
 // [x] allocate memory for 4 - 32 megs.
+// [ ] ensure that 32meg allocations are in pages.
+// [ ] allocate memory for 32 - 1GB.
 //
 // [ ] reset section
 // [ ] reset page
@@ -382,6 +384,7 @@ inline AllocSize getAllocSize(size_t s) {
 template <typename L> inline bool list_isEmpty(L &list) {
   return list.first == NULL;
 }
+
 template <typename L, typename T> inline void list_remove(L &list, T *a) {
   if (a->getPrev() != NULL)
     a->getPrev()->setNext(a->getNext());
@@ -394,6 +397,7 @@ template <typename L, typename T> inline void list_remove(L &list, T *a) {
   a->setNext(NULL);
   a->setPrev(NULL);
 }
+
 template <typename L, typename T> inline void list_enqueue(L &list, T *a) {
   a->setNext(NULL);
   a->setPrev(list.tail);
@@ -404,18 +408,24 @@ template <typename L, typename T> inline void list_enqueue(L &list, T *a) {
     list.tail = list.head = a;
   }
 }
+
 template <typename L, typename T> inline void list_insert_sort(L &list, T *a) {
-  if (list.head == NULL || list.head >= a) {
-    a->setNext(list.head);
-    list.head = a;
-  } else {
-    T *current = list.head;
-    while (current->getNext() != NULL && current->getNext() < a) {
-      current = current->getNext();
-    }
-    a->setNext(current->getNext());
-    current->setNext(a);
+  if (list.tail == NULL) {
+    list.tail = list.head = a;
+    return;
   }
+
+  if (list.tail < a) {
+    return list_enqueue(list, a);
+  }
+
+  T *current = list.head;
+  while (current->getNext() != NULL && current->getNext() < a) {
+    current = current->getNext();
+  }
+  a->setPrev(current->getPrev());
+  a->setNext(current->getNext());
+  current->setPrev(a);
 }
 
 struct Pool {
@@ -656,44 +666,6 @@ struct Page {
       current = current->getNext();
     }
     return NULL;
-    /*
-    void *oldrover = seek;
-    heap_block*hb = (heap_block*)seek;
-    int header = hb->get_header();
-    auto bsize =  header & ~0x7;
-    // Search from the rover to the end of list
-    while (bsize > 0)
-    {
-        bool free = !(header & 0x1);
-        if (free)
-        {
-            if(asize <= bsize)
-            {
-                seek = (uint8_t*)hb->next();
-                return hb;
-            }
-        }
-        hb = hb->next();
-        header = hb->get_header();
-        bsize = header & ~0x7;
-    }
-
-    seek = start;
-    hb = (heap_block*)seek;
-    // search from start of list to old rover
-    for (; hb < oldrover; hb = hb->next(), header = hb->get_header())
-    {
-        bsize = header & ~0x7;
-        auto free = !(header & 0x1);
-        if (free && (asize <= bsize))
-        {
-            seek = (uint8_t*)hb->next();
-            return hb;
-        }
-    }
-    seek = start;
-    return NULL;
-     */
   }
 
 public:
@@ -1048,12 +1020,12 @@ struct Partition {
   static Area::List area_5;
 
   void *get_next_address(Area::List *area_queue, uint64_t size) {
-    if (area_queue->tail == NULL) {
+    if (area_queue->head == NULL) {
       return (void *)area_queue->base_addr;
     }
     uint64_t delta = (uint64_t)((uint8_t *)area_queue->base_addr -
                                 (uint8_t *)area_queue->tail);
-    if (delta < size) {
+    if (delta < size && (area_queue->tail != area_queue->head)) {
       Area *current = area_queue->head;
       while (current != area_queue->tail) {
         size_t c_size = current->getSize();
@@ -1087,6 +1059,36 @@ struct Partition {
     area_queue->previous_area = new_area;
     area_queue->area_count++;
     return new_area;
+  }
+
+  void free_area(Area *a, AreaType t) {
+    switch (t) {
+    case AT_FIXED_32: {
+      area_01.area_count--;
+      list_remove(area_01, a);
+      if (area_01.previous_area == a) {
+        area_01.previous_area = NULL;
+      }
+      break;
+    }
+    case AT_FIXED_128: {
+      area_2.area_count--;
+      list_remove(area_2, a);
+      if (area_2.previous_area == a) {
+        area_2.previous_area = NULL;
+      }
+      break;
+    }
+    default: {
+      area_3.area_count--;
+      list_remove(area_3, a);
+      if (area_3.previous_area == a) {
+        area_3.previous_area = NULL;
+      }
+      break;
+    }
+    };
+    free_memory(a, a->getSize());
   }
 
   Area *get_free_area(size_t s, AreaType t) {
@@ -1252,7 +1254,17 @@ private:
     }
   }
 
-  Area *get_area(size_t size, int32_t *outSectionIdx) {
+  void free_area(Area *area, size_t size) {
+    if (size < SECTION_SIZE - sizeof(Section)) {
+      thread_partitions->free_area(area, AreaType::AT_FIXED_32);
+    } else if (size < AREA_SIZE_SMALL - sizeof(Area)) {
+      thread_partitions->free_area(area, AreaType::AT_FIXED_128);
+    } else {
+      thread_partitions->free_area(area, AreaType::AT_VARIABLE);
+    }
+  }
+
+  Area *get_area(size_t size) {
     Area *curr_area = NULL;
     if (size < SECTION_SIZE - sizeof(Section)) {
       curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_32);
@@ -1263,6 +1275,11 @@ private:
       curr_area = thread_partitions->get_free_area(size, AreaType::AT_VARIABLE);
     }
 
+    return curr_area;
+  }
+
+  Area *get_area_and_claim(size_t size, int32_t *outSectionIdx) {
+    Area *curr_area = get_area(size);
     if (curr_area == NULL) {
       return NULL;
     }
@@ -1277,7 +1294,7 @@ private:
   Section *alloc_section(size_t size) {
 
     int32_t section_idx;
-    auto new_area = get_area(size, &section_idx);
+    auto new_area = get_area_and_claim(size, &section_idx);
     if (new_area == NULL) {
       return NULL;
     }
@@ -1341,7 +1358,7 @@ public:
       auto pool = free_pool(asize);
       return pool->getFreeBlock();
     }
-    case LARGE: {
+    default: {
       if (asize < (SECTION_SIZE - 64)) {
         auto pool = free_pool(asize);
         return pool->getFreeBlock();
@@ -1350,13 +1367,8 @@ public:
         auto page = free_page(asize);
         return page->getBlock((uint32_t)asize);
       } else {
-        // allocate directly from OS.
-        // get a section from the os. Offset the allocations by 64bytes.
-        // align to 4k boundaries.
+        return free_huge_block(asize);
       }
-    }
-    default: {
-      break;
     }
     }
     return NULL;
@@ -1437,9 +1449,8 @@ public:
       break;
     }
     case 3: {
-      if (!free_memory(p, section->getSize())) {
-        // Somethine when ooppsie!!
-      }
+      Area *area = (Area *)((uintptr_t)p & ~(os_page_size - 1));
+      free_area(area, area->getSize());
       break;
     }
     case 4: {
@@ -1558,6 +1569,13 @@ private:
     page_count++;
     list_enqueue(pages, start);
     return start;
+  }
+
+  void *free_huge_block(size_t s) {
+    auto totalSize = sizeof(Area) + s;
+    auto section = (Section *)get_area(totalSize);
+    section->mask.reserveAll();
+    return &section->collections[0];
   }
 
   Pool *free_pool(size_t s) {
