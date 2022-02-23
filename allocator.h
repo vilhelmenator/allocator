@@ -13,9 +13,10 @@
 // [x] free objects into large page
 // [x] coalesce memory in large page
 // [x] allocate memory for 4 - 32 megs.
-// [ ] ensure that 32meg allocations are in pages.
-// [ ] allocate memory for 32 - 1GB.
+// [x] ensure that 32meg allocations are in pages.
+// [x] allocate memory for 32 - 1GB.
 //
+// 3.
 // [ ] reset section
 // [ ] reset page
 // [ ] reset pool
@@ -23,7 +24,7 @@
 // [ ] collect reset areas.
 // [ ] release area back to os based on memory heiristics.
 //
-// 3.
+// 4.
 // [ ] thread_free
 // [ ] thread_setup
 // [ ] stats.
@@ -87,12 +88,14 @@ uint64_t rdtsc() {
   DEFAULT_MID_PAGE_SIZE * 4 // 2Mb      max size of large objects
 #define DEFAULT_LARGE_PAGE_SIZE                                                \
   LARGE_OBJECT_SIZE * 2 // 4Mb      large pool size             1 per section
+#define HUGE_OBJECT_SIZE DEFAULT_LARGE_PAGE_SIZE * 8 // 32Mb
 
 #define SIZE_CLS_1 17 // 2 ^ 17   // 16k
 #define SIZE_CLS_2 19 //          // 128k
 #define SIZE_CLS_3 22 //          // 4Mb
 #define SIZE_CLS_4 25 //          // 32Mb
 #define SIZE_CLS_5 27 //          // 128Mb
+#define SIZE_CLS_6 28 //          // 256Mb
 
 #define SECTION_SIZE (1ULL << 22ULL)
 
@@ -105,6 +108,7 @@ uint64_t rdtsc() {
 
 #define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL)
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)
+#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)
 #define MASK_FULL 0xFFFFFFFFFFFFFFFF
 
 #define CACHED_POOL_COUNT 64
@@ -114,10 +118,11 @@ uint64_t rdtsc() {
 #define AREA_SMALL_MAX_MEMORY AREA_SIZE_SMALL - HEADER_SIZE
 #define AREA_LARGE_MAX_MEMORY AREA_SIZE_LARGE - HEADER_SIZE
 #define SECTION_MAX_MEMORY SECTION_SIZE - HEADER_SIZE
+#define PAGE_MAX_MEMORY AREA_SIZE_SMALL * 2 - HEADER_SIZE
 
-#define MAX_SMALL_AREAS 192  // 32Mb over 6Gb
-#define MAX_LARGE_AREAS 64   // 128Mb over 8Gb
-#define MAX_HUGE_OBJECTS 512 // 32Mb+ over 16Gb
+#define MAX_SMALL_AREAS 192 // 32Mb over 6Gb
+#define MAX_LARGE_AREAS 64  // 128Mb over 8Gb
+#define MAX_HUGE_AREAS 64   // 256Mb over 16Gb
 
 #define MAX_THREADS 1024 // don't change this...
 
@@ -125,6 +130,8 @@ enum AreaType {
   AT_FIXED_32,  //  containes small allocations
   AT_FIXED_128, //  reserved for a particular partition, collecting object
                 //  between 4 - 32 megs.
+  AT_FIXED_256, //  reserved for a particular partition, collecting object
+                //  between 32 - 128 megs.
   AT_VARIABLE,  //  for objects, where we want a single allocatino per item in a
                 //  dedicated partition.
 };
@@ -338,16 +345,18 @@ enum AllocSize {
 };
 
 enum Exponent {
-  EXP_SMALL = SIZE_CLS_1,
-  EXP_MEDIUM = SIZE_CLS_2,
-  EXP_LARGE = SIZE_CLS_3,
-  EXP_HUGE = SIZE_CLS_4,
-  EXP_GIGANTIC = SIZE_CLS_5
+  EXP_PUNY = SIZE_CLS_1,
+  EXP_SMALL = SIZE_CLS_2,
+  EXP_MEDIUM = SIZE_CLS_3,
+  EXP_LARGE = SIZE_CLS_4,
+  EXP_HUGE = SIZE_CLS_5,
+  EXP_GIGANTIC = SIZE_CLS_6
 };
 
 enum ContainerType {
   PAGE,
   POOL,
+  SLAB,
 };
 
 inline int32_t getContainerExponent(size_t s, ContainerType t) {
@@ -356,8 +365,10 @@ inline int32_t getContainerExponent(size_t s, ContainerType t) {
       return SIZE_CLS_3;
     } else if (s < MEDIUM_OBJECT_SIZE) {
       return SIZE_CLS_4;
-    } else {
+    } else if (s < HUGE_OBJECT_SIZE) {
       return SIZE_CLS_5;
+    } else {
+      return SIZE_CLS_6;
     }
   } else {
     if (s < SMALL_OBJECT_SIZE) {
@@ -846,10 +857,10 @@ public:
 
   inline bool isFull() {
     switch (getContainerExponent()) {
-    case Exponent::EXP_SMALL: {
+    case Exponent::EXP_PUNY: {
       return (mask.whole & 0xffffffff) == 0xffffffff;
     }
-    case Exponent::EXP_MEDIUM: {
+    case Exponent::EXP_SMALL: {
       return (mask.whole & 0xff) == 0xff;
     }
     default: {
@@ -862,15 +873,15 @@ public:
     ptrdiff_t diff = (uint8_t *)p - (uint8_t *)this;
     auto exp = getContainerExponent();
     switch (exp) {
+    case Exponent::EXP_PUNY: {
+      return (void *)((uint8_t *)&collections[0] +
+                      (1 << Exponent::EXP_PUNY) *
+                          ((size_t)diff >> Exponent::EXP_PUNY));
+    }
     case Exponent::EXP_SMALL: {
       return (void *)((uint8_t *)&collections[0] +
                       (1 << Exponent::EXP_SMALL) *
                           ((size_t)diff >> Exponent::EXP_SMALL));
-    }
-    case Exponent::EXP_MEDIUM: {
-      return (void *)((uint8_t *)&collections[0] +
-                      (1 << Exponent::EXP_MEDIUM) *
-                          ((size_t)diff >> Exponent::EXP_MEDIUM));
     }
     default: {
       return (void *)((uint8_t *)&collections[0] +
@@ -882,13 +893,13 @@ public:
 private:
   inline uintptr_t getCollection(int8_t idx, Exponent exp) const {
     switch (exp) {
+    case Exponent::EXP_PUNY: {
+      return (uintptr_t)((uint8_t *)&collections[0] +
+                         (1 << Exponent::EXP_PUNY) * idx);
+    }
     case Exponent::EXP_SMALL: {
       return (uintptr_t)((uint8_t *)&collections[0] +
                          (1 << Exponent::EXP_SMALL) * idx);
-    }
-    case Exponent::EXP_MEDIUM: {
-      return (uintptr_t)((uint8_t *)&collections[0] +
-                         (1 << Exponent::EXP_MEDIUM) * idx);
     }
     default: {
       return (uintptr_t)((uint8_t *)&collections[0] + (1 << exp) * idx);
@@ -1019,10 +1030,12 @@ struct Partition {
   static Area::List area_4;
   static Area::List area_5;
 
-  void *get_next_address(Area::List *area_queue, uint64_t size) {
+  void *get_next_address(Area::List *area_queue, uint64_t size,
+                         uint64_t alignment) {
     if (area_queue->head == NULL) {
       return (void *)area_queue->base_addr;
     }
+    size = align_up(size, alignment);
     uint64_t delta = (uint64_t)((uint8_t *)area_queue->base_addr -
                                 (uint8_t *)area_queue->tail);
     if (delta < size && (area_queue->tail != area_queue->head)) {
@@ -1039,13 +1052,15 @@ struct Partition {
       }
       return NULL;
     } else {
-      return ((uint8_t *)area_queue->tail) + area_queue->tail->getSize();
+      return (void *)align_up((uintptr_t)(((uint8_t *)area_queue->tail) +
+                                          area_queue->tail->getSize()),
+                              alignment);
     }
   }
 
   Area *alloc_area(Area::List *area_queue, uint64_t area_size,
                    uint64_t alignment) {
-    void *aligned_addr = get_next_address(area_queue, area_size);
+    void *aligned_addr = get_next_address(area_queue, area_size, alignment);
     Area *new_area =
         (Area *)alloc_memory_aligned(aligned_addr, area_size, alignment, true);
     if (new_area == NULL) {
@@ -1114,10 +1129,26 @@ struct Partition {
     case AT_FIXED_128: {
       area_size = AREA_SIZE_LARGE;
       if (area_2.area_count >= MAX_LARGE_AREAS) {
-        return NULL; // ouf of area memory.
+        if (area_3.area_count >= MAX_HUGE_AREAS) {
+          return NULL;
+        }
+        previous_area = area_3.previous_area;
+        current_queue = &area_3;
+        area_size = AREA_SIZE_HUGE;
+        alignement = area_size;
       }
       previous_area = area_2.previous_area;
       current_queue = &area_2;
+      alignement = area_size;
+      break;
+    }
+    case AT_FIXED_256: {
+      area_size = AREA_SIZE_HUGE;
+      if (area_3.area_count >= MAX_HUGE_AREAS) {
+        return NULL;
+      }
+      previous_area = area_3.previous_area;
+      current_queue = &area_3;
       alignement = area_size;
       break;
     }
@@ -1125,7 +1156,7 @@ struct Partition {
       previous_area = area_3.previous_area;
       current_queue = &area_3;
       area_size = s;
-      alignement = os_page_size;
+      alignement = AREA_SIZE_HUGE;
       break;
     }
     };
@@ -1259,6 +1290,8 @@ private:
       thread_partitions->free_area(area, AreaType::AT_FIXED_32);
     } else if (size < AREA_SIZE_SMALL - sizeof(Area)) {
       thread_partitions->free_area(area, AreaType::AT_FIXED_128);
+    } else if (size < AREA_SIZE_LARGE - sizeof(Area)) {
+      thread_partitions->free_area(area, AreaType::AT_FIXED_256);
     } else {
       thread_partitions->free_area(area, AreaType::AT_VARIABLE);
     }
@@ -1271,6 +1304,9 @@ private:
     } else if (size < AREA_SIZE_SMALL - sizeof(Area)) {
       curr_area =
           thread_partitions->get_free_area(size, AreaType::AT_FIXED_128);
+    } else if (size < AREA_SIZE_LARGE - sizeof(Area)) {
+      curr_area =
+          thread_partitions->get_free_area(size, AreaType::AT_FIXED_256);
     } else {
       curr_area = thread_partitions->get_free_area(size, AreaType::AT_VARIABLE);
     }
@@ -1363,6 +1399,10 @@ public:
         auto pool = free_pool(asize);
         return pool->getFreeBlock();
       } else if (asize < (AREA_SIZE_SMALL - 64)) {
+        // allocate form the large page
+        auto page = free_page(asize);
+        return page->getBlock((uint32_t)asize);
+      } else if (asize < (AREA_SIZE_LARGE - 64)) {
         // allocate form the huge page
         auto page = free_page(asize);
         return page->getBlock((uint32_t)asize);
@@ -1449,8 +1489,28 @@ public:
       break;
     }
     case 3: {
-      Area *area = (Area *)((uintptr_t)p & ~(os_page_size - 1));
-      free_area(area, area->getSize());
+      Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_HUGE - 1));
+      // if it is page section, free
+      if (_thread_idx == section->thread_id) {
+        if (section->getContainerType() == PAGE) {
+          auto page = (Page *)section->findCollection(p);
+          page->free(p, true);
+          // if the free pools list is empty.
+          if (pages.head == NULL) {
+            list_enqueue(pages, page);
+          } else {
+            // if the pool is disconnected from the queue
+            if (!page->isConnected()) {
+              // reconnect
+              list_enqueue(pages, page);
+            }
+          }
+        } else // SLAB
+        {
+          Area *area = (Area *)section;
+          free_area(area, area->getSize());
+        }
+      }
       break;
     }
     case 4: {
@@ -1575,6 +1635,7 @@ private:
     auto totalSize = sizeof(Area) + s;
     auto section = (Section *)get_area(totalSize);
     section->mask.reserveAll();
+    section->setContainerType(ContainerType::SLAB);
     return &section->collections[0];
   }
 
