@@ -374,13 +374,13 @@ inline AllocSize getAllocSize(size_t s)
 
 // list functions
 template <typename L>
-inline bool list_isEmpty(L &list)
+static inline bool list_isEmpty(L &list)
 {
     return list.first == NULL;
 }
 
 template <typename L, typename T>
-inline void list_remove(L &list, T *a)
+static inline void list_remove(L &list, T *a)
 {
     if (a->getPrev() != NULL)
         a->getPrev()->setNext(a->getNext());
@@ -395,7 +395,7 @@ inline void list_remove(L &list, T *a)
 }
 
 template <typename L, typename T>
-inline void list_enqueue(L &list, T *a)
+static inline void list_enqueue(L &list, T *a)
 {
     a->setNext(NULL);
     a->setPrev(list.tail);
@@ -408,7 +408,7 @@ inline void list_enqueue(L &list, T *a)
 }
 
 template <typename L, typename T>
-inline void list_insert_sort(L &list, T *a)
+static inline void list_insert_sort(L &list, T *a)
 {
     if (list.tail == NULL) {
         list.tail = list.head = a;
@@ -1477,6 +1477,9 @@ public:
     // how many pools in total have been allocated.
     uint32_t pool_count;
 
+    Pool *previous_pool;
+    uintptr_t previous_pool_start;
+    uintptr_t previous_pool_end;
     static inline size_t thread_id() { return (size_t)&_thread_id; }
 
     Allocator()
@@ -1492,6 +1495,23 @@ public:
         page_count = 0;
         // pools and cached_pool
         init_cache();
+        previous_pool = NULL;
+    }
+
+    inline void set_previous_pools(Pool *p)
+    {
+        previous_pool = p;
+        previous_pool_start = (uintptr_t)&p->blocks[0];
+        previous_pool_end = (uintptr_t)((uint8_t *)previous_pool_start + (p->num_available * p->block_size));
+    }
+
+    inline bool check_previous_pool(void *p) const
+    {
+        if (previous_pool) {
+            return (uintptr_t)p >= previous_pool_start && (uintptr_t)p <= previous_pool_end;
+        } else {
+            return false;
+        }
     }
 
     void *malloc(size_t s)
@@ -1515,12 +1535,20 @@ public:
     {
         if (p == NULL)
             return;
+
+        if (check_previous_pool(p)) {
+            return previous_pool->freeBlock(p);
+        } else {
+            previous_pool = NULL;
+        }
+
         if ((uintptr_t)p < partitions_offsets[2]) {
             Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
             // There are only pools in this area
             if (_thread_idx == section->thread_id) {
                 auto pool = (Pool *)section->findCollection(p);
                 pool->freeBlock(p);
+                set_previous_pools(pool);
                 if (!pool->isConnected()) {
                     auto queue = &pools[sizeToPool(pool->block_size)];
                     list_enqueue(*queue, pool);
@@ -1583,37 +1611,13 @@ public:
         }
     }
 
-    // this hands out a node inside of a raw page.
-    // it is assumed that the called knows how to
-    inline void *raw_malloc(size_t s)
-    {
-        int asize = align(s);
-        // find a free page
-        // if no free page... get from system.
-        //      add to free lists.
-        // find a free block
-        return NULL;
-    }
-
-    inline void raw_free(void *bp)
-    {
-        //
-    }
-
-    inline int raw_resize(int incr)
-    {
-        // check next block in list.
-        // if able to resize, return true
-        return 0;
-    }
-
 private:
     inline int8_t addrToPartition(void *addr) const
     {
         return 22 - __builtin_clzll((uintptr_t)addr);
     }
 
-    inline uint8_t sizeToPool(size_t as)
+    inline uint8_t sizeToPool(size_t as) const
     {
         const int bmask = ~0x7f;
         if ((bmask & as) == 0) {
@@ -1627,6 +1631,7 @@ private:
 
     bool collect()
     {
+        //
         // for each area this thread has allocated.
         //
         return false;
