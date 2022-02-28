@@ -311,9 +311,8 @@ static inline size_t align(size_t n)
     return (n + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1);
 }
 
-union Block
+struct Block
 {
-    uint8_t *data;
     Block *next;
 };
 
@@ -397,11 +396,11 @@ static inline void list_remove(L &list, T *a)
 template <typename L, typename T>
 static inline void list_enqueue(L &list, T *a)
 {
-    a->setNext(NULL);
-    a->setPrev(list.tail);
-    if (list.tail != NULL) {
-        list.tail->setNext(a);
-        list.tail = a;
+    a->setNext(list.head);
+    a->setPrev(NULL);
+    if (list.head != NULL) {
+        list.head->setPrev(a);
+        list.head = a;
     } else {
         list.tail = list.head = a;
     }
@@ -416,7 +415,11 @@ static inline void list_insert_sort(L &list, T *a)
     }
 
     if (list.tail < a) {
-        return list_enqueue(list, a);
+        list.tail->setNext(a);
+        a->setNext(NULL);
+        a->setPrev(list.tail);
+        list.tail = a;
+        return;
     }
 
     T *current = list.head;
@@ -781,32 +784,22 @@ struct Pool
     {
         if (free == NULL) {
             if (!isFullyCommited()) {
-                uintptr_t start = (uintptr_t)&blocks[0];
-                uintptr_t end = (uintptr_t)((uint8_t *)start + (num_committed * block_size));
+                uintptr_t start = (uintptr_t)((uint8_t *)&blocks[0] + (num_committed * block_size));
+                uint32_t steps = 1;
+                uint32_t remaining = (num_available - num_committed);
+                if (block_size < os_page_size) {
+                    steps = (uint32_t)min(os_page_size / block_size, remaining);
+                }
 
-                if (start != end) {
-                    start = end;
+                Block *block = (Block *)start;
+                num_committed += steps;
+                for (uint32_t i = 0; i < steps - 1; i++) {
+                    Block *next = (Block *)((uint8_t *)block + block_size);
+                    block->next = next;
+                    block = next;
                 }
+                block->next = NULL;
                 free = (Block *)start;
-                free->next = NULL;
-                num_committed++;
-                if ((num_available - num_committed) > 0 && block_size < os_page_size) {
-                    if (start != end) {
-                        start = end;
-                    }
-                    uintptr_t page_end = align_up(start, os_page_size);
-                    auto offset = page_end - start;
-                    auto steps = min(offset / block_size, num_available - num_committed);
-                    Block *block = free;
-                    for (uint32_t i = 1; i <= steps; i++) {
-                        uintptr_t block_addre = (uintptr_t)((uint8_t *)block + block_size);
-                        Block *next = (Block *)block_addre;
-                        block->next = next;
-                        block = next;
-                        num_committed++;
-                    }
-                    block->next = NULL;
-                }
                 return true;
             }
         }
@@ -1480,6 +1473,7 @@ public:
     Pool *previous_pool;
     uintptr_t previous_pool_start;
     uintptr_t previous_pool_end;
+
     static inline size_t thread_id() { return (size_t)&_thread_id; }
 
     Allocator()
@@ -1519,15 +1513,14 @@ public:
         if (s == 0)
             return NULL;
 
-        auto asize = align(s);
-        if (asize < (SECTION_SIZE - 64)) {
-            return alloc_from_pool(asize);
-        } else if (asize < (AREA_SIZE_LARGE - 64)) {
+        if (s < SECTION_MAX_MEMORY) {
+            return alloc_from_pool(s);
+        } else if (s < AREA_LARGE_MAX_MEMORY) {
             // allocate form the large page
-            auto page = get_free_page(asize);
-            return page->getBlock((uint32_t)asize);
+            auto page = get_free_page(s);
+            return page->getBlock((uint32_t)s);
         } else {
-            return get_free_huge_block(asize);
+            return get_free_huge_block(s);
         }
     }
 
@@ -1551,9 +1544,13 @@ public:
                 set_previous_pools(pool);
                 if (!pool->isConnected()) {
                     auto queue = &pools[sizeToPool(pool->block_size)];
-                    list_enqueue(*queue, pool);
+                    if (queue->head != pool && queue->tail != pool) {
+                        list_enqueue(*queue, pool);
+                    }
                     if (!section->isConnected()) {
-                        list_enqueue(sections, section);
+                        if (sections.head != section && sections.tail != section) {
+                            list_enqueue(sections, section);
+                        }
                     }
                 }
             }
@@ -1567,9 +1564,13 @@ public:
                     // if the free pools list is empty.
                     if (!page->isConnected()) {
                         // reconnect
-                        list_enqueue(pages, page);
+                        if (pages.head != page && pages.tail != page) {
+                            list_enqueue(pages, page);
+                        }
                         if (!section->isConnected()) {
-                            list_enqueue(sections, section);
+                            if (sections.head != section && sections.tail != section) {
+                                list_enqueue(sections, section);
+                            }
                         }
                     }
                 } else {
@@ -1578,9 +1579,13 @@ public:
                     if (!pool->isConnected()) {
                         // reconnect
                         auto queue = &pools[sizeToPool(pool->block_size)];
-                        list_enqueue(*queue, pool);
+                        if (queue->head != pool && queue->tail != pool) {
+                            list_enqueue(*queue, pool);
+                        }
                         if (!section->isConnected()) {
-                            list_enqueue(sections, section);
+                            if (sections.head != section && sections.tail != section) {
+                                list_enqueue(sections, section);
+                            }
                         }
                     }
                 }
@@ -1758,39 +1763,34 @@ private:
         return &section->collections[0];
     }
 
-    Pool *alloc_pool(size_t s)
+    inline Pool *alloc_pool(size_t s)
     {
         auto sfree_section = get_free_section(s, ContainerType::POOL);
         if (sfree_section == NULL) {
             return NULL;
         }
         // Allocate pool
-        unsigned int coll_idx = sfree_section->mask.firstFree_lo();
-        sfree_section->mask.reserve_lo(coll_idx);
+
+        unsigned int coll_idx = sfree_section->mask.allocate_bit_lo();
         auto exp = sfree_section->getContainerExponent();
         Pool *p = (Pool *)sfree_section->getCollection(coll_idx, exp);
         p->init(coll_idx, (uint32_t)s, exp);
         return p;
     }
 
-    void *alloc_from_pool(size_t s)
+    inline void *alloc_from_pool(size_t s)
     {
         auto queue = &pools[sizeToPool(s)];
-        Pool *start = queue->tail;
+        Pool *start = queue->head;
 
         if (start != NULL) {
             if (start->free == NULL) {
                 if (start->extendPool()) {
-                    goto fin;
+                    return start->getFreeBlock();
                 }
                 list_remove(*queue, start);
             } else {
-                if (start->isAlmostFull()) {
-                    // if the next allocation will cause it to fill
-                    // pre-emptively remove it from the free list
-                    list_remove(*queue, start);
-                }
-                goto fin;
+                return start->getFreeBlock();
             }
         }
 
@@ -1801,12 +1801,7 @@ private:
 
         pool_count++;
         list_enqueue(*queue, start);
-    fin:
-        start->num_used++;
-        auto res = start->free;
-        start->free = res->next;
-
-        return res;
+        return start->getFreeBlock();
     }
 
     void init_cache()
