@@ -11,6 +11,58 @@
 //    - writing and deleting memory from threads.
 //    - comparing against other allocators performance.
 
+/*
+
+ Another random thought.
+    - if a complicated structure is something that the allocator understands. Such as a tree, or a graph.
+        : Can the allocator be used like a persistence util to traverse through the pointers and release them.
+        : A user app could collect all pointers into an array and call free for the whole buffer.
+        : Calling a destructor on an object would cause the system to defer free all the items until the destructor is done.
+        : allot::destruct( obj ) -> any nested calls to destruct would cause a deferred free operation.
+        : pass in a pointer to a struct. pass in a struct to describe the navigation path of a pointer tree.
+        : traverse the network of pointers and pass them to their correct pools or pages.
+        : destruct( ptr, schema ) -> no nested destruct calls.
+        : construct( ptr, schema ) ->
+ 1.
+ [ ] test exhausting all the memory areas.
+ [ ] Allocate all puny areas avaialable.
+ [ ] Allocate all mid areas avaiailable.
+ [ ] Allocate all large areas available.
+ [ ] test allocating too much memory.
+ [ ] Test the order of the areas.
+        - if I remove an area from the list, will it alocate from the empty spot.
+ [ ] Collect memory on NULL in malloc and try again.
+ [ ] explicitly collect memory.
+ [ ] random allocations sizes.
+    - within a pool size class.
+    - within a partition size class.
+    - mix pool size classes.
+    - mix partition size classes.
+    - when allocator is empty.
+    - when allocator is getting half full and bleeding over partitions.
+    - when allocator is getting full and running out of memory.
+2.
+ [ ] test small pages.
+ [ ] test small page coalesce rules.
+ [ ] test pools vs pages for small sizes
+3.
+ [ ] add thread free for pools.
+ [ ] add thread free for pages.
+ [ ] test thread free performance from multiple threads.
+ [ ] random allocations sizes.
+    - same as previous allocation test, but with multiple threads.
+    - all memory in separate threads.
+    - distribute memory among threads so that each thread is freeing memory into other threads and its own.
+    - distribute memory among threads so that each thread is only freeing memory into other threads.
+4.
+ [ ] improve page allocations. ordererd lists. double free tests.
+ [ ] memory API. alloc and string functions.
+5.
+ [ ] add memory block objects and implicit list alocation support.
+ [ ] stats. leaks.
+ [ ] integrate with ALLOT
+ [ ] test with builder. DONE!
+ */
 #ifndef Malloc_h
 #define Malloc_h
 
@@ -66,12 +118,12 @@ uint64_t rdtsc()
 #define DEFAULT_LARGE_PAGE_SIZE LARGE_OBJECT_SIZE * 2 // 4Mb
 #define HUGE_OBJECT_SIZE DEFAULT_LARGE_PAGE_SIZE * 8 // 32Mb
 
-#define SIZE_CLS_1 17 // 2 ^ 17   // 16k
-#define SIZE_CLS_2 19 //          // 128k
-#define SIZE_CLS_3 22 //          // 4Mb
-#define SIZE_CLS_4 25 //          // 32Mb
-#define SIZE_CLS_5 27 //          // 128Mb
-#define SIZE_CLS_6 28 //          // 256Mb
+#define SIZE_CLS_1 17 // 128k
+#define SIZE_CLS_2 19 // 512k
+#define SIZE_CLS_3 22 // 4Mb
+#define SIZE_CLS_4 25 // 32Mb
+#define SIZE_CLS_5 27 // 128Mb
+#define SIZE_CLS_6 28 // 256Mb
 
 #define SECTION_SIZE (1ULL << 22ULL)
 
@@ -340,22 +392,22 @@ enum ContainerType {
 inline int32_t getContainerExponent(size_t s, ContainerType t)
 {
     if (t == PAGE) {
-        if (s < SMALL_OBJECT_SIZE) {
-            return SIZE_CLS_3;
-        } else if (s < MEDIUM_OBJECT_SIZE) {
-            return SIZE_CLS_4;
-        } else if (s < HUGE_OBJECT_SIZE) {
-            return SIZE_CLS_5;
-        } else {
-            return SIZE_CLS_6;
+        if (s < SMALL_OBJECT_SIZE) { // 8 - 16k
+            return SIZE_CLS_3; // 4
+        } else if (s < MEDIUM_OBJECT_SIZE) { // 16k - 4Mb
+            return SIZE_CLS_4; // 32
+        } else if (s < HUGE_OBJECT_SIZE) { // 4Mb - 32Mb
+            return SIZE_CLS_5; // 128
+        } else { // for large than 32Mb objects.
+            return SIZE_CLS_6; // 256
         }
     } else {
-        if (s < SMALL_OBJECT_SIZE) {
-            return SIZE_CLS_1;
-        } else if (s < MEDIUM_OBJECT_SIZE) {
-            return SIZE_CLS_2;
+        if (s < SMALL_OBJECT_SIZE) { // 8 - 16k
+            return SIZE_CLS_1; // 128k
+        } else if (s < MEDIUM_OBJECT_SIZE) { // 16k - 128k
+            return SIZE_CLS_2; // 512k
         } else {
-            return SIZE_CLS_3;
+            return SIZE_CLS_3; // 4M for > 128k objects.
         }
     }
 }
