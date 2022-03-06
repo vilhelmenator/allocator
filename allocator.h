@@ -1852,6 +1852,7 @@ private:
             was_released |= try_release_containers(start);
             start = next;
         }
+        start = queue->head;
         while (start != NULL) {
             auto next = start->getNext();
             was_released |= try_release_area(start);
