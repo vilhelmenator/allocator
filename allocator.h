@@ -1846,6 +1846,12 @@ private:
         bool was_released = false;
         Area *start = queue->head;
         // find free section.
+        // detach all pools/pages/sections.
+        while (start != NULL) {
+            auto next = start->getNext();
+            was_released |= try_release_containers(start);
+            start = next;
+        }
         while (start != NULL) {
             auto next = start->getNext();
             was_released |= try_release_area(start);
@@ -1854,7 +1860,7 @@ private:
         return was_released;
     }
 
-    bool try_release_area(Area *area)
+    bool try_release_containers(Area *area)
     {
         if (area->isFree()) {
 
@@ -1880,12 +1886,19 @@ private:
                 }
                 list_remove(sections, section);
             }
+            return true;
+        }
+        return false;
+    }
+    bool try_release_area(Area *area)
+    {
+        if (area->isFree()) {
+
             free_area(area);
             return true;
         }
         return false;
     }
-
     Section *get_free_section(size_t s, ContainerType t)
     {
         auto exponent = getContainerExponent(s, t);
