@@ -1,5 +1,4 @@
 
-
 // [ ] thread_free
 // [ ] thread_setup
 // [ ] stats.
@@ -10,6 +9,71 @@
 //    does not cause issues.
 //    - writing and deleting memory from threads.
 //    - comparing against other allocators performance.
+
+//
+typedef enum t_desc_type {
+    dt_none = -1, //  null
+    dt_builtin = 0, //  local type
+    dt_struct, //  local struct
+    dt_array, //  local array
+    dt_struct_ref, //  heap struct
+    dt_builtin_ref, //  heap builtin
+    dt_array_ref, //  heap array
+} desc_type;
+
+//
+typedef struct t_desc_define
+{
+    const char *name; // who
+    desc_type dtype; // what
+    uint32_t size; //
+    uint32_t offset; // where
+    const t_desc_define *schema; // how
+} desc_define;
+
+// terminal placement.
+const desc_define end_desc = { NULL, dt_none, 0, 0, NULL };
+
+// define struct
+const desc_define sub_type[] {
+    { "thing", dt_none, 4, 0, NULL },
+    end_desc
+};
+
+const desc_define my_type[] {
+    { "thing", dt_none, 4, 0, sub_type },
+    end_desc
+};
+//
+// the allocator can remove a ptr network.
+//      - plucks free memory into a deferred list for each owner thread.
+//      - can more effectively release memory.
+//      - can pluck items into a deferred list per thread.
+// the allocator can move a ptr network.
+//      - copy any item of memory that is not local to the current thread.
+// the allocator can copy a ptr network.
+//      - make a new copy of a network in a single contiguous buffer.
+//
+void test_a(void *src, const desc_define *t)
+{
+    // free a network of objects.
+    // does the type have desc objects.
+    // are they all pointing to the same one.
+    //  - then it is just collecting the offsets and traversing those.
+    //  - for every type of equal size. if the ptrs are all just within the same thread area.
+    //      we can simply string the ptrs together like a
+    int i = 0;
+    do {
+        //
+        //
+        //
+    } while (t[i++].name != NULL);
+}
+
+void test()
+{
+    test_a(NULL, my_type);
+}
 
 /*
 
@@ -76,7 +140,10 @@
 #ifdef WINDOWS
 #include <intrin.h>
 #include <memoryapi.h>
-uint64_t rdtsc() { return __rdtsc(); }
+uint64_t rdtsc()
+{
+    return __rdtsc();
+}
 #else
 #include <sys/mman.h>
 #include <x86intrin.h>
@@ -118,13 +185,6 @@ uint64_t rdtsc()
 #define DEFAULT_LARGE_PAGE_SIZE LARGE_OBJECT_SIZE * 2 // 4Mb
 #define HUGE_OBJECT_SIZE DEFAULT_LARGE_PAGE_SIZE * 8 // 32Mb
 
-#define SIZE_CLS_1 17 // 128k
-#define SIZE_CLS_2 19 // 512k
-#define SIZE_CLS_3 22 // 4Mb
-#define SIZE_CLS_4 25 // 32Mb
-#define SIZE_CLS_5 27 // 128Mb
-#define SIZE_CLS_6 28 // 256Mb
-
 #define SECTION_SIZE (1ULL << 22ULL)
 
 #define CACHE_LINE 64
@@ -134,14 +194,15 @@ uint64_t rdtsc()
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
 
-#define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL)
-#define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)
-#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)
+#define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL) // 32Mb
+#define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL) // 128Mb
+#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL) // 256Mb
 #define MASK_FULL 0xFFFFFFFFFFFFFFFF
 
 #define CACHED_POOL_COUNT 64
 #define POOL_BIN_COUNT 17 * 8 + 2
 #define HEADER_SIZE 64
+#define PAGE_BIN_COUNT 3
 
 #define AREA_SMALL_MAX_MEMORY AREA_SIZE_SMALL - HEADER_SIZE
 #define AREA_LARGE_MAX_MEMORY AREA_SIZE_LARGE - HEADER_SIZE
@@ -153,6 +214,15 @@ uint64_t rdtsc()
 #define MAX_HUGE_AREAS 64 // 256Mb over 16Gb
 
 #define MAX_THREADS 1024 // don't change this...
+
+cache_align const uintptr_t size_clss_to_exponent[] {
+    17, // 128k
+    19, // 512k
+    22, // 4Mb
+    25, // 32Mb
+    27, // 128Mb
+    28 // 256Mb
+};
 
 enum AreaType {
     AT_FIXED_32, //  containes small allocations
@@ -375,12 +445,12 @@ enum AllocSize {
 };
 
 enum Exponent {
-    EXP_PUNY = SIZE_CLS_1,
-    EXP_SMALL = SIZE_CLS_2,
-    EXP_MEDIUM = SIZE_CLS_3,
-    EXP_LARGE = SIZE_CLS_4,
-    EXP_HUGE = SIZE_CLS_5,
-    EXP_GIGANTIC = SIZE_CLS_6
+    EXP_PUNY = 0,
+    EXP_SMALL,
+    EXP_MEDIUM,
+    EXP_LARGE,
+    EXP_HUGE,
+    EXP_GIGANTIC
 };
 
 enum ContainerType {
@@ -392,34 +462,21 @@ enum ContainerType {
 inline int32_t getContainerExponent(size_t s, ContainerType t)
 {
     if (t == PAGE) {
-        if (s < SMALL_OBJECT_SIZE) { // 8 - 16k
-            return SIZE_CLS_3; // 4
-        } else if (s < MEDIUM_OBJECT_SIZE) { // 16k - 4Mb
-            return SIZE_CLS_4; // 32
-        } else if (s < HUGE_OBJECT_SIZE) { // 4Mb - 32Mb
-            return SIZE_CLS_5; // 128
+        if (s <= MEDIUM_OBJECT_SIZE) { // 16k - 4Mb
+            return EXP_LARGE; // 32
+        } else if (s <= HUGE_OBJECT_SIZE) { // 4Mb - 32Mb
+            return EXP_HUGE; // 128
         } else { // for large than 32Mb objects.
-            return SIZE_CLS_6; // 256
+            return EXP_GIGANTIC; // 256
         }
     } else {
-        if (s < SMALL_OBJECT_SIZE) { // 8 - 16k
-            return SIZE_CLS_1; // 128k
-        } else if (s < MEDIUM_OBJECT_SIZE) { // 16k - 128k
-            return SIZE_CLS_2; // 512k
+        if (s <= SMALL_OBJECT_SIZE) { // 8 - 16k
+            return EXP_PUNY; // 128k
+        } else if (s <= MEDIUM_OBJECT_SIZE) { // 16k - 128k
+            return EXP_SMALL; // 512k
         } else {
-            return SIZE_CLS_3; // 4M for > 128k objects.
+            return EXP_MEDIUM; // 4M for > 128k objects.
         }
-    }
-}
-
-inline AllocSize getAllocSize(size_t s)
-{
-    if (s < SMALL_OBJECT_SIZE) {
-        return SMALL;
-    } else if (s < MEDIUM_OBJECT_SIZE) {
-        return MEDIUM;
-    } else {
-        return LARGE;
     }
 }
 
@@ -483,12 +540,29 @@ static inline void list_insert_sort(L &list, T *a)
     current->setPrev(a);
 }
 
+template <typename L, typename T>
+static inline void list_insert_at(L &list, T *t, T *a)
+{
+    if (list.tail == NULL) {
+        list.tail = list.head = a;
+        return;
+    }
+
+    a->setNext(t->getNext());
+    a->setPrev(t);
+    if (t->getNext() != NULL) {
+        t->getNext()->setPrev(a);
+    } else {
+        list.tail = a;
+    }
+    t->setNext(a);
+}
 struct Area
 {
     // The area is overlapping with the first section. And they share some
     // attributes.
     static const uintptr_t small_area_mask = 0xff;
-    static const uintptr_t large_area_mask = 0xffff;
+    static const uintptr_t large_area_mask = 0xffffffff;
     static const uintptr_t ptr_mask = 0x0000ffffffffffff;
     static const uintptr_t inv_ptr_mask = 0xffff000000000000;
     struct List
@@ -496,7 +570,8 @@ struct Area
         Area *head;
         Area *tail;
         uint32_t thread_id;
-        uintptr_t base_addr;
+        uintptr_t start_addr;
+        uintptr_t end_addr;
         AreaType type;
         size_t area_count;
         Area *previous_area;
@@ -516,7 +591,7 @@ private:
     int32_t misc; // index in parent area.
 public:
     inline bool isEmpty() { return mask.isEmpty_hi(); }
-    inline bool isFree() { return isEmpty() && release_state; }
+    inline bool isFree() { return isEmpty(); }
     inline void FreeIdx(uint8_t i)
     {
         mask.freeIdx_hi(i);
@@ -537,30 +612,13 @@ public:
 
     int8_t claimSection()
     {
-        auto idx = mask.allocate_bit_hi();
-        if (idx >= 0) {
-            uint32_t numSet = countBits(mask.whole >> 32);
-            auto area_size = getSize();
-            if (area_size == AREA_SIZE_SMALL) {
-                if (numSet >= 4) {
-                    release_state = 1;
-                }
-            } else if (area_size == AREA_SIZE_LARGE) {
-                if (numSet >= 16) {
-                    release_state = 1;
-                }
-            } else {
-                release_state = 1;
-            }
-            return idx;
-        }
-        return -1;
+        return mask.allocate_bit_hi();
     }
     void claimAll()
     {
-        release_state = 1;
         mask.reserveAll();
     }
+
     bool isFull()
     {
         if (mask.isFull_hi()) {
@@ -662,16 +720,6 @@ public:
                 area->FreeIdx(idx);
                 break;
             }
-            case PAGE: {
-                auto cexp = getContainerExponent();
-                // if small page
-                if (cexp != EXP_MEDIUM) {
-                    area->mask.freeAll();
-                } else {
-                    area->FreeIdx(idx);
-                }
-                break;
-            }
             default: // SLAB
                 area->mask.freeAll();
                 break;
@@ -727,7 +775,7 @@ public:
     inline void *findCollection(void *p) const
     {
         const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&collections[0];
-        const auto exp = (container_exponent & 0xffff000000000000) >> 48;
+        const auto exp = size_clss_to_exponent[(container_exponent & 0xffff000000000000) >> 48];
         const auto page_size = 1 << exp;
         const int32_t idx = (int32_t)((size_t)diff >> exp);
         return (void *)((uint8_t *)&collections[0] + page_size * idx);
@@ -735,17 +783,7 @@ public:
 
     inline uintptr_t getCollection(int8_t idx, Exponent exp) const
     {
-        switch (exp) {
-        case Exponent::EXP_PUNY: {
-            return (uintptr_t)((uint8_t *)&collections[0] + (1 << Exponent::EXP_PUNY) * idx);
-        }
-        case Exponent::EXP_SMALL: {
-            return (uintptr_t)((uint8_t *)&collections[0] + (1 << Exponent::EXP_SMALL) * idx);
-        }
-        default: {
-            return (uintptr_t)((uint8_t *)&collections[0] + (1 << exp) * idx);
-        }
-        }
+        return (uintptr_t)((uint8_t *)&collections[0] + (1 << size_clss_to_exponent[exp]) * idx);
     }
 };
 
@@ -795,7 +833,7 @@ struct Pool
 
     void init(int8_t pidx, uint32_t blockSize, Exponent partition)
     {
-        auto psize = 1 << partition;
+        auto psize = 1 << size_clss_to_exponent[partition];
 
         uintptr_t section_end = align_up((uintptr_t)this, SECTION_SIZE);
         auto remaining_size = section_end - (uintptr_t)&blocks[0];
@@ -914,7 +952,7 @@ struct Page
         used_memory += s;
         if (num_allocations == 0) {
             Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->ReserveIdx(idx);
+            section->mask.reserveAll();
         }
         num_allocations++;
         return ptr;
@@ -939,8 +977,19 @@ struct Page
         num_allocations--;
         if (num_allocations == 0) {
             Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->FreeIdx(idx);
+            section->mask.freeAll();
+            reset();
         }
+    }
+
+    inline void reset()
+    {
+        free_nodes = { NULL, NULL };
+        heap_block *hb = (heap_block *)start;
+        list_enqueue(free_nodes, (heap_node *)start);
+        hb->set_header(total_memory, 0);
+        hb->set_footer(total_memory, 0);
+        hb->next()->set_header(0, 1);
     }
 
     inline void extend()
@@ -951,11 +1000,7 @@ struct Page
         *(start + WSIZE + DSIZE) = 1; /* Epilogue header */
         start = start + DSIZE * 2;
 
-        heap_block *hb = (heap_block *)start;
-        list_enqueue(free_nodes, (heap_node *)start);
-        hb->set_header(total_memory, 0);
-        hb->set_footer(total_memory, 0);
-        hb->next()->set_header(0, 1);
+        reset();
     }
 
     inline void *coalesce(void *bp)
@@ -1040,12 +1085,12 @@ struct Page
 
     void init(int8_t pidx, Exponent partition)
     {
-        auto psize = 1 << partition;
+        auto psize = 1 << size_clss_to_exponent[partition];
         uintptr_t section_end = align_up((uintptr_t)this, psize);
         auto remaining_size = section_end - (uintptr_t)&blocks[0];
 
-        auto block_memory = psize - sizeof(Page) - sizeof(Area);
-        auto header_footer_offset = sizeof(uintptr_t) * 5;
+        auto block_memory = psize - sizeof(Page) - sizeof(Section);
+        auto header_footer_offset = sizeof(uintptr_t) * 2;
 
         idx = pidx;
         used_memory = 0;
@@ -1184,38 +1229,49 @@ struct Partition
     static Area::List area_4;
     static Area::List area_5;
 
-    void *get_next_address(Area::List *area_queue, uint64_t size,
+    Area *get_next_area(Area::List *area_queue, uint64_t size,
         uint64_t alignment)
     {
+        void *aligned_addr = NULL;
+        Area *insert = NULL;
+        auto asize = align_up(size, alignment);
+        uint64_t delta = (uint64_t)((uint8_t *)area_queue->end_addr - area_queue->start_addr);
         if (area_queue->head == NULL) {
-            return (void *)area_queue->base_addr;
-        }
-        size = align_up(size, alignment);
-        uint64_t delta = (uint64_t)((uint8_t *)area_queue->base_addr - (uint8_t *)area_queue->tail);
-        if (delta < size && (area_queue->tail != area_queue->head)) {
-            Area *current = area_queue->head;
-            while (current != area_queue->tail) {
-                size_t c_size = current->getSize();
-                size_t c_end = c_size + (size_t)(uint8_t *)current;
-                Area *next = current->getNext();
-                delta = (uint64_t)((uint8_t *)next - c_end);
-                if (delta >= size) {
-                    return (void *)c_end;
-                }
-                current = next;
-            }
-            return NULL;
+            aligned_addr = (void *)area_queue->start_addr;
         } else {
-            return (void *)align_up((uintptr_t)(((uint8_t *)area_queue->tail) + area_queue->tail->getSize()),
-                alignment);
-        }
-    }
+            // is there room at the end
+            //
+            uint64_t tail_end = (uint64_t)((uint8_t *)area_queue->tail + area_queue->tail->getSize());
+            delta = (uint64_t)((uint8_t *)area_queue->end_addr - tail_end);
+            if (delta < size && (area_queue->tail != area_queue->head)) {
+                Area *current = area_queue->head;
+                while (current != area_queue->tail) {
+                    size_t c_size = current->getSize();
+                    size_t c_end = c_size + (size_t)(uint8_t *)current;
+                    Area *next = current->getNext();
+                    delta = (uint64_t)((uint8_t *)next - c_end);
+                    if (delta >= asize) {
+                        insert = current;
+                        break;
+                    }
+                    current = next;
+                }
+            } else if (delta >= size) {
+                insert = area_queue->tail;
+            }
 
-    Area *alloc_area(Area::List *area_queue, uint64_t area_size,
-        uint64_t alignment)
-    {
-        void *aligned_addr = get_next_address(area_queue, area_size, alignment);
-        Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, area_size, alignment, true);
+            if (insert == NULL) {
+                return NULL;
+            }
+
+            auto si = insert->getSize();
+            auto offset = (uintptr_t)((uint8_t *)insert + si);
+            aligned_addr = (void *)align_up((uintptr_t)offset, alignment);
+        }
+        if (delta < size) {
+            return NULL;
+        }
+        Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, size, alignment, true);
         if (new_area == NULL) {
             return NULL;
         }
@@ -1223,7 +1279,17 @@ struct Partition
         new_area->thread_id = area_queue->thread_id;
         new_area->setNext(NULL);
         new_area->setPrev(NULL);
-        list_insert_sort(*area_queue, new_area);
+        list_insert_at(*area_queue, insert, new_area);
+        return new_area;
+    }
+
+    Area *alloc_area(Area::List *area_queue, uint64_t area_size,
+        uint64_t alignment)
+    {
+        Area *new_area = get_next_area(area_queue, area_size, alignment);
+        if (new_area == NULL) {
+            return NULL;
+        }
         area_queue->previous_area = new_area;
         area_queue->area_count++;
         return new_area;
@@ -1235,7 +1301,7 @@ struct Partition
         case AT_FIXED_32: {
             area_01.area_count--;
             list_remove(area_01, a);
-            if (a == area_01.previous_area) {
+            if ((a == area_01.previous_area) || (area_01.area_count == 0)) {
                 area_01.previous_area = NULL;
             }
 
@@ -1244,7 +1310,7 @@ struct Partition
         case AT_FIXED_128: {
             area_2.area_count--;
             list_remove(area_2, a);
-            if (a == area_2.previous_area) {
+            if ((a == area_2.previous_area) || (area_2.area_count == 0)) {
                 area_2.previous_area = NULL;
             }
             break;
@@ -1252,73 +1318,81 @@ struct Partition
         default: {
             area_3.area_count--;
             list_remove(area_3, a);
-            if (a == area_3.previous_area) {
+            if ((a == area_3.previous_area) || (area_3.area_count == 0)) {
                 area_3.previous_area = NULL;
             }
             break;
         }
         };
-        reset_memory(a, a->getSize());
+        free_memory(a, a->getSize());
     }
 
-    Area *get_free_area(size_t s, AreaType t)
+    uint32_t get_max_area_count(AreaType t)
     {
-        Area::List *current_queue = NULL;
-        Area *previous_area = NULL;
-        size_t area_size = AREA_SIZE_SMALL;
-        size_t alignement = area_size;
         switch (t) {
         case AT_FIXED_32: {
-            if (area_01.area_count >= MAX_SMALL_AREAS) {
-                if (area_2.area_count >= MAX_LARGE_AREAS) {
-                    return NULL;
-                }
-                previous_area = area_2.previous_area;
-                current_queue = &area_2;
-                area_size = AREA_SIZE_LARGE;
-                alignement = area_size;
-            }
-            previous_area = area_01.previous_area;
-            current_queue = &area_01;
-            break;
+            return MAX_SMALL_AREAS;
         }
         case AT_FIXED_128: {
-            area_size = AREA_SIZE_LARGE;
-            if (area_2.area_count >= MAX_LARGE_AREAS) {
-                if (area_3.area_count >= MAX_HUGE_AREAS) {
-                    return NULL;
-                }
-                previous_area = area_3.previous_area;
-                current_queue = &area_3;
-                area_size = AREA_SIZE_HUGE;
-                alignement = area_size;
-            }
-            previous_area = area_2.previous_area;
-            current_queue = &area_2;
-            alignement = area_size;
-            break;
-        }
-        case AT_FIXED_256: {
-            area_size = AREA_SIZE_HUGE;
-            if (area_3.area_count >= MAX_HUGE_AREAS) {
-                return NULL;
-            }
-            previous_area = area_3.previous_area;
-            current_queue = &area_3;
-            alignement = area_size;
-            break;
+            return MAX_LARGE_AREAS;
         }
         default: {
-            previous_area = area_3.previous_area;
-            current_queue = &area_3;
-            area_size = s;
-            alignement = AREA_SIZE_HUGE;
-            break;
+            return MAX_HUGE_AREAS;
         }
         };
+    }
+    Area::List *get_current_queue(AreaType t, size_t s, size_t *area_size, size_t *alignement)
+    {
+        switch (t) {
+        case AT_FIXED_32: {
+            *area_size = AREA_SIZE_SMALL;
+            *alignement = *area_size;
+            return &area_01;
+        }
+        case AT_FIXED_128: {
+            *area_size = AREA_SIZE_LARGE;
+            *alignement = *area_size;
+            return &area_2;
+        }
+        case AT_FIXED_256: {
+            *area_size = AREA_SIZE_HUGE;
+            *alignement = *area_size;
+            return &area_3;
+        }
+        default: {
+            *area_size = s;
+            *alignement = AREA_SIZE_HUGE;
+            return &area_3;
+        }
+        };
+    }
 
+    Area::List *promote_area(AreaType *t, size_t *area_size, size_t *alignement)
+    {
+        switch (*t) {
+        case AT_FIXED_32: {
+            *area_size = AREA_SIZE_LARGE;
+            *alignement = *area_size;
+            *t = AT_FIXED_128;
+            return &area_2;
+        }
+        case AT_FIXED_128: {
+            *area_size = AREA_SIZE_HUGE;
+            *alignement = *area_size;
+            *t = AT_FIXED_256;
+            return &area_3;
+        }
+        default: {
+            return NULL;
+        }
+        };
+    }
+
+    Area *get_free_area_from_queue(Area::List *current_queue)
+    {
         // the areas are empty
         Area *new_area = NULL;
+        Area *previous_area = current_queue->previous_area;
         if (previous_area != NULL) {
             if (!previous_area->isFull()) {
                 new_area = previous_area;
@@ -1336,12 +1410,34 @@ struct Partition
                 }
             }
         }
+        return new_area;
+    }
+
+    Area *get_free_area(size_t s, AreaType t)
+    {
+        size_t area_size = AREA_SIZE_SMALL;
+        size_t alignment = area_size;
+        Area::List *current_queue = get_current_queue(t, s, &area_size, &alignment);
+
+        // the areas are empty
+        Area *new_area = get_free_area_from_queue(current_queue);
+        // try promoting first.
+        if (new_area == NULL && (get_max_area_count(t) == current_queue->area_count)) {
+            current_queue = promote_area(&t, &area_size, &alignment);
+            if (current_queue == NULL) {
+                return NULL;
+            }
+            new_area = get_free_area_from_queue(current_queue);
+            if (new_area == NULL && (get_max_area_count(t) == current_queue->area_count)) {
+                return NULL;
+            }
+        }
 
         if (new_area == NULL) {
             if (area_size < os_page_size) {
                 area_size = os_page_size;
             }
-            new_area = alloc_area(current_queue, area_size, alignement);
+            new_area = alloc_area(current_queue, area_size, alignment);
             if (new_area == NULL) {
                 return NULL;
             }
@@ -1361,29 +1457,35 @@ struct Partition
 #define PARTITION_01 ((uintptr_t)2 << 40)
 #define PARTITION_2 ((uintptr_t)8 << 40)
 #define PARTITION_3 ((uintptr_t)16 << 40)
+#define PARTITION_4 ((uintptr_t)32 << 40)
+#define PARTITION_5 ((uintptr_t)64 << 40)
+#define PARTITION_6 ((uintptr_t)128 << 40)
 
-#define P1(tid)                                                  \
-    {                                                            \
-        {                                                        \
-            NULL,                                                \
-            NULL,                                                \
-            tid,                                                 \
-            (tid) * (SZ_GB * 6) + PARTITION_01,                  \
-            AreaType::AT_FIXED_32,                               \
-            0,                                                   \
-            NULL                                                 \
-        },                                                       \
-            { NULL,                                              \
-                NULL,                                            \
-                tid,                                             \
-                (tid) * (SZ_GB * 8) + PARTITION_2,               \
-                AreaType::AT_FIXED_128,                          \
-                0,                                               \
-                NULL },                                          \
-        {                                                        \
-            NULL, NULL, tid, (tid) * (SZ_GB * 16) + PARTITION_3, \
-                AreaType::AT_VARIABLE, 0, NULL                   \
-        }                                                        \
+#define P1(tid)                                                    \
+    {                                                              \
+        {                                                          \
+            NULL,                                                  \
+            NULL,                                                  \
+            tid,                                                   \
+            (tid) * (SZ_GB * 6) + PARTITION_01,                    \
+            (tid) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6),      \
+            AreaType::AT_FIXED_32,                                 \
+            0,                                                     \
+            NULL                                                   \
+        },                                                         \
+            { NULL,                                                \
+                NULL,                                              \
+                tid,                                               \
+                (tid) * (SZ_GB * 8) + PARTITION_2,                 \
+                (tid) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8),   \
+                AreaType::AT_FIXED_128,                            \
+                0,                                                 \
+                NULL },                                            \
+        {                                                          \
+            NULL, NULL, tid, (tid) * (SZ_GB * 16) + PARTITION_3,   \
+                (tid) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16), \
+                AreaType::AT_VARIABLE, 0, NULL                     \
+        }                                                          \
     }
 
 #define P10(tid)                                                              \
@@ -1406,10 +1508,10 @@ struct Partition
     }
 
 Area::List Partition::area_4 = {
-    NULL, NULL, 0, ((uintptr_t)32 << 40), AreaType::AT_VARIABLE, 0, NULL
+    NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AreaType::AT_VARIABLE, 0, NULL
 };
 Area::List Partition::area_5 = {
-    NULL, NULL, 0, ((uintptr_t)32 << 40), AreaType::AT_VARIABLE, 0, NULL
+    NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AreaType::AT_VARIABLE, 0, NULL
 };
 
 cache_align Partition memory_partitions[MAX_THREADS] = PART_LAYOUT;
@@ -1462,43 +1564,62 @@ private:
         }
     }
 
-    Area *get_area(size_t size)
+    Area *get_area(size_t size, ContainerType t)
     {
         Area *curr_area = NULL;
-        if (size < SECTION_SIZE - sizeof(Section)) {
+        uint32_t small_area_limit = LARGE_OBJECT_SIZE;
+        if (t == PAGE) {
+            small_area_limit = MEDIUM_OBJECT_SIZE;
+        }
+        if (size <= small_area_limit) {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_32);
-        } else if (size < AREA_SIZE_SMALL - sizeof(Area)) {
+            if (curr_area == NULL) {
+                bool was_released = release_areas_from_queue(&thread_partitions->area_01);
+                was_released |= release_areas_from_queue(&thread_partitions->area_2);
+                if (was_released) {
+                    // try again.
+                    curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_32);
+                }
+            }
+        } else if (size <= AREA_SIZE_SMALL) {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_128);
-        } else if (size < AREA_SIZE_LARGE - sizeof(Area)) {
+            if (curr_area == NULL) {
+                bool was_released = release_areas_from_queue(&thread_partitions->area_2);
+                was_released |= release_areas_from_queue(&thread_partitions->area_3);
+                if (was_released) {
+                    // try again.
+                    curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_128);
+                }
+            }
+        } else if (size <= AREA_SIZE_LARGE) {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_256);
+            if (curr_area == NULL) {
+                if (release_areas_from_queue(&thread_partitions->area_3)) {
+                    // try again.
+                    curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_256);
+                }
+            }
         } else {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_VARIABLE);
+            if (curr_area == NULL) {
+                if (release_areas_from_queue(&thread_partitions->area_3)) {
+                    // try again.
+                    curr_area = thread_partitions->get_free_area(size, AreaType::AT_VARIABLE);
+                }
+            }
         }
 
         return curr_area;
     }
 
-    Area *get_area_and_claim(size_t size, int32_t *outSectionIdx)
+    Section *alloc_section(size_t size, ContainerType t)
     {
-        Area *curr_area = get_area(size);
-        if (curr_area == NULL) {
-            return NULL;
-        }
-        *outSectionIdx = thread_partitions->claim_section(curr_area);
-        if (*outSectionIdx < 0) {
-            // failed to claim a section from a free area... ???
-            return NULL;
-        }
-        return curr_area;
-    }
-
-    Section *alloc_section(size_t size)
-    {
-        int32_t section_idx;
-        auto new_area = get_area_and_claim(size, &section_idx);
+        Area *new_area = get_area(size, t);
         if (new_area == NULL) {
             return NULL;
         }
+
+        int32_t section_idx = thread_partitions->claim_section(new_area);
 
         Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
         section->idx = section_idx;
@@ -1513,7 +1634,7 @@ public:
     // sections local to this thread with free pages or pools
     Section::Queue sections;
     // free pages that have room for various size allocations.
-    Page::Queue pages;
+    Page::Queue pages[PAGE_BIN_COUNT];
     // how man pages in total have been allocated.
     uint32_t page_count;
 
@@ -1535,7 +1656,6 @@ public:
         _thread_idx = nidx + 1;
         thread_partitions = &memory_partitions[_thread_idx];
 
-        pages = { NULL, NULL };
         sections = { NULL, NULL };
         pool_count = 0;
         page_count = 0;
@@ -1565,14 +1685,26 @@ public:
         if (s == 0)
             return NULL;
 
-        if (s < SECTION_MAX_MEMORY) {
+        if (s <= LARGE_OBJECT_SIZE) {
             return alloc_from_pool(s);
-        } else if (s < AREA_LARGE_MAX_MEMORY) {
+        } else if (s <= AREA_SIZE_LARGE) {
             // allocate form the large page
-            auto page = get_free_page(s);
-            return page->getBlock((uint32_t)s);
+            return alloc_from_page(s);
         } else {
-            return get_free_huge_block(s);
+            return alloc_slab(s);
+        }
+    }
+
+    void *malloc_page(size_t s)
+    {
+        if (s == 0)
+            return NULL;
+
+        if (s <= AREA_SIZE_LARGE) {
+            // allocate form the large page
+            return alloc_from_page(s);
+        } else {
+            return alloc_slab(s);
         }
     }
 
@@ -1588,13 +1720,44 @@ public:
         }
 
         if ((uintptr_t)p < partitions_offsets[2]) {
-            Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-            // There are only pools in this area
-            if (_thread_idx == section->thread_id) {
-                auto pool = (Pool *)section->findCollection(p);
+            free_from_section(p, AREA_SIZE_SMALL);
+        } else if ((uintptr_t)p < partitions_offsets[3]) {
+            free_from_section(p, AREA_SIZE_LARGE);
+        } else if ((uintptr_t)p < partitions_offsets[4]) {
+            free_huge(p);
+        } else {
+            // do nothing
+        }
+    }
+
+    bool release_local_areas()
+    {
+        bool was_released = false;
+        if (thread_partitions->area_01.area_count) {
+            was_released |= release_areas_from_queue(&thread_partitions->area_01);
+        }
+        if (thread_partitions->area_2.area_count) {
+            was_released |= release_areas_from_queue(&thread_partitions->area_2);
+        }
+        if (thread_partitions->area_3.area_count) {
+            was_released |= release_areas_from_queue(&thread_partitions->area_3);
+        }
+        return was_released;
+    }
+
+private:
+    inline void free_from_section(void *p, size_t area_size)
+    {
+        Section *section = (Section *)((uintptr_t)p & ~(area_size - 1));
+        // if it is page section, free
+        if (_thread_idx == section->thread_id) {
+            if (section->getContainerType() == POOL) {
+                section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+                Pool *pool = (Pool *)section->findCollection(p);
                 pool->freeBlock(p);
                 set_previous_pools(pool);
                 if (!pool->isConnected()) {
+                    // reconnect
                     auto queue = &pools[sizeToPool(pool->block_size)];
                     if (queue->head != pool && queue->tail != pool) {
                         list_enqueue(*queue, pool);
@@ -1605,70 +1768,51 @@ public:
                         }
                     }
                 }
-            }
-        } else if ((uintptr_t)p < partitions_offsets[3]) {
-            Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_LARGE - 1));
-            // if it is page section, free
-            if (_thread_idx == section->thread_id) {
-                if (section->getContainerType() == PAGE) {
-                    auto page = (Page *)section->findCollection(p);
-                    page->free(p, true);
-                    // if the free pools list is empty.
-                    if (!page->isConnected()) {
-                        // reconnect
-                        if (pages.head != page && pages.tail != page) {
-                            list_enqueue(pages, page);
-                        }
-                        if (!section->isConnected()) {
-                            if (sections.head != section && sections.tail != section) {
-                                list_enqueue(sections, section);
-                            }
-                        }
+            } else {
+                Page *page = (Page *)section->findCollection(p);
+                uint32_t pageIdx = section->getContainerExponent() - 3;
+                page->free(p, pageIdx > 0);
+                // if the free pools list is empty.
+                if (!page->isConnected()) {
+                    // reconnect
+                    auto queue = &pages[pageIdx];
+                    if (queue->head != page && queue->tail != page) {
+                        list_enqueue(*queue, page);
                     }
-                } else {
-                    auto pool = (Pool *)section->findCollection(p);
-                    pool->freeBlock(p);
-                    if (!pool->isConnected()) {
-                        // reconnect
-                        auto queue = &pools[sizeToPool(pool->block_size)];
-                        if (queue->head != pool && queue->tail != pool) {
-                            list_enqueue(*queue, pool);
-                        }
-                        if (!section->isConnected()) {
-                            if (sections.head != section && sections.tail != section) {
-                                list_enqueue(sections, section);
-                            }
-                        }
-                    }
-                }
-            }
-        } else if ((uintptr_t)p < partitions_offsets[4]) {
-            Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_HUGE - 1));
-            // if it is page section, free
-            if (_thread_idx == section->thread_id) {
-                if (section->getContainerType() == PAGE) {
-                    auto page = (Page *)section->findCollection(p);
-                    page->free(p, true);
-                    // if the pool is disconnected from the queue
-                    if (!page->isConnected()) {
-                        // reconnect
-                        list_enqueue(pages, page);
-                        if (!section->isConnected()) {
+                    if (!section->isConnected()) {
+                        if (sections.head != section && sections.tail != section) {
                             list_enqueue(sections, section);
                         }
                     }
-                } else // SLAB
-                {
-                    Area *area = (Area *)section;
-                    free_area(area);
                 }
             }
-        } else {
-            // do nothing
         }
     }
 
-private:
+    inline void free_huge(void *p)
+    {
+        Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_HUGE - 1));
+        // if it is page section, free
+        if (_thread_idx == section->thread_id) {
+            if (section->getContainerType() == PAGE) {
+                auto page = (Page *)section->findCollection(p);
+                page->free(p, true);
+                auto queue = &pages[section->getContainerExponent() - 3];
+                // if the pool is disconnected from the queue
+                if (!page->isConnected()) {
+                    // reconnect
+                    list_enqueue(*queue, page);
+                    if (!section->isConnected()) {
+                        list_enqueue(sections, section);
+                    }
+                }
+            } else // SLAB
+            {
+                Area *area = (Area *)section;
+                free_area(area);
+            }
+        }
+    }
     inline int8_t addrToPartition(void *addr) const
     {
         return 22 - __builtin_clzll((uintptr_t)addr);
@@ -1686,28 +1830,36 @@ private:
         }
     }
 
-    bool collect()
+    inline uint8_t sizeToPage(size_t as) const
     {
-        //
-        // for each area this thread has allocated.
-        //
-        return false;
+        if (as <= MEDIUM_OBJECT_SIZE) {
+            return 0; // 32mb pages
+        } else if (as <= AREA_SIZE_SMALL) {
+            return 1; // 128Mb pages
+        } else {
+            return 2; // 256Mb pages
+        }
     }
 
-    bool try_free_area(void *p)
+    bool release_areas_from_queue(Area::List *queue)
     {
-        Area *area = Area::fromAddr((uintptr_t)p);
+        bool was_released = false;
+        Area *start = queue->head;
+        // find free section.
+        while (start != NULL) {
+            auto next = start->getNext();
+            was_released |= try_release_area(start);
+            start = next;
+        }
+        return was_released;
+    }
+
+    bool try_release_area(Area *area)
+    {
         if (area->isFree()) {
 
             // all sections should be free and very likely in the free sections list.
             int num_sections = area->get_section_count();
-            /*
-            auto queue = get_area_queue(area);
-            if(queue->head == queue->tail)
-            {
-                return false;
-            }
-             */
             for (int i = 0; i < num_sections; i++) {
                 Section *section = (Section *)((uint8_t *)area + SECTION_SIZE * i);
                 int num_collections = section->get_collection_count();
@@ -1722,7 +1874,8 @@ private:
                 } else if (ctype == PAGE) {
                     for (int j = 0; j < num_collections; j++) {
                         auto page = (Page *)section->getCollection(j, exp);
-                        list_remove(pages, page);
+                        auto queue = &pages[section->getContainerExponent() - 3];
+                        list_remove(*queue, page);
                     }
                 }
                 list_remove(sections, section);
@@ -1737,54 +1890,53 @@ private:
     {
         auto exponent = getContainerExponent(s, t);
         auto free_section = sections.head;
-        if (free_section) {
-            // find free section.
-            while (free_section != NULL) {
-                auto next = free_section->next;
-                if (free_section->getContainerExponent() == exponent) {
-                    if (!free_section->isFull()) {
-                        break;
-                    } else {
-                        list_remove(sections, free_section);
-                    }
+
+        // find free section.
+        while (free_section != NULL) {
+            auto next = free_section->next;
+            if (free_section->getContainerExponent() == exponent) {
+                if (!free_section->isFull()) {
+                    break;
+                } else {
+                    list_remove(sections, free_section);
                 }
-                free_section = next;
             }
+            free_section = next;
         }
 
         if (free_section == NULL) {
-            auto new_section = alloc_section(s);
+            auto new_section = alloc_section(s, t);
             if (new_section == NULL) {
                 return NULL;
             }
             new_section->thread_id = _thread_idx;
             new_section->setContainerExponent(exponent);
             new_section->setContainerType(t);
+
             new_section->next = NULL;
             new_section->prev = NULL;
             list_enqueue(sections, new_section);
+
             free_section = new_section;
         }
         return free_section;
     }
 
-    Page *get_free_page(size_t s)
+    void *alloc_from_page(size_t s)
     {
         Page *start = NULL;
-        if (pages.head != NULL) {
-            start = pages.head;
+        auto queue = &pages[sizeToPage(s)];
+        if (queue->head != NULL) {
+            start = queue->head;
             while (start != NULL) {
                 auto next = start->next;
                 if (start->has_room(s)) {
-                    return start;
+                    return start->getBlock((uint32_t)s);
                 } else {
                     // disconnect full pages
-                    list_remove(pages, start);
+                    list_remove(*queue, start);
                 }
                 start = next;
-            }
-            if (start != NULL) {
-                return start;
             }
         }
 
@@ -1793,23 +1945,24 @@ private:
             return NULL;
         }
 
-        unsigned int coll_idx = sfree_section->mask.firstFree_lo();
-        sfree_section->mask.reserve_lo(coll_idx);
+        sfree_section->mask.reserveAll();
         auto exp = sfree_section->getContainerExponent();
-        start = (Page *)sfree_section->getCollection(coll_idx, exp);
-        start->init(coll_idx, exp);
-        if (s >= SECTION_MAX_MEMORY) {
-            sfree_section->mask.reserveAll();
-        }
+        start = (Page *)sfree_section->getCollection(0, exp);
+        start->init(0, exp);
+
         page_count++;
-        list_enqueue(pages, start);
-        return start;
+        list_enqueue(*queue, start);
+        return start->getBlock((uint32_t)s);
+        ;
     }
 
-    void *get_free_huge_block(size_t s)
+    void *alloc_slab(size_t s)
     {
         auto totalSize = sizeof(Area) + s;
-        auto section = (Section *)get_area(totalSize);
+        auto section = (Section *)get_area(totalSize, ContainerType::PAGE);
+        if (section == NULL) {
+            return NULL;
+        }
         section->mask.reserveAll();
         section->setContainerType(ContainerType::SLAB);
         return &section->collections[0];
@@ -1858,6 +2011,10 @@ private:
 
     void init_cache()
     {
+        pages[0] = { NULL, NULL };
+        pages[1] = { NULL, NULL };
+        pages[2] = { NULL, NULL };
+
         //
         for (int i = 0; i < 8; i++) {
             pools[i] = { NULL, NULL, i * 8UL };
