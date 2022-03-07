@@ -1,4 +1,4 @@
-
+/*
 // [ ] thread_free
 // [ ] thread_setup
 // [ ] stats.
@@ -74,7 +74,7 @@ void test()
 {
     test_a(NULL, my_type);
 }
-
+*/
 /*
 
  Another random thought.
@@ -130,14 +130,17 @@ void test()
 #ifndef Malloc_h
 #define Malloc_h
 
+#if defined(_MSC_VER)
+#define WINDOWS 
+#endif
+
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #ifdef WINDOWS
+#include <windows.h>
 #include <intrin.h>
 #include <memoryapi.h>
 uint64_t rdtsc()
@@ -146,6 +149,7 @@ uint64_t rdtsc()
 }
 #else
 #include <sys/mman.h>
+#include <unistd.h>
 #include <x86intrin.h>
 uint64_t rdtsc()
 {
@@ -317,7 +321,7 @@ static inline size_t get_os_page_size()
 #ifdef WINDOWS
     SYSTEM_INFO si;
     GetSystemInfo(&si);
-    return si.dwPageSize);
+    return si.dwPageSize;
 #else
     return sysconf(_SC_PAGESIZE);
 #endif
@@ -1233,7 +1237,7 @@ static inline bool decommit_memory(void *base, size_t size)
 static inline bool free_memory(void *ptr, size_t size)
 {
 #ifdef WINDOWS
-    return VirtualFree(ptr, 0, MEM_RELEASE) == 0);
+    return VirtualFree(ptr, 0, MEM_RELEASE) == 0;
 #else
     return (munmap(ptr, size) == -1);
 #endif
@@ -1264,10 +1268,10 @@ static inline bool reset_memory(void *base, size_t size)
 #ifdef WINDOWS
     int flags = MEM_RESET;
     void *p = VirtualAlloc(base, size, flags, PAGE_READWRITE);
-    if (p == start && start != NULL) {
-        VirtualUnlock(start, csize); // VirtualUnlock after MEM_RESET removes the memory from the working set
+    if (p == base && base != NULL) {
+        VirtualUnlock(base, size); // VirtualUnlock after MEM_RESET removes the memory from the working set
     }
-    if (p != start)
+    if (p != base)
         return false;
 #else
     int err;
