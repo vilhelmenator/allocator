@@ -41,11 +41,6 @@
         : construct( ptr, schema ) ->
  */
 
-// [ ] test how things bleed into other partitions when one partition is filled.
-// [ ] test when the allocator runs out of memory.
-// [ ] test to see correct sizes being routed to correct pools and pages.
-// [ ] measure the residiual leftovers of memory.
-// [ ] how much of memory would be utilized by metadata.
 //
 //
 // 49152*8 + 65536*8 = 344064 + 458752 = 802816 max 12.8gigs or 3.8gigs of pages.
@@ -69,9 +64,9 @@
 //
 
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
-const uint64_t NUMBER_OF_ITEMS = 420000L;
+const uint64_t NUMBER_OF_ITEMS = 400L;
 const uint64_t NUMBER_OF_ITERATIONS = 100UL;
-const uint64_t OBJECT_SIZE = (1 << 3UL);
+const uint64_t OBJECT_SIZE = (1 << 24UL);
 
 const uint64_t sz_kb = 1024;
 const uint64_t sz_mb = sz_kb * sz_kb;
@@ -182,9 +177,6 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        if (342272 == i) {
-            auto bbb = 0;
-        }
         void *all = alloc.malloc(allocation_size);
         variables[i] = (char *)all;
         auto end = align_up((uintptr_t)variables[i], SECTION_SIZE);
@@ -451,6 +443,121 @@ bool test_huge_alloc()
     }
     return true;
 }
+
+bool fillAPool()
+{
+    const int num_allocs = 16378;
+    uint64_t *allocs[num_allocs];
+    for (int i = 0; i < num_allocs; i++) {
+        allocs[i] = (uint64_t *)alloc.malloc(8);
+        *allocs[i] = (uint64_t)allocs[i];
+    }
+
+    for (int i = 0; i < num_allocs; i++) {
+        if (*allocs[i] != (uint64_t)allocs[i]) {
+            return false;
+        }
+        alloc.free(allocs[i]);
+    }
+    // allocate 8 byte parts to fill 128bytes.
+    // what is the addres of the last allocation in the pool.
+    // is there room for one more?
+    return true;
+}
+
+bool fillASection()
+{
+    const int num_pools = 32;
+    const int num_allocs = 16378;
+    uint64_t *allocs[num_allocs * num_pools];
+    for (int s = 0; s < num_pools; s++) {
+        for (int i = 0; i < num_allocs; i++) {
+            allocs[i + (num_allocs * s)] = (uint64_t *)alloc.malloc(8);
+            *allocs[i + (num_allocs * s)] = (uint64_t)allocs[i + (num_allocs * s)];
+        }
+    }
+
+    for (int s = 0; s < num_pools; s++) {
+        for (int i = 0; i < num_allocs; i++) {
+            if (*allocs[i + (num_allocs * s)] != (uint64_t)allocs[i + (num_allocs * s)]) {
+                return false;
+            }
+            alloc.free(allocs[i + (num_allocs * s)]);
+        }
+    }
+
+    // fill all 8 pools of one section.
+    return true;
+}
+
+bool fillAnArea()
+{
+    const int num_sections = 8;
+    const int num_pools = 32;
+    const int num_allocs = 16378;
+    const int total_allocs = num_sections * num_pools * num_allocs;
+    uint64_t **allocs = (uint64_t **)malloc(total_allocs * sizeof(uint64_t **));
+
+    for (int s = 0; s < num_pools * num_sections; s++) {
+        for (int i = 0; i < num_allocs; i++) {
+            auto index = i + (num_allocs * s);
+            allocs[index] = (uint64_t *)alloc.malloc(8);
+            *allocs[index] = (uint64_t)allocs[index];
+        }
+    }
+
+    for (int s = 0; s < num_pools * num_sections; s++) {
+        for (int i = 0; i < num_allocs; i++) {
+            auto index = i + (num_allocs * s);
+            if (*allocs[index] != (uint64_t)allocs[index]) {
+                return false;
+            }
+            alloc.free(allocs[index]);
+        }
+    }
+
+    free(allocs);
+
+    // fill all 8 pools of one section.
+    return true;
+}
+
+bool fillAPage()
+{
+    const int num_allocs = 2097143;
+    uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
+
+    for (int i = 0; i < num_allocs; i++) {
+        auto addr = (uint64_t *)alloc.malloc_page(8);
+        allocs[i] = addr;
+        *allocs[i] = (uint64_t)allocs[i];
+    }
+    uintptr_t lastalloc = (uintptr_t)allocs[num_allocs - 1];
+    uintptr_t end = align_up(lastalloc, AREA_SIZE_SMALL);
+
+    uintptr_t diff = end - lastalloc;
+
+    for (int i = 0; i < num_allocs; i++) {
+
+        if (*allocs[i] != (uint64_t)allocs[i]) {
+            return false;
+        }
+        alloc.free(allocs[i]);
+    }
+
+    free(allocs);
+
+    // fill all 8 pools of one section.
+    return true;
+}
+//
+// Get this done, and the next bit would be thread_free
+//
+// fill a pool      128k
+// fill a section   4mb
+// fill a page      32mb
+//
+
 /*
 ALMOST THERE. Lets get this done, today!!!
  // section.
@@ -506,13 +613,31 @@ int main()
     {
         printf("FFFF");
     }
-     */
-    if (!test_huge_alloc()) {
+
+    if(!test_huge_alloc())
+    {
         printf("FFFF");
     }
-    //[ ] test allocating too much memory.
-    //    [ ] too big allocations.
 
+    if(!fillAPool())
+    {
+        printf("FFFF");
+    }
+    if(!fillASection())
+    {
+        printf("FFFF");
+    }
+
+    if(!fillAnArea())
+    {
+        printf("FFFF");
+    }
+
+    if(!fillAPage())
+    {
+        printf("FFFF");
+    }
+    */
     /*
     //std::cout << "total mem: " << total_mem << std::endl;
     char*t = (char*)alloc.malloc(OBJECT_SIZE);
@@ -549,36 +674,38 @@ int main()
     free(t);
     b = rdtsc() - a;
     std::cout << "free Cycles : " << b << std::endl << std::endl;
-
-    char* variables[NUMBER_OF_ITEMS];
+    */
+    if (!fillAPage()) {
+        printf("FFFF");
+    }
+    char *variables[NUMBER_OF_ITEMS];
     auto t1 = std::chrono::high_resolution_clock::now();
 
-    for(auto j=0;j<NUMBER_OF_ITERATIONS; j++)
-    {
-        for(auto i=0; i<NUMBER_OF_ITEMS; i++)
-            variables[i] = (char*)alloc.malloc(OBJECT_SIZE);
-        for(auto i=0; i<NUMBER_OF_ITEMS; i++)
-            alloc.free( variables[i] );
-
+    for (auto j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+        for (auto i = 0; i < NUMBER_OF_ITEMS; i++)
+            variables[i] = (char *)alloc.malloc(OBJECT_SIZE);
+        for (auto i = 0; i < NUMBER_OF_ITEMS; i++)
+            alloc.free(variables[i]);
     }
-    alloc.release_local_areas();
+
     auto t2 = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count();
-    std::cout << "Time spent in alloc: " << duration << " milliseconds" << std::endl << std::endl;
-
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+    std::cout << "Time spent in alloc: " << duration << " milliseconds" << std::endl
+              << std::endl;
+    alloc.release_local_areas();
     t1 = std::chrono::high_resolution_clock::now();
-    for(int j=0;j<NUMBER_OF_ITERATIONS; j++)
-    {
-       for(int i=0; i<NUMBER_OF_ITEMS; i++)
-           variables[i] = (char*)mi_malloc(OBJECT_SIZE);
+    for (int j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+        for (int i = 0; i < NUMBER_OF_ITEMS; i++)
+            variables[i] = (char *)mi_malloc(OBJECT_SIZE);
 
-        for(int i=0; i<NUMBER_OF_ITEMS; i++)
-            mi_free( variables[i] );
+        for (int i = 0; i < NUMBER_OF_ITEMS; i++)
+            mi_free(variables[i]);
     }
     t2 = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1 ).count();
-    std::cout << "Time spent in mi_malloc: " << duration << " milliseconds" << std::endl << std::endl;
-
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+    std::cout << "Time spent in mi_malloc: " << duration << " milliseconds" << std::endl
+              << std::endl;
+    /*
     t1 = std::chrono::high_resolution_clock::now();
     for(auto j=0;j<NUMBER_OF_ITERATIONS; j++)
     {
