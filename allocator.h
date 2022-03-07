@@ -262,6 +262,9 @@ typedef union bitmask
     uint64_t whole;
     uint32_t _w32[2];
 
+    inline bool isSet_hi(uint8_t bit) { return _w32[1] & ((uint32_t)1 << bit); }
+    inline bool isSet_lo(uint8_t bit) { return _w32[0] & ((uint32_t)1 << bit); }
+
     inline bool isFull_hi() { return _w32[1] == 0xFFFFFFFF; }
     inline bool isFull_lo() { return _w32[0] == 0xFFFFFFFF; }
     inline bool isEmpty_hi() { return _w32[1] == 0; }
@@ -374,17 +377,6 @@ struct spinlock
     void unlock() noexcept { lock_.store(false, std::memory_order_release); }
 };
 
-// if we allocate sections on 4mb alignment
-struct heap_node
-{
-    size_t *_prev;
-    size_t *_next;
-    inline void setNext(heap_node *p) { _next = (size_t *)p; }
-    inline void setPrev(heap_node *p) { _prev = (size_t *)p; }
-    inline heap_node *getNext() { return (heap_node *)_next; }
-    inline heap_node *getPrev() { return (heap_node *)_prev; }
-};
-
 struct heap_block
 {
     uint8_t *data;
@@ -425,6 +417,62 @@ struct heap_block
     {
         uint32_t size = *(uint32_t *)((uint8_t *)&data - DSIZE) & ~0x7;
         return (heap_block *)((uint8_t *)&data - (size));
+    }
+};
+/*
+struct heap_node
+{
+    int32_t prev_offset;
+    int32_t next_offset;
+    inline void setNext(heap_node *p) {
+        if(p == NULL)
+        {
+            next_offset = 0;
+        }
+        else
+        {
+            next_offset = (int32_t)((uint8_t*)p - (uint8_t*)this);
+        }
+    }
+    inline void setPrev(heap_node *p) {
+        if(p == NULL)
+        {
+            prev_offset = 0;
+        }
+        else
+        {
+            prev_offset = (int32_t)((uint8_t*)this - (uint8_t*)p);
+        }
+    }
+    inline heap_node *getNext() {
+        if(next_offset == 0) return NULL;
+        return (heap_node*)((uint8_t*)this + next_offset);
+    }
+    inline heap_node *getPrev() {
+        if(prev_offset == 0) return NULL;
+        return (heap_node*)((uint8_t*)this - prev_offset);
+    }
+};
+*/
+struct heap_node
+{
+    size_t *prev;
+    size_t *next;
+    inline void setNext(heap_node *p)
+    {
+        next = (size_t *)p;
+    }
+    inline void setPrev(heap_node *p)
+    {
+        prev = (size_t *)p;
+    }
+    inline heap_node *getNext()
+    {
+        return (heap_node *)next;
+    }
+    inline heap_node *getPrev()
+    {
+        return (heap_node *)prev;
     }
 };
 
@@ -557,6 +605,7 @@ static inline void list_insert_at(L &list, T *t, T *a)
     }
     t->setNext(a);
 }
+
 struct Area
 {
     // The area is overlapping with the first section. And they share some
@@ -577,7 +626,8 @@ struct Area
         Area *previous_area;
     };
 
-    bitmask mask;
+    bitmask constr_mask; // containers that have been constructed.
+    bitmask active_mask; // containers that can be destructed.
     size_t thread_id;
 
 private:
@@ -590,13 +640,19 @@ private:
     int32_t release_state;
     int32_t misc; // index in parent area.
 public:
-    inline bool isEmpty() { return mask.isEmpty_hi(); }
+    inline bool isEmpty() { return active_mask.isEmpty_hi(); }
     inline bool isFree() { return isEmpty(); }
+    inline bool isClaimed(uint8_t idx) { return constr_mask.isSet_hi(idx); }
+
     inline void FreeIdx(uint8_t i)
     {
-        mask.freeIdx_hi(i);
+        active_mask.freeIdx_hi(i);
     }
-    inline void ReserveIdx(uint8_t i) { mask.reserve_hi(i); }
+    inline void freeAll()
+    {
+        active_mask.freeAll();
+    }
+    inline void ReserveIdx(uint8_t i) { active_mask.reserve_hi(i); }
 
     int8_t get_section_count()
     {
@@ -610,24 +666,30 @@ public:
         }
     }
 
-    int8_t claimSection()
+    inline int8_t claimSection()
     {
-        return mask.allocate_bit_hi();
+        return constr_mask.allocate_bit_hi();
     }
-    void claimAll()
+
+    inline void claimAll()
     {
-        mask.reserveAll();
+        constr_mask.reserveAll();
+    }
+
+    inline void claimIdx(uint8_t idx)
+    {
+        constr_mask.reserve_hi(idx);
     }
 
     bool isFull()
     {
-        if (mask.isFull_hi()) {
+        if (active_mask.isFull_hi()) {
             return true;
         }
         if (getSize() == AREA_SIZE_SMALL) {
-            return ((mask.whole >> 32) & small_area_mask) == small_area_mask;
+            return ((active_mask.whole >> 32) & small_area_mask) == small_area_mask;
         } else {
-            return ((mask.whole >> 32) & large_area_mask) == large_area_mask;
+            return ((active_mask.whole >> 32) & large_area_mask) == large_area_mask;
         }
     }
     inline Area *getPrev() const
@@ -672,8 +734,8 @@ struct Section
         Section *tail;
     };
     // 24 bytes as the section header
-    bitmask mask; // 32 pages bit per page.   // lower 32 bits per section/ high
-                  // bits are for area
+    bitmask constr_mask; // 32 pages bit per page.   // lower 32 bits per section/ high
+    bitmask active_mask;
     size_t thread_id;
 
 private:
@@ -695,6 +757,9 @@ public:
 
     uint8_t get_collection_count()
     {
+        if (getContainerType() != POOL) {
+            return 1;
+        }
         switch (getContainerExponent()) {
         case Exponent::EXP_PUNY: {
             return 32;
@@ -710,8 +775,8 @@ public:
 
     inline void FreeIdx(uint8_t i)
     {
-        mask.freeIdx_lo(i);
-        auto section_empty = mask.isEmpty_lo();
+        active_mask.freeIdx_lo(i);
+        auto section_empty = active_mask.isEmpty_lo();
         if (section_empty) {
             // what partition are we in.
             auto area = Area::fromAddr((uintptr_t)this);
@@ -721,18 +786,45 @@ public:
                 break;
             }
             default: // SLAB
-                area->mask.freeAll();
+                area->freeAll();
                 break;
             }
         }
     }
-
+    inline bool isClaimed(uint8_t idx) { return constr_mask.isSet_lo(idx); }
     inline void ReserveIdx(uint8_t i)
     {
-        mask.reserve_lo(i);
+        active_mask.reserve_lo(i);
         auto area = Area::fromAddr((uintptr_t)this);
         area->ReserveIdx(idx);
     }
+
+    inline void claimIdx(uint8_t i)
+    {
+        constr_mask.reserve_lo(i);
+        auto area = Area::fromAddr((uintptr_t)this);
+        area->claimIdx(idx);
+    }
+    inline void claimAll()
+    {
+        constr_mask.reserveAll();
+    }
+
+    inline uint8_t claimNext()
+    {
+        return constr_mask.allocate_bit_lo();
+    }
+
+    inline void reserveAll()
+    {
+        active_mask.reserveAll();
+    }
+
+    inline void freeAll()
+    {
+        active_mask.freeAll();
+    }
+
     inline Section *getPrev() const { return prev; }
     inline Section *getNext() const { return next; }
     inline void setPrev(Section *p) { prev = p; }
@@ -761,13 +853,13 @@ public:
     {
         switch (getContainerExponent()) {
         case Exponent::EXP_PUNY: {
-            return (mask.whole & 0xffffffff) == 0xffffffff;
+            return (active_mask.whole & 0xffffffff) == 0xffffffff;
         }
         case Exponent::EXP_SMALL: {
-            return (mask.whole & 0xff) == 0xff;
+            return (active_mask.whole & 0xff) == 0xff;
         }
         default: {
-            return (mask.whole & 0x1) == 0x1;
+            return (active_mask.whole & 0x1) == 0x1;
         }
         }
     }
@@ -846,6 +938,7 @@ struct Pool
         num_used = 0;
         next = NULL;
         prev = NULL;
+        free = NULL;
         extendPool();
     }
 
@@ -945,6 +1038,11 @@ struct Page
 
     inline void *getBlock(uint32_t s)
     {
+        if (s <= DSIZE * 2) {
+            s = DSIZE * 3;
+        } else {
+            s = DSIZE * ((s + DSIZE + DSIZE - 1) / DSIZE);
+        }
         void *ptr = NULL;
         if ((ptr = (char *)find_fit(s)) != NULL) {
             place(ptr, s);
@@ -952,7 +1050,7 @@ struct Page
         used_memory += s;
         if (num_allocations == 0) {
             Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->mask.reserveAll();
+            section->reserveAll();
         }
         num_allocations++;
         return ptr;
@@ -977,7 +1075,7 @@ struct Page
         num_allocations--;
         if (num_allocations == 0) {
             Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->mask.freeAll();
+            section->freeAll();
             reset();
         }
     }
@@ -1053,7 +1151,6 @@ struct Page
     {
         heap_block *hb = (heap_block *)bp;
         auto csize = hb->get_header() & ~0x7;
-        list_remove(free_nodes, (heap_node *)bp);
         if ((csize - asize) >= 16) {
             hb->set_header(asize, 1);
             hb->set_footer(asize, 1);
@@ -1275,7 +1372,8 @@ struct Partition
         if (new_area == NULL) {
             return NULL;
         }
-        new_area->mask = { 0 };
+        new_area->active_mask = { 0 };
+        new_area->constr_mask = { 0 };
         new_area->thread_id = area_queue->thread_id;
         new_area->setNext(NULL);
         new_area->setPrev(NULL);
@@ -1574,8 +1672,8 @@ private:
         if (size <= small_area_limit) {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_32);
             if (curr_area == NULL) {
-                bool was_released = release_areas_from_queue(&thread_partitions->area_01);
-                was_released |= release_areas_from_queue(&thread_partitions->area_2);
+                bool was_released = release_single_area_from_queue(&thread_partitions->area_01);
+                was_released |= release_single_area_from_queue(&thread_partitions->area_2);
                 if (was_released) {
                     // try again.
                     curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_32);
@@ -1584,8 +1682,8 @@ private:
         } else if (size <= AREA_SIZE_SMALL) {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_128);
             if (curr_area == NULL) {
-                bool was_released = release_areas_from_queue(&thread_partitions->area_2);
-                was_released |= release_areas_from_queue(&thread_partitions->area_3);
+                bool was_released = release_single_area_from_queue(&thread_partitions->area_2);
+                was_released |= release_single_area_from_queue(&thread_partitions->area_3);
                 if (was_released) {
                     // try again.
                     curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_128);
@@ -1594,7 +1692,7 @@ private:
         } else if (size <= AREA_SIZE_LARGE) {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_256);
             if (curr_area == NULL) {
-                if (release_areas_from_queue(&thread_partitions->area_3)) {
+                if (release_single_area_from_queue(&thread_partitions->area_3)) {
                     // try again.
                     curr_area = thread_partitions->get_free_area(size, AreaType::AT_FIXED_256);
                 }
@@ -1602,7 +1700,7 @@ private:
         } else {
             curr_area = thread_partitions->get_free_area(size, AreaType::AT_VARIABLE);
             if (curr_area == NULL) {
-                if (release_areas_from_queue(&thread_partitions->area_3)) {
+                if (release_single_area_from_queue(&thread_partitions->area_3)) {
                     // try again.
                     curr_area = thread_partitions->get_free_area(size, AreaType::AT_VARIABLE);
                 }
@@ -1861,6 +1959,24 @@ private:
         return was_released;
     }
 
+    bool release_single_area_from_queue(Area::List *queue)
+    {
+        bool was_released = false;
+        Area *start = queue->head;
+        // find free section.
+        // detach all pools/pages/sections.
+        while (start != NULL) {
+            auto next = start->getNext();
+            was_released |= try_release_containers(start);
+            if (was_released) {
+                was_released |= try_release_area(start);
+                break;
+            }
+            start = next;
+        }
+        return was_released;
+    }
+
     bool try_release_containers(Area *area)
     {
         if (area->isFree()) {
@@ -1869,17 +1985,26 @@ private:
             int num_sections = area->get_section_count();
             for (int i = 0; i < num_sections; i++) {
                 Section *section = (Section *)((uint8_t *)area + SECTION_SIZE * i);
+                if (!area->isClaimed(i)) {
+                    continue;
+                }
                 int num_collections = section->get_collection_count();
                 Exponent exp = section->getContainerExponent();
                 ContainerType ctype = section->getContainerType();
                 if (ctype == POOL) {
                     for (int j = 0; j < num_collections; j++) {
+                        if (!section->isClaimed(j)) {
+                            continue;
+                        }
                         auto pool = (Pool *)section->getCollection(j, exp);
                         auto queue = &pools[sizeToPool(pool->block_size)];
                         list_remove(*queue, pool);
                     }
                 } else if (ctype == PAGE) {
                     for (int j = 0; j < num_collections; j++) {
+                        if (!section->isClaimed(j)) {
+                            continue;
+                        }
                         auto page = (Page *)section->getCollection(j, exp);
                         auto queue = &pages[section->getContainerExponent() - 3];
                         list_remove(*queue, page);
@@ -1959,7 +2084,7 @@ private:
             return NULL;
         }
 
-        sfree_section->mask.reserveAll();
+        sfree_section->claimAll();
         auto exp = sfree_section->getContainerExponent();
         start = (Page *)sfree_section->getCollection(0, exp);
         start->init(0, exp);
@@ -1977,7 +2102,7 @@ private:
         if (section == NULL) {
             return NULL;
         }
-        section->mask.reserveAll();
+        section->claimAll();
         section->setContainerType(ContainerType::SLAB);
         return &section->collections[0];
     }
@@ -1990,7 +2115,7 @@ private:
         }
         // Allocate pool
 
-        unsigned int coll_idx = sfree_section->mask.allocate_bit_lo();
+        unsigned int coll_idx = sfree_section->claimNext();
         auto exp = sfree_section->getContainerExponent();
         Pool *p = (Pool *)sfree_section->getCollection(coll_idx, exp);
         p->init(coll_idx, (uint32_t)s, exp);
