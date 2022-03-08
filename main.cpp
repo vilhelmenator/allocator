@@ -683,7 +683,6 @@ int main()
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
     std::cout << "Time spent in alloc: " << duration << " milliseconds" << std::endl
               << std::endl;
-    /*
     alloc.release_local_areas();
     t1 = std::chrono::high_resolution_clock::now();
     for (int j = 0; j < NUMBER_OF_ITERATIONS; j++) {
@@ -697,7 +696,7 @@ int main()
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
     std::cout << "Time spent in mi_malloc: " << duration << " milliseconds" << std::endl
               << std::endl;
-              */
+
     /*
     t1 = std::chrono::high_resolution_clock::now();
     for(auto j=0;j<NUMBER_OF_ITERATIONS; j++)
