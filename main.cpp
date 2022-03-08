@@ -305,6 +305,9 @@ bool test_pages(size_t page_size, size_t allocation_size)
             return false;
         }
         for (uint32_t i = 0; i < num_small_allocations; i++) {
+            if (i == 192) {
+                auto bb = 0;
+            }
             alloc.free(variables2[i]);
         }
         free(variables2);
@@ -524,7 +527,9 @@ bool fillAnArea()
 
 bool fillAPage()
 {
-    const int num_allocs = 2097143;
+    // const int num_allocs = 2097142;
+    // const int num_allocs = 1398094;
+    const int num_allocs = 1398094;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
 
     for (int i = 0; i < num_allocs; i++) {
@@ -573,71 +578,59 @@ ALMOST THERE. Lets get this done, today!!!
  [ ] add thread free for pages.
 
 */
+void run_tests()
+{
+    if (!test_pools_small()) {
+        printf("FFFF");
+    }
+    if (!test_medium_pools()) {
+        printf("FFFF");
+    }
+    if (!test_large_pools()) {
+        printf("FFFF");
+    }
 
+    if (!test_small_pages()) {
+        printf("FFFF");
+    }
+    if (!test_medium_pages()) {
+        printf("FFFF");
+    }
+    if (!test_large_pages()) {
+        printf("FFFF");
+    }
+
+    if (!test_slabs()) {
+        printf("FFFF");
+    }
+    if (!test_areas()) {
+        printf("FFFF");
+    }
+
+    if (!test_huge_alloc()) {
+        printf("FFFF");
+    }
+
+    if (!fillAPool()) {
+        printf("FFFF");
+    }
+    if (!fillASection()) {
+        printf("FFFF");
+    }
+
+    if (!fillAnArea()) {
+        printf("FFFF");
+    }
+
+    if (!fillAPage()) {
+        printf("FFFF");
+    }
+}
 int main()
 {
 
-    /*
-    if(!test_pools_small())
-    {
-        printf("FFFF");
-    }
-    if(!test_medium_pools())
-    {
-        printf("FFFF");
-    }
-    if(!test_large_pools())
-    {
-        printf("FFFF");
-    }
+    run_tests();
 
-
-    if(!test_small_pages())
-    {
-        printf("FFFF");
-    }
-    if(!test_medium_pages())
-    {
-        printf("FFFF");
-    }
-    if(!test_large_pages())
-    {
-        printf("FFFF");
-    }
-
-    if(!test_slabs())
-    {
-        printf("FFFF");
-    }
-    if(!test_areas())
-    {
-        printf("FFFF");
-    }
-
-    if(!test_huge_alloc())
-    {
-        printf("FFFF");
-    }
-
-    if(!fillAPool())
-    {
-        printf("FFFF");
-    }
-    if(!fillASection())
-    {
-        printf("FFFF");
-    }
-
-    if(!fillAnArea())
-    {
-        printf("FFFF");
-    }
-
-    if(!fillAPage())
-    {
-        printf("FFFF");
-    }
-    */
     /*
     //std::cout << "total mem: " << total_mem << std::endl;
     char*t = (char*)alloc.malloc(OBJECT_SIZE);
@@ -675,12 +668,10 @@ int main()
     b = rdtsc() - a;
     std::cout << "free Cycles : " << b << std::endl << std::endl;
     */
-    if (!fillAPage()) {
-        printf("FFFF");
-    }
+
     char *variables[NUMBER_OF_ITEMS];
     auto t1 = std::chrono::high_resolution_clock::now();
-
+    auto bb = NUMBER_OF_ITEMS * OBJECT_SIZE;
     for (auto j = 0; j < NUMBER_OF_ITERATIONS; j++) {
         for (auto i = 0; i < NUMBER_OF_ITEMS; i++)
             variables[i] = (char *)alloc.malloc(OBJECT_SIZE);
