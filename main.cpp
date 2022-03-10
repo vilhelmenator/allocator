@@ -64,9 +64,9 @@
 //
 
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
-const uint64_t NUMBER_OF_ITEMS = 400L;
+const uint64_t NUMBER_OF_ITEMS = 80000L;
 const uint64_t NUMBER_OF_ITERATIONS = 100UL;
-const uint64_t OBJECT_SIZE = (1 << 24UL);
+const uint64_t OBJECT_SIZE = (1 << 3UL);
 
 const uint64_t sz_kb = 1024;
 const uint64_t sz_mb = sz_kb * sz_kb;
@@ -103,7 +103,7 @@ const uint64_t max_large_size_page = 128 * sz_mb;
 // how many large items to exhaust all areas for large items.
 //
 thread_local size_t Allocator::_thread_id = 0;
-thread_local int32_t Allocator::_thread_idx = 0;
+thread_local uint32_t Allocator::_thread_idx = 0;
 #define min(x, y) ((x) < (y) ? (x) : (y))
 Allocator alloc;
 
@@ -629,7 +629,7 @@ void run_tests()
 int main()
 {
 
-    run_tests();
+    // run_tests();
 
     /*
     //std::cout << "total mem: " << total_mem << std::endl;
@@ -684,6 +684,7 @@ int main()
     std::cout << "Time spent in alloc: " << duration << " milliseconds" << std::endl
               << std::endl;
     alloc.release_local_areas();
+    /*
     t1 = std::chrono::high_resolution_clock::now();
     for (int j = 0; j < NUMBER_OF_ITERATIONS; j++) {
         for (int i = 0; i < NUMBER_OF_ITEMS; i++)
@@ -696,7 +697,7 @@ int main()
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
     std::cout << "Time spent in mi_malloc: " << duration << " milliseconds" << std::endl
               << std::endl;
-
+*/
     /*
     t1 = std::chrono::high_resolution_clock::now();
     for(auto j=0;j<NUMBER_OF_ITERATIONS; j++)
