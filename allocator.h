@@ -411,7 +411,7 @@ struct heap_block
     }
 };
 
-#define HEAP_NODE_OVERHEAD 16
+#define HEAP_NODE_OVERHEAD 8
 /*
 struct heap_node
 {
@@ -1047,8 +1047,8 @@ struct Page
 
     inline void *getBlock(uint32_t s)
     {
-        if (s <= DSIZE) {
-            s = DSIZE + HEAP_NODE_OVERHEAD;
+        if (s <= DSIZE * 2) {
+            s = DSIZE * 2 + HEAP_NODE_OVERHEAD;
         } else {
             s = DSIZE * ((s + HEAP_NODE_OVERHEAD + DSIZE - 1) / DSIZE);
         }
@@ -1369,16 +1369,16 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
     }
 
 #define PAGE_HEAP() zPageQueue
-#define zSectionQueue  \
-    {                  \
-        {              \
-            NULL, NULL \
-        }              \
+#define zSectionQueue \
+                      \
+    {                 \
+        NULL, NULL    \
     }
+
 #define SECTION_HEAP() zSectionQueue
 cache_align Pool::Queue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = { Z1024(POOL_HEAP) };
 cache_align Page::Queue page_queues[MAX_THREADS][3] = { Z1024(PAGE_HEAP) };
-cache_align Section::Queue section_queues[MAX_THREADS][1] = { Z1024(SECTION_HEAP) };
+cache_align Section::Queue section_queues[MAX_THREADS] = { Z1024(SECTION_HEAP) };
 static inline int8_t addrToPartition(void *addr)
 {
     return 22 - __builtin_clzll((uintptr_t)addr);
@@ -1527,6 +1527,8 @@ public:
         int32_t section_idx = claim_section(new_area);
 
         Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
+        section->constr_mask = { 0 };
+        section->active_mask = { 0 };
         section->idx = section_idx;
         section->thread_id = new_area->thread_id;
         return section;
@@ -1854,7 +1856,7 @@ public:
 #define PARTITION_5 ((uintptr_t)64 << 40)
 #define PARTITION_6 ((uintptr_t)128 << 40)
 
-#define P1(tid)                                                    \
+#define PARTITION_DEFINE(tid)                                      \
     {                                                              \
         {                                                          \
             NULL,                                                  \
@@ -1877,57 +1879,60 @@ public:
             { NULL, NULL, tid, (tid) * (SZ_GB * 16) + PARTITION_3, \
                 (tid) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16), \
                 AreaType::AT_FIXED_256, 0, NULL },                 \
-            section_queues[tid],                                   \
+            &section_queues[tid],                                  \
             page_queues[tid],                                      \
             0,                                                     \
             pool_queues[tid],                                      \
             0,                                                     \
     }
-#define P10(tid)                                                              \
-    P1(tid), P1(tid + 1), P1(tid + 2), P1(tid + 3), P1(tid + 4), P1(tid + 5), \
-        P1(tid + 6), P1(tid + 7), P1(tid + 8), P1(tid + 9)
-#define P100(tid)                                                      \
-    P10(tid * 100), P10(tid * 100 + 10), P10(tid * 100 + 20),          \
-        P10(tid * 100 + 30), P10(tid * 100 + 40), P10(tid * 100 + 50), \
-        P10(tid * 100 + 60), P10(tid * 100 + 70), P10(tid * 100 + 80), \
-        P10(tid * 100 + 90)
-#define P1000                                                               \
-    P100(0), P100(1), P100(2), P100(3), P100(4), P100(5), P100(6), P100(7), \
-        P100(8), P100(9)
-#define PART_LAYOUT                                                               \
-    {                                                                             \
-        P1000, P1(1000), P1(1001), P1(1002), P1(1003), P1(1004), P1(1005),        \
-            P1(1006), P1(1007), P1(1008), P1(1009), P1(1010), P1(1011), P1(1012), \
-            P1(1013), P1(1014), P1(1015), P1(1016), P1(1017), P1(1018), P1(1019), \
-            P1(1020), P1(1021), P1(1022), P1(1023)                                \
+
+#define TH10(tid, TH)                                                         \
+    TH(tid), TH(tid + 1), TH(tid + 2), TH(tid + 3), TH(tid + 4), TH(tid + 5), \
+        TH(tid + 6), TH(tid + 7), TH(tid + 8), TH(tid + 9)
+#define TH100(tid, x)                                                              \
+    TH10(tid * 100, x), TH10(tid * 100 + 10, x), TH10(tid * 100 + 20, x),          \
+        TH10(tid * 100 + 30, x), TH10(tid * 100 + 40, x), TH10(tid * 100 + 50, x), \
+        TH10(tid * 100 + 60, x), TH10(tid * 100 + 70, x), TH10(tid * 100 + 80, x), \
+        TH10(tid * 100 + 90, x)
+#define TH1000(x)                                                    \
+    TH100(0, x), TH100(1, x), TH100(2, x), TH100(3, x), TH100(4, x), \
+        TH100(5, x), TH100(6, x), TH100(7, x), TH100(8, x), TH100(9, x)
+#define TH1024(x)                                                          \
+    {                                                                      \
+        TH1000(x), x(1000), x(1001), x(1002), x(1003), x(1004), x(1005),   \
+            x(1006), x(1007), x(1008), x(1009), x(1010), x(1011), x(1012), \
+            x(1013), x(1014), x(1015), x(1016), x(1017), x(1018), x(1019), \
+            x(1020), x(1021), x(1022), x(1023)                             \
     }
 
-#define ZERO() 0
+#define PARTITION_LAYOUT TH1024(PARTITION_DEFINE)
 
-Area::List PartitionAllocator::area_4 = {
-    NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AreaType::AT_VARIABLE, 0, NULL
-};
+#define ZERO() 0
+#define VALUE(x) x
+#define EMPTY_OWNERS \
+    {                \
+        Z1024(ZERO)  \
+    }
+#define DEFAULT_OWNERS TH1024(VALUE)
+Area::List PartitionAllocator::area_4 = { NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AreaType::AT_VARIABLE, 0, NULL };
 Area::List PartitionAllocator::area_5 = {
     NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AreaType::AT_VARIABLE, 0, NULL
 };
 
-static cache_align PartitionAllocator memory_partitions[MAX_THREADS] = PART_LAYOUT;
-static cache_align uint32_t partition_owners[MAX_THREADS] = { Z1024(ZERO) };
+static cache_align PartitionAllocator memory_partitions[MAX_THREADS] = PARTITION_LAYOUT;
+static cache_align uint32_t partition_owners[MAX_THREADS] = DEFAULT_OWNERS;
 
-static std::atomic<int32_t> global_thread_idx = { -1 };
+static std::atomic<int32_t> global_thread_idx = { 0 };
 
 struct Allocator
 {
-private:
-    static thread_local size_t _thread_id;
-    static thread_local uint32_t _thread_idx;
-
+    uint32_t _thread_idx;
     PartitionAllocator *thread_partitions;
     Pool *previous_pool;
     uintptr_t previous_pool_start;
     uintptr_t previous_pool_end;
-    inline bool is_main() { return _thread_idx == 0; }
 
+private:
     inline void set_previous_pools(Pool *p)
     {
         previous_pool = p;
@@ -1945,16 +1950,9 @@ private:
     }
 
 public:
-    static inline size_t thread_id() { return (size_t)&_thread_id; }
+    inline bool is_main() { return _thread_idx == 0; }
 
-    Allocator()
-    {
-        auto nidx = std::atomic_fetch_add_explicit(&global_thread_idx, 1,
-            std::memory_order_acq_rel);
-        _thread_idx = nidx + 1;
-        thread_partitions = &memory_partitions[_thread_idx];
-        previous_pool = NULL;
-    }
+    inline size_t thread_id() { return (size_t)this; }
 
     void *malloc(size_t s)
     {
@@ -2205,6 +2203,13 @@ private:
         return start->getFreeBlock();
     }
 };
+
+#define ALLOC_DEFINE(tid)                        \
+    {                                            \
+        tid, &memory_partitions[tid], NULL, 0, 0 \
+    }
+#define ALLOC_LAYOUT TH1024(ALLOC_DEFINE)
+static cache_align Allocator allocator_list[MAX_THREADS] = ALLOC_LAYOUT;
 
 // MemoryBlock:
 // Buff, Vec, Str -- all have direct access to heap
