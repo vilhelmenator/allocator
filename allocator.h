@@ -2051,6 +2051,7 @@ public:
 
     bool release_local_areas()
     {
+        previous_pool = NULL;
         return thread_partitions->release_local_areas();
     }
 
