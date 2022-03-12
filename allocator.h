@@ -1052,10 +1052,8 @@ struct Page
         } else {
             s = DSIZE * ((s + HEAP_NODE_OVERHEAD + DSIZE - 1) / DSIZE);
         }
-        void *ptr = NULL;
-        if ((ptr = (char *)find_fit(s)) != NULL) {
-            place(ptr, s);
-        }
+        void *ptr = find_fit(s);
+
         used_memory += s;
         if (num_allocations == 0) {
             Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
@@ -1182,6 +1180,7 @@ struct Page
             uint32_t bsize = header & ~0x7;
             if (asize <= bsize) {
                 list_remove(free_nodes, current);
+                place(current, asize);
                 return current;
             }
             current = current->getNext();
@@ -1386,13 +1385,13 @@ static inline int8_t addrToPartition(void *addr)
 
 static inline uint8_t sizeToPool(size_t as)
 {
-    const int bmask = ~0x7f;
+    static const int bmask = ~0x7f;
     if ((bmask & as) == 0) {
         return as >> 3;
     } else {
         const int tz = __builtin_clzll(as);
         size_t numWidth = 60 - tz;
-        return 8 + ((numWidth - 3) << 3) + ((as >> (numWidth)&0x7));
+        return 8 + ((numWidth - 3) << 3) + ((as >> (numWidth & 0x7)));
     }
 }
 
@@ -1907,6 +1906,7 @@ public:
 
 #define PARTITION_LAYOUT TH1024(PARTITION_DEFINE)
 
+#define NEG() -1
 #define ZERO() 0
 #define VALUE(x) x
 #define EMPTY_OWNERS \
@@ -1920,15 +1920,49 @@ Area::List PartitionAllocator::area_5 = {
 };
 
 static cache_align PartitionAllocator memory_partitions[MAX_THREADS] = PARTITION_LAYOUT;
-static cache_align uint32_t partition_owners[MAX_THREADS] = DEFAULT_OWNERS;
+static cache_align int32_t partition_owners[MAX_THREADS] = DEFAULT_OWNERS;
 
 static std::atomic<int32_t> global_thread_idx = { 0 };
 
+std::mutex partition_mutex;
+static inline uint8_t reserve_partition_set()
+{
+    std::unique_lock<std::mutex> lock(partition_mutex);
+    int8_t reserved_id = -1;
+    for (int i = 0; i < 1024; i++) {
+        if (partition_owners[i] == -1 || partition_owners[i] == i) {
+            partition_owners[i] = i;
+            reserved_id = i;
+            break;
+        }
+    }
+    return reserved_id;
+}
+
+static inline void release_partition_set(int8_t idx)
+{
+    if (idx >= 0) {
+        std::unique_lock<std::mutex> lock(partition_mutex);
+        partition_owners[idx] = -1;
+    }
+}
+
+struct thread_init
+{
+    int8_t base_partition_set;
+    // constructor
+    thread_init();
+    ~thread_init();
+};
+
 struct Allocator
 {
+    thread_local static uint8_t main_index;
+
     uint32_t _thread_idx;
     PartitionAllocator *thread_partitions;
     Pool *previous_pool;
+    size_t previous_size;
     uintptr_t previous_pool_start;
     uintptr_t previous_pool_end;
 
@@ -1950,6 +1984,8 @@ private:
     }
 
 public:
+    inline static Allocator &get_thread_instance();
+
     inline bool is_main() { return _thread_idx == 0; }
 
     inline size_t thread_id() { return (size_t)this; }
@@ -1959,6 +1995,15 @@ public:
         if (s == 0)
             return NULL;
 
+        if (previous_pool != NULL && previous_size == s) {
+            if (previous_pool->free != NULL) {
+                return previous_pool->getFreeBlock();
+            } else {
+                previous_pool = NULL;
+            }
+        } else {
+            previous_pool = NULL;
+        }
         if (s <= LARGE_OBJECT_SIZE) {
             return alloc_from_pool(s);
         } else if (s <= AREA_SIZE_LARGE) {
@@ -2185,10 +2230,14 @@ private:
         if (start != NULL) {
             if (start->free == NULL) {
                 if (start->extendPool()) {
+                    previous_pool = start;
+                    previous_size = s;
                     return start->getFreeBlock();
                 }
                 list_remove(*queue, start);
             } else {
+                previous_pool = start;
+                previous_size = s;
                 return start->getFreeBlock();
             }
         }
@@ -2200,16 +2249,23 @@ private:
 
         thread_partitions->pool_count++;
         list_enqueue(*queue, start);
+        previous_pool = start;
+        previous_size = s;
         return start->getFreeBlock();
     }
 };
 
-#define ALLOC_DEFINE(tid)                        \
-    {                                            \
-        tid, &memory_partitions[tid], NULL, 0, 0 \
+#define ALLOC_DEFINE(tid)                           \
+    {                                               \
+        tid, &memory_partitions[tid], NULL, 0, 0, 0 \
     }
 #define ALLOC_LAYOUT TH1024(ALLOC_DEFINE)
 static cache_align Allocator allocator_list[MAX_THREADS] = ALLOC_LAYOUT;
+
+/*
+    how do I attach an allocator to the thread.
+
+ */
 
 // MemoryBlock:
 // Buff, Vec, Str -- all have direct access to heap
