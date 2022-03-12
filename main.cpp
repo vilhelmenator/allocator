@@ -637,10 +637,7 @@ void run_tests()
 
 int main()
 {
-    std::cout << sizeof(Area) << std::endl;
-    std::cout << sizeof(Allocator) << std::endl;
-    std::cout << sizeof(PartitionAllocator) << std::endl;
-    // run_tests();
+    run_tests();
 
     // return 0;
     /*
