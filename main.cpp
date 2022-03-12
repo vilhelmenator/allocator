@@ -64,9 +64,9 @@
 //
 
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
-const uint64_t NUMBER_OF_ITEMS = 80000L;
+const uint64_t NUMBER_OF_ITEMS = 800000L;
 const uint64_t NUMBER_OF_ITERATIONS = 100UL;
-const uint64_t OBJECT_SIZE = (1 << 3UL);
+const uint64_t OBJECT_SIZE = (1 << 8UL);
 
 const uint64_t sz_kb = 1024;
 const uint64_t sz_mb = sz_kb * sz_kb;
@@ -102,11 +102,27 @@ const uint64_t max_large_size_page = 128 * sz_mb;
 // how many 16k objects to exhaust all areas for small items.
 // how many large items to exhaust all areas for large items.
 //
-thread_local size_t Allocator::_thread_id = 0;
-thread_local uint32_t Allocator::_thread_idx = 0;
-#define min(x, y) ((x) < (y) ? (x) : (y))
-Allocator alloc;
+thread_init::thread_init()
+{
+    Allocator::main_index = reserve_partition_set();
+}
 
+thread_init::~thread_init()
+{
+    release_partition_set(Allocator::main_index);
+}
+
+Allocator &Allocator::get_thread_instance()
+{
+    thread_local static thread_init init;
+    return allocator_list[Allocator::main_index];
+}
+
+#define min(x, y) ((x) < (y) ? (x) : (y))
+thread_local uint8_t Allocator::main_index = -1;
+Allocator alloc = Allocator::get_thread_instance();
+
+// auto vv = allocator::malloc(2);
 /*
 1.
 Area tests.
@@ -172,13 +188,14 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     auto expected_reserved_mem = os_page_size * num_small_allocations; // if all pools are touched
     auto actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
-    char *variables[num_small_allocations];
+    uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
 
     double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         void *all = alloc.malloc(allocation_size);
-        variables[i] = (char *)all;
+
+        variables[i] = (uint64_t *)all;
         auto end = align_up((uintptr_t)variables[i], SECTION_SIZE);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             return false;
@@ -193,7 +210,7 @@ bool test_pools(size_t pool_size, size_t allocation_size)
 
     // release all the system resources
     alloc.release_local_areas();
-
+    free(variables);
     num_small_sections = num_sections_part0 + num_sections_part1 + num_sections_part2;
     num_pools = num_small_sections * pools_per_section;
     num_small_allocations = num_pools * max_count_per_pool;
@@ -201,10 +218,10 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
     readable_reserved = (double)expected_reserved_mem / (SZ_GB);
-    char **variables2 = (char **)malloc(num_small_allocations * sizeof(char **));
+    uint64_t **variables2 = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables2[i] = (char *)alloc.malloc(allocation_size);
+        variables2[i] = (uint64_t *)alloc.malloc(allocation_size);
         auto end = align_up((uintptr_t)variables2[i], SECTION_SIZE);
         if ((end - (uintptr_t)variables2[i]) < allocation_size) {
             return false;
@@ -259,12 +276,12 @@ bool test_pages(size_t page_size, size_t allocation_size)
     auto expected_reserved_mem = os_page_size * num_small_allocations; // if all pools are touched
     auto actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
-    char *variables[num_small_allocations];
+    uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
 
     double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (char *)alloc.malloc_page(allocation_size);
+        variables[i] = (uint64_t *)alloc.malloc_page(allocation_size);
         auto end = align_up((uintptr_t)variables[i], page_size);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             return false;
@@ -280,6 +297,7 @@ bool test_pages(size_t page_size, size_t allocation_size)
         }
         // release all the system resources
         alloc.release_local_areas();
+        free(variables);
         max_count_per_page = (page_size - 64) / allocation_size;
         num_small_areas = extended_parts;
         num_small_allocations = max_count_per_page * num_small_areas;
@@ -287,10 +305,10 @@ bool test_pages(size_t page_size, size_t allocation_size)
         actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
         readable_reserved = (double)expected_reserved_mem / (SZ_GB);
-        char **variables2 = (char **)malloc(num_small_allocations * sizeof(char **));
+        uint64_t **variables2 = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
         // exhaust part 0, 1, and 2
         for (uint32_t i = 0; i < num_small_allocations; i++) {
-            variables2[i] = (char *)alloc.malloc_page(allocation_size);
+            variables2[i] = (uint64_t *)alloc.malloc_page(allocation_size);
             auto end = align_up((uintptr_t)variables2[i], page_size);
             if ((end - (uintptr_t)variables2[i]) < allocation_size) {
                 return false;
@@ -305,9 +323,6 @@ bool test_pages(size_t page_size, size_t allocation_size)
             return false;
         }
         for (uint32_t i = 0; i < num_small_allocations; i++) {
-            if (i == 192) {
-                auto bb = 0;
-            }
             alloc.free(variables2[i]);
         }
         free(variables2);
@@ -320,6 +335,7 @@ bool test_pages(size_t page_size, size_t allocation_size)
         for (uint32_t i = 0; i < num_small_allocations; i++) {
             alloc.free(variables[i]);
         }
+        free(variables);
     }
     // release all the system resources
     alloc.release_local_areas();
@@ -349,15 +365,11 @@ bool test_slabs()
     auto num_small_areas = base_parts;
     auto num_small_allocations = max_count_per_page * num_small_areas;
 
-    auto expected_reserved_mem = os_page_size * num_small_allocations;
-    auto actual_reserver_mem = allocation_size * num_small_allocations;
+    uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
 
-    char *variables[num_small_allocations];
-
-    double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (char *)alloc.malloc_page(allocation_size);
+        variables[i] = (uint64_t *)alloc.malloc_page(allocation_size);
         auto end = align_up((uintptr_t)variables[i], 256 * sz_mb);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             return false;
@@ -373,6 +385,7 @@ bool test_slabs()
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         alloc.free(variables[i]);
     }
+    free(variables);
     return true;
 }
 
@@ -382,9 +395,9 @@ bool test_areas()
     auto base_parts = num_areas_part3;
     auto num_alloc = base_parts;
 
-    char *variables[num_alloc];
+    uint64_t **variables = (uint64_t **)malloc(num_alloc * sizeof(uint64_t));
     for (uint32_t i = 0; i < num_alloc; i++) {
-        variables[i] = (char *)alloc.malloc(allocation_size);
+        variables[i] = (uint64_t *)alloc.malloc(allocation_size);
     }
     auto nll = alloc.malloc_page(allocation_size);
     if (nll != NULL) {
@@ -396,7 +409,7 @@ bool test_areas()
     alloc.free(variables[num_alloc - 2]);
     alloc.free(variables[num_alloc - 3]);
     uintptr_t new_addr = (uintptr_t)alloc.malloc(allocation_size);
-    variables[num_alloc - 3] = (char *)new_addr;
+    variables[num_alloc - 3] = (uint64_t *)new_addr;
     if (new_addr != next_addr) {
         return false;
     }
@@ -404,7 +417,7 @@ bool test_areas()
     if (new_addr != end_addr) {
         return false;
     }
-    variables[num_alloc - 2] = (char *)new_addr;
+    variables[num_alloc - 2] = (uint64_t *)new_addr;
 
     next_addr = (uintptr_t)variables[num_alloc - 5];
     // remove four and try to allocate 780 megs;
@@ -417,19 +430,19 @@ bool test_areas()
         return false;
     }
     alloc.free((void *)new_addr);
-    variables[num_alloc - 2] = (char *)alloc.malloc(allocation_size);
-    variables[num_alloc - 3] = (char *)alloc.malloc(allocation_size);
-    variables[num_alloc - 4] = (char *)alloc.malloc(allocation_size);
-    variables[num_alloc - 5] = (char *)alloc.malloc(allocation_size);
+    variables[num_alloc - 2] = (uint64_t *)alloc.malloc(allocation_size);
+    variables[num_alloc - 3] = (uint64_t *)alloc.malloc(allocation_size);
+    variables[num_alloc - 4] = (uint64_t *)alloc.malloc(allocation_size);
+    variables[num_alloc - 5] = (uint64_t *)alloc.malloc(allocation_size);
     alloc.free(variables[num_alloc - 2]);
     if (alloc.malloc(256 * sz_mb) != NULL) {
         return false;
     }
-    variables[num_alloc - 2] = (char *)alloc.malloc(allocation_size);
+    variables[num_alloc - 2] = (uint64_t *)alloc.malloc(allocation_size);
     for (uint32_t i = 0; i < num_alloc; i++) {
         alloc.free(variables[i]);
     }
-
+    free(variables);
     return true;
 }
 
@@ -472,7 +485,7 @@ bool fillASection()
 {
     const int num_pools = 32;
     const int num_allocs = 16378;
-    uint64_t *allocs[num_allocs * num_pools];
+    uint64_t **allocs = (uint64_t **)malloc(num_allocs * num_pools * sizeof(uint64_t **));
     for (int s = 0; s < num_pools; s++) {
         for (int i = 0; i < num_allocs; i++) {
             allocs[i + (num_allocs * s)] = (uint64_t *)alloc.malloc(8);
@@ -488,7 +501,7 @@ bool fillASection()
             alloc.free(allocs[i + (num_allocs * s)]);
         }
     }
-
+    free(allocs);
     // fill all 8 pools of one section.
     return true;
 }
@@ -527,8 +540,6 @@ bool fillAnArea()
 
 bool fillAPage()
 {
-    // const int num_allocs = 2097142;
-    // const int num_allocs = 1398094;
     const int num_allocs = 1398094;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
 
@@ -537,10 +548,6 @@ bool fillAPage()
         allocs[i] = addr;
         *allocs[i] = (uint64_t)allocs[i];
     }
-    uintptr_t lastalloc = (uintptr_t)allocs[num_allocs - 1];
-    uintptr_t end = align_up(lastalloc, AREA_SIZE_SMALL);
-
-    uintptr_t diff = end - lastalloc;
 
     for (int i = 0; i < num_allocs; i++) {
 
@@ -625,12 +632,17 @@ void run_tests()
     if (!fillAPage()) {
         printf("FFFF");
     }
+    alloc.release_local_areas();
 }
+
 int main()
 {
-
+    std::cout << sizeof(Area) << std::endl;
+    std::cout << sizeof(Allocator) << std::endl;
+    std::cout << sizeof(PartitionAllocator) << std::endl;
     // run_tests();
 
+    // return 0;
     /*
     //std::cout << "total mem: " << total_mem << std::endl;
     char*t = (char*)alloc.malloc(OBJECT_SIZE);
@@ -668,14 +680,12 @@ int main()
     b = rdtsc() - a;
     std::cout << "free Cycles : " << b << std::endl << std::endl;
     */
-
     char *variables[NUMBER_OF_ITEMS];
     auto t1 = std::chrono::high_resolution_clock::now();
-    auto bb = NUMBER_OF_ITEMS * OBJECT_SIZE;
-    for (auto j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-        for (auto i = 0; i < NUMBER_OF_ITEMS; i++)
+    for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
             variables[i] = (char *)alloc.malloc(OBJECT_SIZE);
-        for (auto i = 0; i < NUMBER_OF_ITEMS; i++)
+        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
             alloc.free(variables[i]);
     }
 
@@ -686,11 +696,11 @@ int main()
     alloc.release_local_areas();
     /*
     t1 = std::chrono::high_resolution_clock::now();
-    for (int j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-        for (int i = 0; i < NUMBER_OF_ITEMS; i++)
+    for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
             variables[i] = (char *)mi_malloc(OBJECT_SIZE);
 
-        for (int i = 0; i < NUMBER_OF_ITEMS; i++)
+        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
             mi_free(variables[i]);
     }
     t2 = std::chrono::high_resolution_clock::now();
