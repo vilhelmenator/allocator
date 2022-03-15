@@ -6,10 +6,9 @@
 //  Copyright © 2020 Vilhelm Sævarsson. All rights reserved.
 //
 
-#include <iostream>
-#include <time.h>
-
 #include "allocator.h"
+#include "ctest.h"
+#include <iostream>
 
 /*
 
@@ -66,7 +65,7 @@
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
 const uint64_t NUMBER_OF_ITEMS = 800000L;
 const uint64_t NUMBER_OF_ITERATIONS = 100UL;
-const uint64_t OBJECT_SIZE = (1 << 8UL);
+const uint64_t OBJECT_SIZE = (1 << 3UL);
 
 const uint64_t sz_kb = 1024;
 const uint64_t sz_mb = sz_kb * sz_kb;
@@ -104,7 +103,7 @@ const uint64_t max_large_size_page = 128 * sz_mb;
 //
 thread_init::thread_init()
 {
-    Allocator::main_index = reserve_partition_set();
+    Allocator::main_index = reserve_any_partition_set();
 }
 
 thread_init::~thread_init()
@@ -143,12 +142,17 @@ Pages.
      -- exhuast all areas.
 [x] Test the order of the areas.
         - if I remove an area from the list, will it alocate from the empty spot.
+
+ [ ] when allocation of an area fails.
+     - if the address requested is not the address returned.
+         - to what tid and partision-set does the address belong.
+         - if the partition-set is reserved
+             - promote to a higher partition
+         - what range of areas will we mark as invalid.
  perf.
  [ ] test small page coalesce rules.
  [ ] test pools vs pages for small sizes
 
-Section test.
- - write into memory from pool/page.
 
  2.
 [ ] random allocations sizes.
@@ -585,58 +589,82 @@ ALMOST THERE. Lets get this done, today!!!
  [ ] add thread free for pages.
 
 */
+
+//
+// test header
+// test type_define. parser.
+//
+//
+// read_struct(ptr, define) { } convert define to offset_tree
+// write_struct(ptr, define, size, buff) {  }
+// delete_struct() { }
+//
+//
 void run_tests()
 {
-    if (!test_pools_small()) {
-        printf("FFFF");
-    }
-    if (!test_medium_pools()) {
-        printf("FFFF");
-    }
-    if (!test_large_pools()) {
-        printf("FFFF");
-    }
-
-    if (!test_small_pages()) {
-        printf("FFFF");
-    }
-    if (!test_medium_pages()) {
-        printf("FFFF");
-    }
-    if (!test_large_pages()) {
-        printf("FFFF");
-    }
-
-    if (!test_slabs()) {
-        printf("FFFF");
-    }
-    if (!test_areas()) {
-        printf("FFFF");
-    }
-
-    if (!test_huge_alloc()) {
-        printf("FFFF");
-    }
-
-    if (!fillAPool()) {
-        printf("FFFF");
-    }
-    if (!fillASection()) {
-        printf("FFFF");
-    }
-
-    if (!fillAnArea()) {
-        printf("FFFF");
-    }
-
-    if (!fillAPage()) {
-        printf("FFFF");
-    }
+    TEST("pools_small", {
+        EXPECT(test_pools_small());
+    });
+    TEST("medium_pools", {
+        EXPECT(test_medium_pools());
+    });
+    TEST("large_pools", {
+        EXPECT(test_large_pools());
+    });
+    TEST("small_pages", {
+        EXPECT(test_small_pages());
+    });
+    TEST("medium_pages", {
+        EXPECT(test_medium_pages());
+    });
+    TEST("large_pages", {
+        EXPECT(test_large_pages());
+    });
+    TEST("slabs", {
+        EXPECT(test_slabs());
+    });
+    TEST("areas", {
+        EXPECT(test_areas());
+    });
+    TEST("huge_alloc", {
+        EXPECT(test_huge_alloc());
+    });
+    TEST("fillAPool", {
+        EXPECT(fillAPool());
+    });
+    TEST("fillASection", {
+        EXPECT(fillASection());
+    });
+    TEST("fillAnArea", {
+        EXPECT(fillAnArea());
+    });
+    TEST("fillAPage", {
+        EXPECT(fillAPage());
+    });
     alloc.release_local_areas();
 }
 
+bool testAreaFail()
+{
+    //
+    // allocate some memory at where the initial thread assumes is free
+    //  - verify that the next area it returns is correct.
+    // allocate some memory that overlaps the rangeo of two partition sets.
+    //  -- verify that the nex tarea is in the next partition set
+    //  ensure that the areas that are invalid are all marked as invalid.
+    //  ensure that the partition-set is allocated only if it is available.
+    //
+    return false;
+}
 int main()
 {
+
+    TEST("area_fallback", {
+        EXPECT(testAreaFail());
+    });
+    // std::cout << sizeof(Area) << std::endl;
+    // std::cout << sizeof(Allocator) << std::endl;
+    // std::cout << sizeof(PartitionAllocator) << std::endl;
     run_tests();
 
     // return 0;
@@ -678,33 +706,26 @@ int main()
     std::cout << "free Cycles : " << b << std::endl << std::endl;
     */
     char *variables[NUMBER_OF_ITEMS];
-    auto t1 = std::chrono::high_resolution_clock::now();
-    for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-            variables[i] = (char *)alloc.malloc(OBJECT_SIZE);
-        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-            alloc.free(variables[i]);
-    }
-
-    auto t2 = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
-    std::cout << "Time spent in alloc: " << duration << " milliseconds" << std::endl
-              << std::endl;
+    MEASURE_MS("alloc", {
+        for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+                variables[i] = (char *)alloc.malloc(OBJECT_SIZE);
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+                alloc.free(variables[i]);
+        }
+    });
     alloc.release_local_areas();
-    /*
-    t1 = std::chrono::high_resolution_clock::now();
-    for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-            variables[i] = (char *)mi_malloc(OBJECT_SIZE);
 
-        for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-            mi_free(variables[i]);
-    }
-    t2 = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
-    std::cout << "Time spent in mi_malloc: " << duration << " milliseconds" << std::endl
-              << std::endl;
-*/
+    MEASURE_MS("malloc", {
+        for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+                variables[i] = (char *)mi_malloc(OBJECT_SIZE);
+
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+                mi_free(variables[i]);
+        }
+    });
+
     /*
     t1 = std::chrono::high_resolution_clock::now();
     for(auto j=0;j<NUMBER_OF_ITERATIONS; j++)
