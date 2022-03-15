@@ -239,6 +239,27 @@ cache_align const uintptr_t partitions_offsets[] {
 };
 
 const uint8_t partition_count = 7;
+
+int8_t partition_from_addr(uintptr_t p)
+{
+    const int lz = 22 - __builtin_clzll(p);
+    if (lz < 0 || lz > partition_count) {
+        return -1;
+    } else {
+        return lz;
+    }
+}
+
+int16_t partition_id_from_addr(uintptr_t p)
+{
+    auto pidx = partition_from_addr(p);
+    if (pidx < 0) {
+        return -1;
+    }
+    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&partitions_offsets[pidx];
+    return (int16_t)((size_t)diff >> 10);
+}
+
 int countBits(uint32_t v)
 {
     uint32_t c = 0;
@@ -412,43 +433,6 @@ struct heap_block
 };
 
 #define HEAP_NODE_OVERHEAD 8
-/*
-struct heap_node
-{
-    // a page is not going to be bigger than 256mb
-    // so an offset between two allocations within a
-    // a page is going to fit in a 32bit value.
-    size_t  offsets;
-    inline void setNext(heap_node *p) {
-        if(p == NULL)
-        {
-            offsets &= 0xffffffff00000000;
-        }
-        else
-        {
-            offsets = 0xffffffff00000000 & (int32_t)((uint8_t*)p - (uint8_t*)this);
-        }
-    }
-    inline void setPrev(heap_node *p) {
-        if(p == NULL)
-        {
-            offsets &= 0xffffffff;
-        }
-        else
-        {
-            offsets = 0xffffffff & (int32_t)((uint8_t*)this - (uint8_t*)p);
-        }
-    }
-    inline heap_node *getNext() {
-        if(!(offsets & 0xffffffff)) return NULL;
-        return (heap_node*)((uint8_t*)this + (offsets & 0xffffffff));
-    }
-    inline heap_node *getPrev() {
-        if(!(offsets & 0xffffffff00000000)) return NULL;
-        return (heap_node*)((uint8_t*)this - (offsets & 0xffffffff00000000));
-    }
-};
-*/
 
 struct heap_node
 {
@@ -714,15 +698,21 @@ public:
 
     static Area *fromAddr(uintptr_t p)
     {
-        if (p < partitions_offsets[2]) {
-            return (Area *)(p & ~(AREA_SIZE_SMALL - 1));
-        } else if (p < partitions_offsets[3]) {
-            return (Area *)(p & ~(AREA_SIZE_LARGE - 1));
-        } else if (p < partitions_offsets[4]) {
-            return (Area *)(p & ~(AREA_SIZE_HUGE - 1));
-        } else {
-            return (Area *)p;
+        static const uint64_t masks[] = {
+            ~(AREA_SIZE_SMALL - 1),
+            ~(AREA_SIZE_SMALL - 1),
+            ~(AREA_SIZE_LARGE - 1),
+            ~(AREA_SIZE_HUGE - 1),
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff
+        };
+
+        auto pidx = partition_from_addr(p);
+        if (pidx < 0) {
+            return NULL;
         }
+        return (Area *)(p & masks[pidx]);
     }
 };
 
@@ -1292,6 +1282,9 @@ static inline bool reset_memory(void *base, size_t size)
     return true;
 }
 
+// yes, for the rare occation an issue arises, we just lock the mutex to avoid
+// thread clashing issues on windows
+std::mutex aligned_aloc_mutex;
 static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
     bool commit)
 {
@@ -1307,18 +1300,27 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
         return NULL;
 
     if (((uintptr_t)ptr % alignment != 0)) {
+        // threads can cause issues on windows.
+        // and we lock to avoid those issues.
+        // this branch happens rarley anyways.
+        std::unique_lock<std::mutex> lock(aligned_aloc_mutex);
+        // release our failed attempt.
         release_memory(ptr, size, commit);
-        size_t over_size = size + alignment;
-        ptr = alloc_memory(base, over_size, commit);
+        // ask for the same size but with the alignement added to ensure
+        // that there is an address aligned in the memory returned.
+        size_t adj_size = size + alignment;
+        ptr = alloc_memory(base, adj_size, commit);
         if (ptr == NULL)
             return NULL;
 
+        // if we got our
         if (((uintptr_t)ptr % alignment) == 0) {
-            decommit_memory((uint8_t *)ptr + size, over_size - size);
+            decommit_memory((uint8_t *)ptr + size, adj_size - size);
             return ptr;
         }
+        // we fall back on the supported windows bevhaiour as the base behaviour_Ö
         void *aligned_p = (void *)align_up((uintptr_t)ptr, alignment);
-        release_memory(ptr, over_size, commit);
+        release_memory(ptr, adj_size, commit);
         ptr = alloc_memory(aligned_p, size, commit);
     }
 
@@ -1378,10 +1380,6 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
 cache_align Pool::Queue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = { Z1024(POOL_HEAP) };
 cache_align Page::Queue page_queues[MAX_THREADS][3] = { Z1024(PAGE_HEAP) };
 cache_align Section::Queue section_queues[MAX_THREADS] = { Z1024(SECTION_HEAP) };
-static inline int8_t addrToPartition(void *addr)
-{
-    return 22 - __builtin_clzll((uintptr_t)addr);
-}
 
 static inline uint8_t sizeToPool(size_t as)
 {
@@ -1925,7 +1923,7 @@ static cache_align int32_t partition_owners[MAX_THREADS] = DEFAULT_OWNERS;
 static std::atomic<int32_t> global_thread_idx = { 0 };
 
 std::mutex partition_mutex;
-static inline uint8_t reserve_partition_set()
+static inline uint8_t reserve_any_partition_set()
 {
     std::unique_lock<std::mutex> lock(partition_mutex);
     int8_t reserved_id = -1;
@@ -1937,6 +1935,16 @@ static inline uint8_t reserve_partition_set()
         }
     }
     return reserved_id;
+}
+
+static inline bool reserve_partition_set(int8_t idx, int8_t midx)
+{
+    std::unique_lock<std::mutex> lock(partition_mutex);
+    if (partition_owners[idx] == -1) {
+        partition_owners[idx] = midx;
+        return true;
+    }
+    return false;
 }
 
 static inline void release_partition_set(int8_t idx)
@@ -1992,9 +2000,6 @@ public:
 
     void *malloc(size_t s)
     {
-        if (s == 0)
-            return NULL;
-
         if (previous_pool != NULL && previous_size == s) {
             if (previous_pool->free != NULL) {
                 return previous_pool->getFreeBlock();
@@ -2016,9 +2021,6 @@ public:
 
     void *malloc_page(size_t s)
     {
-        if (s == 0)
-            return NULL;
-
         if (s <= AREA_SIZE_LARGE) {
             // allocate form the large page
             return alloc_from_page(s);
@@ -2037,15 +2039,19 @@ public:
         } else {
             previous_pool = NULL;
         }
-
-        if ((uintptr_t)p < partitions_offsets[2]) {
+        switch (partition_from_addr((uintptr_t)p)) {
+        case 0:
+        case 1:
             free_from_section(p, AREA_SIZE_SMALL);
-        } else if ((uintptr_t)p < partitions_offsets[3]) {
+            break;
+        case 2:
             free_from_section(p, AREA_SIZE_LARGE);
-        } else if ((uintptr_t)p < partitions_offsets[4]) {
+            break;
+        case 3:
             free_huge(p);
-        } else {
-            // do nothing
+            break;
+        default:
+            break;
         }
     }
 
