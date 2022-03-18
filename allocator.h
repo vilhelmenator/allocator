@@ -240,7 +240,7 @@ cache_align const uintptr_t partitions_offsets[] {
 
 const uint8_t partition_count = 7;
 
-int8_t partition_from_addr(uintptr_t p)
+static inline int8_t partition_from_addr(uintptr_t p)
 {
     const int lz = 22 - __builtin_clzll(p);
     if (lz < 0 || lz > partition_count) {
@@ -250,14 +250,19 @@ int8_t partition_from_addr(uintptr_t p)
     }
 }
 
-int16_t partition_id_from_addr(uintptr_t p)
+static inline int16_t partition_id_from_addr_and_partition(uintptr_t p, int8_t pidx)
 {
-    auto pidx = partition_from_addr(p);
     if (pidx < 0) {
         return -1;
     }
     const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&partitions_offsets[pidx];
     return (int16_t)((size_t)diff >> 10);
+}
+
+static inline int16_t partition_id_from_addr(uintptr_t p)
+{
+    auto pidx = partition_from_addr(p);
+    return partition_id_from_addr_and_partition(p, pidx);
 }
 
 int countBits(uint32_t v)
@@ -592,7 +597,7 @@ struct Area
     {
         Area *head;
         Area *tail;
-        uint32_t thread_id;
+        uint32_t partition_id;
         uintptr_t start_addr;
         uintptr_t end_addr;
         AreaType type;
@@ -600,7 +605,7 @@ struct Area
         Area *previous_area;
     };
 
-    size_t thread_id;
+    int64_t partition_id;
     bitmask constr_mask; // containers that have been constructed.
     bitmask active_mask; // containers that can be destructed.
 
@@ -723,7 +728,7 @@ struct Section
         Section *head;
         Section *tail;
     };
-    size_t thread_id;
+    int64_t partition_id;
     // 24 bytes as the section header
     bitmask constr_mask; // 32 pages bit per page.   // lower 32 bits per section/ high
     bitmask active_mask;
@@ -1206,6 +1211,132 @@ public:
     inline void setNext(Page *n) { next = n; }
 };
 
+#define Z4(x) x(), x(), x(), x()
+#define Z8(x) Z4(x), Z4(x)
+#define Z16(x) Z8(x), Z8(x)
+#define Z32(x) Z16(x), Z16(x)
+#define Z64(x) Z32(x), Z32(x)
+#define Z128(x) Z64(x), Z64(x)
+#define Z256(x) Z128(x), Z128(x)
+#define Z512(x) Z256(x), Z256(x)
+#define Z1024(x) Z512(x), Z512(x)
+
+#define zQueue(x)                           \
+    {                                       \
+        NULL, NULL, sizeof(uintptr_t) * (x) \
+    }
+#define zPoolQueue                                                                                                                          \
+    {                                                                                                                                       \
+        zQueue(0), zQueue(1), zQueue(2), zQueue(3), zQueue(4), zQueue(5), zQueue(6), zQueue(7),                                             \
+            zQueue(8), zQueue(9), zQueue(10), zQueue(11), zQueue(12), zQueue(13), zQueue(14), zQueue(15),                                   \
+            zQueue(16), zQueue(18), zQueue(20), zQueue(22), zQueue(24), zQueue(26), zQueue(28), zQueue(30),                                 \
+            zQueue(32), zQueue(36), zQueue(40), zQueue(44), zQueue(48), zQueue(52), zQueue(56), zQueue(60),                                 \
+            zQueue(64), zQueue(72), zQueue(80), zQueue(88), zQueue(96), zQueue(104), zQueue(112), zQueue(120),                              \
+            zQueue(128), zQueue(144), zQueue(160), zQueue(176), zQueue(192), zQueue(208), zQueue(224), zQueue(240),                         \
+            zQueue(256), zQueue(288), zQueue(320), zQueue(352), zQueue(384), zQueue(416), zQueue(448), zQueue(480),                         \
+            zQueue(512), zQueue(576), zQueue(640), zQueue(704), zQueue(768), zQueue(832), zQueue(896), zQueue(960),                         \
+            zQueue(1024), zQueue(1152), zQueue(1280), zQueue(1408), zQueue(1536), zQueue(1664), zQueue(1792), zQueue(1920),                 \
+            zQueue(2048), zQueue(2304), zQueue(2560), zQueue(2816), zQueue(3072), zQueue(3328), zQueue(3584), zQueue(3840),                 \
+            zQueue(4096), zQueue(4608), zQueue(5120), zQueue(5632), zQueue(6144), zQueue(6656), zQueue(7168), zQueue(7680),                 \
+            zQueue(8192), zQueue(9216), zQueue(10240), zQueue(11264), zQueue(12288), zQueue(13312), zQueue(14336), zQueue(15360),           \
+            zQueue(16384), zQueue(18432), zQueue(20480), zQueue(22528), zQueue(24576), zQueue(26624), zQueue(28672), zQueue(30720),         \
+            zQueue(32768), zQueue(36864), zQueue(40960), zQueue(45056), zQueue(49152), zQueue(53248), zQueue(57344), zQueue(61440),         \
+            zQueue(65536), zQueue(73728), zQueue(81920), zQueue(90112), zQueue(98304), zQueue(106496), zQueue(114688), zQueue(122880),      \
+            zQueue(131072), zQueue(147456), zQueue(163840), zQueue(180224), zQueue(196608), zQueue(212992), zQueue(229376), zQueue(245760), \
+            zQueue(262144), zQueue(294912), zQueue(327680), zQueue(360448), zQueue(393216), zQueue(425984), zQueue(458752), zQueue(491520), \
+            zQueue(524288), zQueue(589824)                                                                                                  \
+    }
+
+#define POOL_HEAP() zPoolQueue
+#define zPageQueue                                     \
+    {                                                  \
+        { NULL, NULL }, { NULL, NULL }, { NULL, NULL } \
+    }
+
+#define PAGE_HEAP() zPageQueue
+#define zSectionQueue \
+                      \
+    {                 \
+        NULL, NULL    \
+    }
+
+#define SECTION_HEAP() zSectionQueue
+
+#define TH10(tid, TH)                                                         \
+    TH(tid), TH(tid + 1), TH(tid + 2), TH(tid + 3), TH(tid + 4), TH(tid + 5), \
+        TH(tid + 6), TH(tid + 7), TH(tid + 8), TH(tid + 9)
+#define TH100(tid, x)                                                              \
+    TH10(tid * 100, x), TH10(tid * 100 + 10, x), TH10(tid * 100 + 20, x),          \
+        TH10(tid * 100 + 30, x), TH10(tid * 100 + 40, x), TH10(tid * 100 + 50, x), \
+        TH10(tid * 100 + 60, x), TH10(tid * 100 + 70, x), TH10(tid * 100 + 80, x), \
+        TH10(tid * 100 + 90, x)
+#define TH1000(x)                                                    \
+    TH100(0, x), TH100(1, x), TH100(2, x), TH100(3, x), TH100(4, x), \
+        TH100(5, x), TH100(6, x), TH100(7, x), TH100(8, x), TH100(9, x)
+#define TH1024(x)                                                          \
+    {                                                                      \
+        TH1000(x), x(1000), x(1001), x(1002), x(1003), x(1004), x(1005),   \
+            x(1006), x(1007), x(1008), x(1009), x(1010), x(1011), x(1012), \
+            x(1013), x(1014), x(1015), x(1016), x(1017), x(1018), x(1019), \
+            x(1020), x(1021), x(1022), x(1023)                             \
+    }
+
+#define NEG() -1
+#define ZERO() 0
+#define VALUE(x) x
+#define EMPTY_OWNERS \
+    {                \
+        Z1024(NEG)   \
+    }
+#define DEFAULT_OWNERS TH1024(VALUE)
+
+static cache_align int64_t partition_owners[MAX_THREADS] = EMPTY_OWNERS;
+
+std::mutex partition_mutex;
+static inline int8_t reserve_any_partition_set()
+{
+    std::unique_lock<std::mutex> lock(partition_mutex);
+    int8_t reserved_id = -1;
+    for (int i = 0; i < 1024; i++) {
+        if (partition_owners[i] == -1) {
+            partition_owners[i] = i;
+            reserved_id = i;
+            break;
+        }
+    }
+    return reserved_id;
+}
+static inline int8_t reserve_any_partition_set_for(int8_t midx)
+{
+    std::unique_lock<std::mutex> lock(partition_mutex);
+    int8_t reserved_id = -1;
+    for (int i = 0; i < 1024; i++) {
+        if (partition_owners[i] == -1) {
+            partition_owners[i] = midx;
+            reserved_id = i;
+            break;
+        }
+    }
+    return reserved_id;
+}
+static inline bool reserve_partition_set(int8_t idx, int8_t midx)
+{
+    std::unique_lock<std::mutex> lock(partition_mutex);
+    if (partition_owners[idx] == -1) {
+        partition_owners[idx] = midx;
+        return true;
+    }
+    return false;
+}
+
+static inline void release_partition_set(int8_t idx)
+{
+    if (idx >= 0) {
+        std::unique_lock<std::mutex> lock(partition_mutex);
+        partition_owners[idx] = -1;
+    }
+}
+
 static inline bool commit_memory(void *base, size_t size)
 {
 #ifdef WINDOWS
@@ -1282,9 +1413,27 @@ static inline bool reset_memory(void *base, size_t size)
     return true;
 }
 
+static bool safe_to_aquire(void *base, void *ptr)
+{
+    if (base == ptr) {
+        return true;
+    }
+    auto pidbase = partition_from_addr((uintptr_t)base);
+    auto pidptr = partition_from_addr((uintptr_t)ptr);
+    if (pidbase != pidptr) {
+        // we don't allow allocating from one partition into the other
+        return false;
+    }
+    auto current_pid = partition_id_from_addr_and_partition((uintptr_t)base, pidbase);
+    auto available_pid = partition_id_from_addr_and_partition((uintptr_t)ptr, pidptr);
+    if (current_pid == available_pid) {
+        return true;
+    }
+    return false;
+}
 // yes, for the rare occation an issue arises, we just lock the mutex to avoid
 // thread clashing issues on windows
-std::mutex aligned_aloc_mutex;
+std::mutex aligned_alloc_mutex;
 static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
     bool commit)
 {
@@ -1295,88 +1444,62 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
     if (size >= (SIZE_MAX - alignment))
         return NULL;
 
+    std::unique_lock<std::mutex> lock(aligned_alloc_mutex);
     void *ptr = alloc_memory(base, size, commit);
     if (ptr == NULL)
         return NULL;
 
+    if (!safe_to_aquire(base, ptr)) {
+        free_memory(ptr, size);
+        return NULL;
+    }
     if (((uintptr_t)ptr % alignment != 0)) {
-        // threads can cause issues on windows.
-        // and we lock to avoid those issues.
-        // this branch happens rarley anyways.
-        std::unique_lock<std::mutex> lock(aligned_aloc_mutex);
+        // this should happen very rarely, if at all.
         // release our failed attempt.
-        release_memory(ptr, size, commit);
-        // ask for the same size but with the alignement added to ensure
-        // that there is an address aligned in the memory returned.
+        free_memory(ptr, size);
+
         size_t adj_size = size + alignment;
         ptr = alloc_memory(base, adj_size, commit);
         if (ptr == NULL)
             return NULL;
 
-        // if we got our
+        // if the new ptr is not in our current partition set
+        if (!safe_to_aquire(base, ptr)) {
+            free_memory(ptr, size);
+            return NULL;
+        }
+
+        // if we got our aligned memory
         if (((uintptr_t)ptr % alignment) == 0) {
-            decommit_memory((uint8_t *)ptr + size, adj_size - size);
+            // drop our excess request
+            decommit_memory((uint8_t *)ptr + size, alignment);
             return ptr;
         }
-        // we fall back on the supported windows bevhaiour as the base behaviour_Ö
+        // we are still not aligned, but we have an address that is aligned.
+        free_memory(ptr, adj_size);
+        //
         void *aligned_p = (void *)align_up((uintptr_t)ptr, alignment);
-        release_memory(ptr, adj_size, commit);
+        // get our aligned address
         ptr = alloc_memory(aligned_p, size, commit);
-    }
+        if (ptr == NULL) {
+            // Why would this fail?
+            return NULL;
+        }
+        if (!safe_to_aquire(base, ptr)) {
+            free_memory(ptr, size);
+            return NULL;
+        }
 
+        // if the system fails to get memory from the part we just released.
+        // there is some other allocator screwing with our assumptions... so FAIL!
+        if (((uintptr_t)ptr % alignment) != 0) {
+            free_memory(ptr, size);
+            return NULL;
+        }
+    }
     return ptr;
 }
 
-#define Z4(x) x(), x(), x(), x()
-#define Z8(x) Z4(x), Z4(x)
-#define Z16(x) Z8(x), Z8(x)
-#define Z32(x) Z16(x), Z16(x)
-#define Z64(x) Z32(x), Z32(x)
-#define Z128(x) Z64(x), Z64(x)
-#define Z256(x) Z128(x), Z128(x)
-#define Z512(x) Z256(x), Z256(x)
-#define Z1024(x) Z512(x), Z512(x)
-
-#define zQueue(x)                           \
-    {                                       \
-        NULL, NULL, sizeof(uintptr_t) * (x) \
-    }
-#define zPoolQueue                                                                                                                          \
-    {                                                                                                                                       \
-        zQueue(0), zQueue(1), zQueue(2), zQueue(3), zQueue(4), zQueue(5), zQueue(6), zQueue(7),                                             \
-            zQueue(8), zQueue(9), zQueue(10), zQueue(11), zQueue(12), zQueue(13), zQueue(14), zQueue(15),                                   \
-            zQueue(16), zQueue(18), zQueue(20), zQueue(22), zQueue(24), zQueue(26), zQueue(28), zQueue(30),                                 \
-            zQueue(32), zQueue(36), zQueue(40), zQueue(44), zQueue(48), zQueue(52), zQueue(56), zQueue(60),                                 \
-            zQueue(64), zQueue(72), zQueue(80), zQueue(88), zQueue(96), zQueue(104), zQueue(112), zQueue(120),                              \
-            zQueue(128), zQueue(144), zQueue(160), zQueue(176), zQueue(192), zQueue(208), zQueue(224), zQueue(240),                         \
-            zQueue(256), zQueue(288), zQueue(320), zQueue(352), zQueue(384), zQueue(416), zQueue(448), zQueue(480),                         \
-            zQueue(512), zQueue(576), zQueue(640), zQueue(704), zQueue(768), zQueue(832), zQueue(896), zQueue(960),                         \
-            zQueue(1024), zQueue(1152), zQueue(1280), zQueue(1408), zQueue(1536), zQueue(1664), zQueue(1792), zQueue(1920),                 \
-            zQueue(2048), zQueue(2304), zQueue(2560), zQueue(2816), zQueue(3072), zQueue(3328), zQueue(3584), zQueue(3840),                 \
-            zQueue(4096), zQueue(4608), zQueue(5120), zQueue(5632), zQueue(6144), zQueue(6656), zQueue(7168), zQueue(7680),                 \
-            zQueue(8192), zQueue(9216), zQueue(10240), zQueue(11264), zQueue(12288), zQueue(13312), zQueue(14336), zQueue(15360),           \
-            zQueue(16384), zQueue(18432), zQueue(20480), zQueue(22528), zQueue(24576), zQueue(26624), zQueue(28672), zQueue(30720),         \
-            zQueue(32768), zQueue(36864), zQueue(40960), zQueue(45056), zQueue(49152), zQueue(53248), zQueue(57344), zQueue(61440),         \
-            zQueue(65536), zQueue(73728), zQueue(81920), zQueue(90112), zQueue(98304), zQueue(106496), zQueue(114688), zQueue(122880),      \
-            zQueue(131072), zQueue(147456), zQueue(163840), zQueue(180224), zQueue(196608), zQueue(212992), zQueue(229376), zQueue(245760), \
-            zQueue(262144), zQueue(294912), zQueue(327680), zQueue(360448), zQueue(393216), zQueue(425984), zQueue(458752), zQueue(491520), \
-            zQueue(524288), zQueue(589824)                                                                                                  \
-    }
-
-#define POOL_HEAP() zPoolQueue
-#define zPageQueue                                     \
-    {                                                  \
-        { NULL, NULL }, { NULL, NULL }, { NULL, NULL } \
-    }
-
-#define PAGE_HEAP() zPageQueue
-#define zSectionQueue \
-                      \
-    {                 \
-        NULL, NULL    \
-    }
-
-#define SECTION_HEAP() zSectionQueue
 cache_align Pool::Queue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = { Z1024(POOL_HEAP) };
 cache_align Page::Queue page_queues[MAX_THREADS][3] = { Z1024(PAGE_HEAP) };
 cache_align Section::Queue section_queues[MAX_THREADS] = { Z1024(SECTION_HEAP) };
@@ -1527,7 +1650,7 @@ public:
         section->constr_mask = { 0 };
         section->active_mask = { 0 };
         section->idx = section_idx;
-        section->thread_id = new_area->thread_id;
+        section->partition_id = new_area->partition_id;
         return section;
     }
 
@@ -1548,9 +1671,9 @@ public:
             if (delta < size && (area_queue->tail != area_queue->head)) {
                 Area *current = area_queue->head;
                 while (current != area_queue->tail) {
+                    Area *next = current->getNext();
                     size_t c_size = current->getSize();
                     size_t c_end = c_size + (size_t)(uint8_t *)current;
-                    Area *next = current->getNext();
                     delta = (uint64_t)((uint8_t *)next - c_end);
                     if (delta >= asize) {
                         insert = current;
@@ -1573,13 +1696,14 @@ public:
         if (delta < size) {
             return NULL;
         }
+
         Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, size, alignment, true);
         if (new_area == NULL) {
             return NULL;
         }
         new_area->active_mask = { 0 };
         new_area->constr_mask = { 0 };
-        new_area->thread_id = area_queue->thread_id;
+        new_area->partition_id = area_queue->partition_id;
         new_area->setNext(NULL);
         new_area->setPrev(NULL);
         list_insert_at(*area_queue, insert, new_area);
@@ -1883,77 +2007,16 @@ public:
             0,                                                     \
     }
 
-#define TH10(tid, TH)                                                         \
-    TH(tid), TH(tid + 1), TH(tid + 2), TH(tid + 3), TH(tid + 4), TH(tid + 5), \
-        TH(tid + 6), TH(tid + 7), TH(tid + 8), TH(tid + 9)
-#define TH100(tid, x)                                                              \
-    TH10(tid * 100, x), TH10(tid * 100 + 10, x), TH10(tid * 100 + 20, x),          \
-        TH10(tid * 100 + 30, x), TH10(tid * 100 + 40, x), TH10(tid * 100 + 50, x), \
-        TH10(tid * 100 + 60, x), TH10(tid * 100 + 70, x), TH10(tid * 100 + 80, x), \
-        TH10(tid * 100 + 90, x)
-#define TH1000(x)                                                    \
-    TH100(0, x), TH100(1, x), TH100(2, x), TH100(3, x), TH100(4, x), \
-        TH100(5, x), TH100(6, x), TH100(7, x), TH100(8, x), TH100(9, x)
-#define TH1024(x)                                                          \
-    {                                                                      \
-        TH1000(x), x(1000), x(1001), x(1002), x(1003), x(1004), x(1005),   \
-            x(1006), x(1007), x(1008), x(1009), x(1010), x(1011), x(1012), \
-            x(1013), x(1014), x(1015), x(1016), x(1017), x(1018), x(1019), \
-            x(1020), x(1021), x(1022), x(1023)                             \
-    }
-
 #define PARTITION_LAYOUT TH1024(PARTITION_DEFINE)
 
-#define NEG() -1
-#define ZERO() 0
-#define VALUE(x) x
-#define EMPTY_OWNERS \
-    {                \
-        Z1024(ZERO)  \
-    }
-#define DEFAULT_OWNERS TH1024(VALUE)
 Area::List PartitionAllocator::area_4 = { NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AreaType::AT_VARIABLE, 0, NULL };
 Area::List PartitionAllocator::area_5 = {
     NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AreaType::AT_VARIABLE, 0, NULL
 };
 
-static cache_align PartitionAllocator memory_partitions[MAX_THREADS] = PARTITION_LAYOUT;
-static cache_align int32_t partition_owners[MAX_THREADS] = DEFAULT_OWNERS;
+static cache_align PartitionAllocator partition_allocators[MAX_THREADS] = PARTITION_LAYOUT;
 
 static std::atomic<int32_t> global_thread_idx = { 0 };
-
-std::mutex partition_mutex;
-static inline uint8_t reserve_any_partition_set()
-{
-    std::unique_lock<std::mutex> lock(partition_mutex);
-    int8_t reserved_id = -1;
-    for (int i = 0; i < 1024; i++) {
-        if (partition_owners[i] == -1 || partition_owners[i] == i) {
-            partition_owners[i] = i;
-            reserved_id = i;
-            break;
-        }
-    }
-    return reserved_id;
-}
-
-static inline bool reserve_partition_set(int8_t idx, int8_t midx)
-{
-    std::unique_lock<std::mutex> lock(partition_mutex);
-    if (partition_owners[idx] == -1) {
-        partition_owners[idx] = midx;
-        return true;
-    }
-    return false;
-}
-
-static inline void release_partition_set(int8_t idx)
-{
-    if (idx >= 0) {
-        std::unique_lock<std::mutex> lock(partition_mutex);
-        partition_owners[idx] = -1;
-    }
-}
 
 struct thread_init
 {
@@ -1967,8 +2030,8 @@ struct Allocator
 {
     thread_local static uint8_t main_index;
 
-    uint32_t _thread_idx;
-    PartitionAllocator *thread_partitions;
+    int32_t _thread_idx;
+    PartitionAllocator *part_alloc;
     Pool *previous_pool;
     size_t previous_size;
     uintptr_t previous_pool_start;
@@ -1996,7 +2059,7 @@ public:
 
     inline bool is_main() { return _thread_idx == 0; }
 
-    inline size_t thread_id() { return (size_t)this; }
+    inline int64_t thread_id() { return (int64_t)this; }
 
     void *malloc(size_t s)
     {
@@ -2058,7 +2121,18 @@ public:
     bool release_local_areas()
     {
         previous_pool = NULL;
-        return thread_partitions->release_local_areas();
+        bool result = false;
+        auto midx = main_index;
+        for (int i = 0; i < MAX_THREADS; i++) {
+            if (partition_owners[i] == midx) {
+                bool was_released = partition_allocators[i].release_local_areas();
+                if (midx != i && was_released) {
+                    release_partition_set(i);
+                }
+                result |= was_released;
+            }
+        }
+        return result;
     }
 
 private:
@@ -2066,7 +2140,7 @@ private:
     {
         Section *section = (Section *)((uintptr_t)p & ~(area_size - 1));
         // if it is page section, free
-        if (_thread_idx == partition_owners[section->thread_id]) {
+        if (_thread_idx == partition_owners[section->partition_id]) {
             if (section->getContainerType() == POOL) {
                 section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
                 Pool *pool = (Pool *)section->findCollection(p);
@@ -2074,11 +2148,12 @@ private:
                 set_previous_pools(pool);
                 if (!pool->isConnected()) {
                     // reconnect
-                    auto queue = &thread_partitions->pools[sizeToPool(pool->block_size)];
+                    auto _part_alloc = &partition_allocators[section->partition_id];
+                    auto queue = &_part_alloc->pools[sizeToPool(pool->block_size)];
                     if (queue->head != pool && queue->tail != pool) {
                         list_enqueue(*queue, pool);
                     }
-                    auto sections = thread_partitions->sections;
+                    auto sections = _part_alloc->sections;
                     if (!section->isConnected()) {
                         if (sections->head != section && sections->tail != section) {
                             list_enqueue(*sections, section);
@@ -2092,7 +2167,8 @@ private:
                 // if the free pools list is empty.
                 if (!page->isConnected()) {
                     // reconnect
-                    auto queue = &thread_partitions->pages[pageIdx];
+                    auto _part_alloc = &partition_allocators[section->partition_id];
+                    auto queue = &_part_alloc->pages[pageIdx];
                     if (queue->head != page && queue->tail != page) {
                         list_enqueue(*queue, page);
                     }
@@ -2105,20 +2181,21 @@ private:
     {
         Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_HUGE - 1));
         // if it is page section, free
-        if (_thread_idx == partition_owners[section->thread_id]) {
+        if (_thread_idx == partition_owners[section->partition_id]) {
+            auto _part_alloc = &partition_allocators[section->partition_id];
             if (section->getContainerType() == PAGE) {
                 auto page = (Page *)section->findCollection(p);
                 page->free(p, true);
-                auto queue = &thread_partitions->pages[section->getContainerExponent() - 3];
                 // if the pool is disconnected from the queue
                 if (!page->isConnected()) {
+                    auto queue = &_part_alloc->pages[section->getContainerExponent() - 3];
                     // reconnect
                     list_enqueue(*queue, page);
                 }
             } else // SLAB
             {
                 Area *area = (Area *)section;
-                thread_partitions->free_area(area);
+                _part_alloc->free_area(area);
             }
         }
     }
@@ -2126,7 +2203,7 @@ private:
     Section *get_free_section(size_t s, ContainerType t)
     {
         auto exponent = getContainerExponent(s, t);
-        auto free_section = thread_partitions->sections->head;
+        auto free_section = part_alloc->sections->head;
 
         // find free section.
         while (free_section != NULL) {
@@ -2135,14 +2212,14 @@ private:
                 if (!free_section->isFull()) {
                     break;
                 } else {
-                    list_remove(*thread_partitions->sections, free_section);
+                    list_remove(*part_alloc->sections, free_section);
                 }
             }
             free_section = next;
         }
 
         if (free_section == NULL) {
-            auto new_section = thread_partitions->alloc_section(s, t);
+            auto new_section = part_alloc->alloc_section(s, t);
             if (new_section == NULL) {
                 return NULL;
             }
@@ -2151,7 +2228,7 @@ private:
 
             new_section->next = NULL;
             new_section->prev = NULL;
-            list_enqueue(*thread_partitions->sections, new_section);
+            list_enqueue(*part_alloc->sections, new_section);
 
             free_section = new_section;
         }
@@ -2161,7 +2238,7 @@ private:
     void *alloc_from_page(size_t s)
     {
         Page *start = NULL;
-        auto queue = &thread_partitions->pages[sizeToPage(s)];
+        auto queue = &part_alloc->pages[sizeToPage(s)];
         if (queue->head != NULL) {
             start = queue->head;
             while (start != NULL) {
@@ -2176,7 +2253,7 @@ private:
             }
         }
 
-        Area *new_area = thread_partitions->get_area(s, ContainerType::PAGE);
+        Area *new_area = part_alloc->get_area(s, ContainerType::PAGE);
         if (new_area == NULL) {
             return NULL;
         }
@@ -2185,7 +2262,7 @@ private:
         new_section->idx = 0;
 
         auto exponent = (Exponent)getContainerExponent(s, ContainerType::PAGE);
-        new_section->thread_id = new_area->thread_id;
+        new_section->partition_id = new_area->partition_id;
         new_section->setContainerExponent(exponent);
         new_section->setContainerType(ContainerType::PAGE);
 
@@ -2196,7 +2273,7 @@ private:
         start = (Page *)new_section->getCollection(0, exponent);
         start->init(0, exponent);
 
-        thread_partitions->page_count++;
+        part_alloc->page_count++;
         list_enqueue(*queue, start);
         return start->getBlock((uint32_t)s);
     }
@@ -2204,11 +2281,11 @@ private:
     void *alloc_slab(size_t s)
     {
         auto totalSize = sizeof(Area) + s;
-        Area *area = thread_partitions->get_area(totalSize, ContainerType::PAGE);
-        auto section = (Section *)area;
-        if (section == NULL) {
+        Area *area = part_alloc->get_area(totalSize, ContainerType::PAGE);
+        if (area == NULL) {
             return NULL;
         }
+        auto section = (Section *)area;
         area->reserveAll();
         section->reserveAll();
         section->setContainerType(ContainerType::SLAB);
@@ -2231,7 +2308,7 @@ private:
 
     inline void *alloc_from_pool(size_t s)
     {
-        auto queue = &thread_partitions->pools[sizeToPool(s)];
+        auto queue = &part_alloc->pools[sizeToPool(s)];
         Pool *start = queue->head;
 
         if (start != NULL) {
@@ -2254,17 +2331,33 @@ private:
             return NULL;
         }
 
-        thread_partitions->pool_count++;
+        part_alloc->pool_count++;
         list_enqueue(*queue, start);
         previous_pool = start;
         previous_size = s;
         return start->getFreeBlock();
     }
+
+    inline void *try_alloc_from_pool(size_t s)
+    {
+        void *ptr = alloc_from_pool(s);
+        if (ptr == NULL) {
+            previous_pool = NULL;
+            // claim a new partition set
+            // try again
+            auto new_partition_set_idx = reserve_any_partition_set_for(main_index);
+            if (new_partition_set_idx != -1) {
+                part_alloc = &partition_allocators[new_partition_set_idx];
+                ptr = alloc_from_pool(s);
+            }
+        }
+        return ptr;
+    }
 };
 
-#define ALLOC_DEFINE(tid)                           \
-    {                                               \
-        tid, &memory_partitions[tid], NULL, 0, 0, 0 \
+#define ALLOC_DEFINE(tid)                              \
+    {                                                  \
+        tid, &partition_allocators[tid], NULL, 0, 0, 0 \
     }
 #define ALLOC_LAYOUT TH1024(ALLOC_DEFINE)
 static cache_align Allocator allocator_list[MAX_THREADS] = ALLOC_LAYOUT;
