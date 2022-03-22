@@ -15,11 +15,12 @@
  mremap on systems that support it.
     - enables very fast realloc.
     - allows to move and copy memory very efficiently between thread areas.
-    - only works on linux and windows.
-    - macosx would have to fall back on traditional copy.
+    - windows has its own unique api.
+    - mach os has vm_remap functions that could be used.
     - if mremamp avaialble
         - fast path to realloc
         - fast path to move thread memory
+        - very fast realloc of aligned memory.
 
  each thread in the tread pool aquires a thread id for the memory to use after each run.
  enableing the system to move memory from one thread ownership over to another.
@@ -143,12 +144,11 @@ Pages.
 [x] Test the order of the areas.
         - if I remove an area from the list, will it alocate from the empty spot.
 
- [ ] when allocation of an area fails.
-     - if the address requested is not the address returned.
-         - to what tid and partision-set does the address belong.
-         - if the partition-set is reserved
-             - promote to a higher partition
-         - what range of areas will we mark as invalid.
+
+[ ] Allocation of an area fails.
+[ ] Allocation can't inherit a new partition set
+[ ] thread-free
+
  perf.
  [ ] test small page coalesce rules.
  [ ] test pools vs pages for small sizes
@@ -198,7 +198,9 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         void *all = alloc.malloc(allocation_size);
-
+        if (all == NULL) {
+            return false;
+        }
         variables[i] = (uint64_t *)all;
         auto end = align_up((uintptr_t)variables[i], SECTION_SIZE);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
@@ -414,7 +416,7 @@ bool test_areas()
     alloc.free(variables[num_alloc - 3]);
     uintptr_t new_addr = (uintptr_t)alloc.malloc(allocation_size);
     variables[num_alloc - 3] = (uint64_t *)new_addr;
-    if (new_addr != next_addr) {
+    if (new_addr != next_addr && new_addr != end_addr) {
         return false;
     }
     new_addr = (uintptr_t)alloc.malloc(allocation_size);
@@ -566,42 +568,10 @@ bool fillAPage()
     // fill all 8 pools of one section.
     return true;
 }
-//
-// Get this done, and the next bit would be thread_free
-//
-// fill a pool      128k
-// fill a section   4mb
-// fill a page      32mb
-//
 
-/*
-ALMOST THERE. Lets get this done, today!!!
- // section.
- [ ] verify that you can write into all the memory that is resturned form a pool.
- [ ] verify that you can write into all the memory returned from a section.
- [ ] verify that you can write into all the memory returned from a page.
- [ ] verify that the last allocated part of section,pool or page does not have more space. that we are fitting as much as possible.
-
- // maybe complicated.
- [ ] run tests from other than the main thread.
- [ ] run tests from multiple threads.
- [ ] add thread free for pools.
- [ ] add thread free for pages.
-
-*/
-
-//
-// test header
-// test type_define. parser.
-//
-//
-// read_struct(ptr, define) { } convert define to offset_tree
-// write_struct(ptr, define, size, buff) {  }
-// delete_struct() { }
-//
-//
 void run_tests()
 {
+
     TEST("pools_small", {
         EXPECT(test_pools_small());
     });
@@ -623,11 +593,12 @@ void run_tests()
     TEST("slabs", {
         EXPECT(test_slabs());
     });
-    TEST("areas", {
-        EXPECT(test_areas());
-    });
     TEST("huge_alloc", {
         EXPECT(test_huge_alloc());
+    });
+
+    TEST("areas", {
+        EXPECT(test_areas());
     });
     TEST("fillAPool", {
         EXPECT(fillAPool());
@@ -646,6 +617,27 @@ void run_tests()
 
 bool testAreaFail()
 {
+    // Why am I stalling this!
+    // this is sort of the last fallback step and allows you allocate all the ranges with a single thread.
+    // if allocations fail, it can move into other partition sets.
+    // then I can move into the thread free part. Which should be a lot simpler.
+    //   then it is just testing and cleaning things up..
+    auto m = alloc_memory_aligned((void *)partitions_offsets[0], 48 * sz_mb, 32 * sz_mb, true, partitions_offsets[1]);
+    if (log_is_defined(_alloc_h_, get_next_area_head_is_null)) {
+        //
+        // a way to see what branches are hit during a run.
+        //
+    }
+    // two areas should be marked as bad.
+    // see if those areas are marked as bad.
+    // how should we mark those areas as bad.
+    // if the size of an area is -1, then it is bad.
+    auto bb = alloc.malloc(24);
+    //
+    // next allocate most of the first partition. forcing the next allocation to be from another
+    // partition set.
+    // if that is reserved already. then promote to the next partition.
+    //
     //
     // allocate some memory at where the initial thread assumes is free
     //  - verify that the next area it returns is correct.
@@ -654,6 +646,12 @@ bool testAreaFail()
     //  ensure that the areas that are invalid are all marked as invalid.
     //  ensure that the partition-set is allocated only if it is available.
     //
+    alloc.free(bb);
+    free_memory(m, 48 * sz_mb);
+    alloc.release_local_areas();
+    bb = alloc.malloc(24);
+    alloc.free(bb);
+    alloc.release_local_areas();
     return false;
 }
 int main()
