@@ -114,8 +114,15 @@ void test()
  [ ] integrate with ALLOT
  [ ] test with builder. DONE!
  */
-#ifndef Malloc_h
-#define Malloc_h
+#ifndef _alloc_h_
+#define _alloc_h_
+/*
+
+ */
+#include "clogger.h"
+#if defined(CLOGGING)
+CLOGGER(_alloc_h_, 4096)
+#endif
 
 #if defined(_MSC_VER)
 #define WINDOWS
@@ -238,6 +245,17 @@ cache_align const uintptr_t partitions_offsets[] {
     ((uintptr_t)128 << 40), // end
 };
 
+cache_align const uintptr_t partitions_size[] {
+    // GIGABYTES
+    ((uintptr_t)6 << 30), // the first two partitions are merged
+    ((uintptr_t)6 << 30), //
+    ((uintptr_t)8 << 30),
+    ((uintptr_t)16 << 30),
+    ((uintptr_t)32 << 30),
+    ((uintptr_t)64 << 30),
+    ((uintptr_t)128 << 30),
+};
+
 const uint8_t partition_count = 7;
 
 static inline int8_t partition_from_addr(uintptr_t p)
@@ -250,13 +268,13 @@ static inline int8_t partition_from_addr(uintptr_t p)
     }
 }
 
-static inline int16_t partition_id_from_addr_and_partition(uintptr_t p, int8_t pidx)
+static inline uint32_t partition_id_from_addr_and_partition(uintptr_t p, int8_t pidx)
 {
     if (pidx < 0) {
         return -1;
     }
-    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&partitions_offsets[pidx];
-    return (int16_t)((size_t)diff >> 10);
+    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)partitions_offsets[pidx];
+    return (uint32_t)(((size_t)diff) / partitions_size[pidx]);
 }
 
 static inline int16_t partition_id_from_addr(uintptr_t p)
@@ -698,8 +716,8 @@ public:
         next = (Area *)(((inv_ptr_mask & (uintptr_t)next) | (uintptr_t)n));
     };
 
-    inline size_t getSize() { return (size & 0xffffffff00000000) >> 32; }
-    inline void setSize(size_t s) { size |= s << 32; }
+    inline size_t getSize() { return size; }
+    inline void setSize(size_t s) { size = s; }
 
     static Area *fromAddr(uintptr_t p)
     {
@@ -850,7 +868,6 @@ public:
     {
         container_exponent |= ((uint64_t)prt << 48);
     }
-    inline size_t getSectionSize() const { return asize & 0xffffffff; };
     inline size_t getSize() const { return asize; }
 
     inline bool isFull() const
@@ -1413,29 +1430,22 @@ static inline bool reset_memory(void *base, size_t size)
     return true;
 }
 
-static bool safe_to_aquire(void *base, void *ptr)
+static bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
 {
     if (base == ptr) {
         return true;
     }
-    auto pidbase = partition_from_addr((uintptr_t)base);
-    auto pidptr = partition_from_addr((uintptr_t)ptr);
-    if (pidbase != pidptr) {
-        // we don't allow allocating from one partition into the other
+    uintptr_t range = (uintptr_t)((uint8_t *)ptr + size);
+    if (range > end) {
         return false;
     }
-    auto current_pid = partition_id_from_addr_and_partition((uintptr_t)base, pidbase);
-    auto available_pid = partition_id_from_addr_and_partition((uintptr_t)ptr, pidptr);
-    if (current_pid == available_pid) {
-        return true;
-    }
-    return false;
+    return true;
 }
 // yes, for the rare occation an issue arises, we just lock the mutex to avoid
 // thread clashing issues on windows
 std::mutex aligned_alloc_mutex;
 static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
-    bool commit)
+    bool commit, uintptr_t end)
 {
     // alignment is smaller than a page size or not a power of two.
     if (!(alignment >= os_page_size && POWER_OF_TWO(alignment)))
@@ -1449,23 +1459,25 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
     if (ptr == NULL)
         return NULL;
 
-    if (!safe_to_aquire(base, ptr)) {
+    if (!safe_to_aquire(base, ptr, size, end)) {
         free_memory(ptr, size);
         return NULL;
     }
+
     if (((uintptr_t)ptr % alignment != 0)) {
         // this should happen very rarely, if at all.
         // release our failed attempt.
         free_memory(ptr, size);
 
+        // Now we attempt to overallocate
         size_t adj_size = size + alignment;
         ptr = alloc_memory(base, adj_size, commit);
         if (ptr == NULL)
             return NULL;
 
         // if the new ptr is not in our current partition set
-        if (!safe_to_aquire(base, ptr)) {
-            free_memory(ptr, size);
+        if (!safe_to_aquire(base, ptr, adj_size, end)) {
+            free_memory(ptr, adj_size);
             return NULL;
         }
 
@@ -1485,7 +1497,7 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
             // Why would this fail?
             return NULL;
         }
-        if (!safe_to_aquire(base, ptr)) {
+        if (!safe_to_aquire(base, ptr, size, end)) {
             free_memory(ptr, size);
             return NULL;
         }
@@ -1657,15 +1669,26 @@ public:
     Area *get_next_area(Area::List *area_queue, uint64_t size,
         uint64_t alignment)
     {
+#define get_next_area_assert __LINE__
+#define get_next_area_head_is_null __LINE__
+#define get_next_area_head_is_not_null __LINE__
+#define get_next_area_room_internally __LINE__
+#define get_next_area_room_at_the_end __LINE__
+#define get_next_area_room_at_the_front __LINE__
+#define get_next_area_no_room_left __LINE__
+
         void *aligned_addr = NULL;
         Area *insert = NULL;
         auto asize = align_up(size, alignment);
         uint64_t delta = (uint64_t)((uint8_t *)area_queue->end_addr - area_queue->start_addr);
+        log_assert(_alloc_h_, get_next_area_assert, alignment > size);
         if (area_queue->head == NULL) {
             aligned_addr = (void *)area_queue->start_addr;
+            log_define(_alloc_h_, get_next_area_head_is_null);
         } else {
             // is there room at the end
             //
+            log_define(_alloc_h_, get_next_area_head_is_not_null);
             uint64_t tail_end = (uint64_t)((uint8_t *)area_queue->tail + area_queue->tail->getSize());
             delta = (uint64_t)((uint8_t *)area_queue->end_addr - tail_end);
             if (delta < size && (area_queue->tail != area_queue->head)) {
@@ -1676,28 +1699,32 @@ public:
                     size_t c_end = c_size + (size_t)(uint8_t *)current;
                     delta = (uint64_t)((uint8_t *)next - c_end);
                     if (delta >= asize) {
+                        log_define(_alloc_h_, get_next_area_room_internally);
                         insert = current;
                         break;
                     }
                     current = next;
                 }
             } else if (delta >= size) {
+                log_define(_alloc_h_, get_next_area_room_at_the_end);
                 insert = area_queue->tail;
             }
 
             if (insert == NULL) {
-                return NULL;
+                log_define(_alloc_h_, get_next_area_room_at_the_front);
+                delta = (uint64_t)((uint8_t *)area_queue->head - area_queue->start_addr);
+            } else {
+                auto si = insert->getSize();
+                auto offset = (uintptr_t)((uint8_t *)insert + si);
+                aligned_addr = (void *)align_up((uintptr_t)offset, alignment);
             }
-
-            auto si = insert->getSize();
-            auto offset = (uintptr_t)((uint8_t *)insert + si);
-            aligned_addr = (void *)align_up((uintptr_t)offset, alignment);
         }
         if (delta < size) {
+            log_define(_alloc_h_, get_next_area_no_room_left);
             return NULL;
         }
 
-        Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, size, alignment, true);
+        Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, size, alignment, true, area_queue->end_addr);
         if (new_area == NULL) {
             return NULL;
         }
@@ -1707,6 +1734,7 @@ public:
         new_area->setNext(NULL);
         new_area->setPrev(NULL);
         list_insert_at(*area_queue, insert, new_area);
+        // list_enqueue(*area_queue, new_area);
         return new_area;
     }
 
@@ -2038,7 +2066,7 @@ struct Allocator
     uintptr_t previous_pool_end;
 
 private:
-    inline void set_previous_pools(Pool *p)
+    inline void set_previous_pool(Pool *p)
     {
         previous_pool = p;
         previous_pool_start = (uintptr_t)&p->blocks[0];
@@ -2145,7 +2173,7 @@ private:
                 section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
                 Pool *pool = (Pool *)section->findCollection(p);
                 pool->freeBlock(p);
-                set_previous_pools(pool);
+                set_previous_pool(pool);
                 if (!pool->isConnected()) {
                     // reconnect
                     auto _part_alloc = &partition_allocators[section->partition_id];
@@ -2333,7 +2361,7 @@ private:
 
         part_alloc->pool_count++;
         list_enqueue(*queue, start);
-        previous_pool = start;
+        set_previous_pool(start);
         previous_size = s;
         return start->getFreeBlock();
     }
