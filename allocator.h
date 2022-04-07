@@ -1,80 +1,4 @@
 
-// [ ] thread_free
-// [ ] thread_setup
-// [ ] stats.
-// [ ] tests.
-//    - ordered allocations.
-//    - unordered allocations. causing fragmentation.
-//    - writing into allocated memory, ensuring that writing into the bounds
-//    does not cause issues.
-//    - writing and deleting memory from threads.
-//    - comparing against other allocators performance.
-
-//
-typedef enum t_desc_type {
-    dt_none = -1, //  null
-    dt_builtin = 0, //  local type
-    dt_struct, //  local struct
-    dt_array, //  local array
-    dt_struct_ref, //  heap struct
-    dt_builtin_ref, //  heap builtin
-    dt_array_ref, //  heap array
-} desc_type;
-
-//
-typedef struct t_desc_define
-{
-    const char *name; // who
-    desc_type dtype; // what
-    uint32_t size; //
-    uint32_t offset; // where
-    const t_desc_define *schema; // how
-} desc_define;
-
-// terminal placement.
-const desc_define end_desc = { NULL, dt_none, 0, 0, NULL };
-
-// define struct
-const desc_define sub_type[] {
-    { "thing", dt_none, 4, 0, NULL },
-    end_desc
-};
-
-const desc_define my_type[] {
-    { "thing", dt_none, 4, 0, sub_type },
-    end_desc
-};
-//
-// the allocator can remove a ptr network.
-//      - plucks free memory into a deferred list for each owner thread.
-//      - can more effectively release memory.
-//      - can pluck items into a deferred list per thread.
-// the allocator can move a ptr network.
-//      - copy any item of memory that is not local to the current thread.
-// the allocator can copy a ptr network.
-//      - make a new copy of a network in a single contiguous buffer.
-//
-void test_a(void *src, const desc_define *t)
-{
-    // free a network of objects.
-    // does the type have desc objects.
-    // are they all pointing to the same one.
-    //  - then it is just collecting the offsets and traversing those.
-    //  - for every type of equal size. if the ptrs are all just within the same thread area.
-    //      we can simply string the ptrs together like a
-    int i = 0;
-    do {
-        //
-        //
-        //
-    } while (t[i++].name != NULL);
-}
-
-void test()
-{
-    test_a(NULL, my_type);
-}
-
 /*
 
  Another random thought.
@@ -119,10 +43,8 @@ void test()
 /*
 
  */
-#include "clogger.h"
-#if defined(CLOGGING)
+#include "ctest.h"
 CLOGGER(_alloc_h_, 4096)
-#endif
 
 #if defined(_MSC_VER)
 #define WINDOWS
@@ -133,29 +55,17 @@ CLOGGER(_alloc_h_, 4096)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #ifdef WINDOWS
 #include <intrin.h>
 #include <memoryapi.h>
 #include <windows.h>
-uint64_t rdtsc()
-{
-    return __rdtsc();
-}
 #else
 #include <sys/mman.h>
 #include <unistd.h>
-#include <x86intrin.h>
-uint64_t rdtsc()
-{
-    unsigned int lo, hi;
-    __asm__ __volatile__("rdtsc"
-                         : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
 #endif
-#include <atomic>
-#include <thread>
 
+#include <stdatomic.h>
 #define WSIZE 4 /* Word size in bytes */
 #define DSIZE 8 /* Double word size in bytes */
 #define SZ_KB 1024ULL
@@ -346,7 +256,6 @@ typedef union bitmask
     }
 } mask;
 
-static size_t os_num_hardware_threads = std::thread::hardware_concurrency();
 static inline size_t get_os_page_size()
 {
 #ifdef WINDOWS
@@ -411,6 +320,15 @@ struct spinlock
 
     void unlock() noexcept { lock_.store(false, std::memory_order_release); }
 };
+
+/*
+partition_set
+    - free to local queue. if not the same thread.
+    - if the last foreign thread id was different.
+        - move the local queue to targt queue
+    - if the local queue is not empty when allocation is requested
+        - move the local queue to the target queue
+ */
 
 struct heap_block
 {
@@ -1018,12 +936,12 @@ public:
     inline void setNext(Pool *n) { next = n; }
 };
 
-struct Page
+struct Heap
 {
     struct Queue
     {
-        Page *head;
-        Page *tail;
+        Heap *head;
+        Heap *tail;
     };
     struct FreeQueue
     {
@@ -1041,8 +959,8 @@ struct Page
     uint8_t *start;
     FreeQueue free_nodes;
 
-    Page *prev;
-    Page *next;
+    Heap *prev;
+    Heap *next;
 
     inline bool isConnected() { return prev != NULL || next != NULL; }
 
@@ -1206,7 +1124,7 @@ struct Page
         uintptr_t section_end = align_up((uintptr_t)this, psize);
         auto remaining_size = section_end - (uintptr_t)&blocks[0];
 
-        auto block_memory = psize - sizeof(Page) - sizeof(Section);
+        auto block_memory = psize - sizeof(Heap) - sizeof(Section);
         auto header_footer_offset = sizeof(uintptr_t) * 2;
         idx = pidx;
         used_memory = 0;
@@ -1222,10 +1140,10 @@ struct Page
 
 public:
     uint8_t blocks[1];
-    inline Page *getPrev() const { return prev; }
-    inline Page *getNext() const { return next; }
-    inline void setPrev(Page *p) { prev = p; }
-    inline void setNext(Page *n) { next = n; }
+    inline Heap *getPrev() const { return prev; }
+    inline Heap *getNext() const { return next; }
+    inline void setPrev(Heap *p) { prev = p; }
+    inline void setNext(Heap *n) { next = n; }
 };
 
 #define Z4(x) x(), x(), x(), x()
@@ -1513,7 +1431,7 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
 }
 
 cache_align Pool::Queue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = { Z1024(POOL_HEAP) };
-cache_align Page::Queue page_queues[MAX_THREADS][3] = { Z1024(PAGE_HEAP) };
+cache_align Heap::Queue page_queues[MAX_THREADS][3] = { Z1024(PAGE_HEAP) };
 cache_align Section::Queue section_queues[MAX_THREADS] = { Z1024(SECTION_HEAP) };
 
 static inline uint8_t sizeToPool(size_t as)
@@ -1539,6 +1457,19 @@ static inline uint8_t sizeToPage(size_t as)
     }
 }
 
+// lockless message queue
+typedef struct message_t
+{
+    _Atomic(uintptr_t) next;
+} message;
+
+typedef struct message_queue_t
+{
+    _Atomic(uintptr_t) head;
+    _Atomic(uintptr_t) tail;
+} message_queue;
+
+typedef void (*free_func)(void *);
 struct PartitionAllocator
 {
 public:
@@ -1551,7 +1482,7 @@ public:
     // sections local to this thread with free pages or pools
     Section::Queue *sections;
     // free pages that have room for various size allocations.
-    Page::Queue *pages;
+    Heap::Queue *pages;
     // how man pages in total have been allocated.
     uint32_t page_count;
 
@@ -1559,6 +1490,31 @@ public:
     Pool::Queue *pools;
     // how many pools in total have been allocated.
     uint32_t pool_count;
+
+    // collection of messages for other threads
+    message *thread_messages;
+    uint32_t message_count;
+    // a queue of messages from other threads.
+    message_queue *thread_free_queue;
+
+    message *get_last_message()
+    {
+        message *msg = thread_messages;
+        if (msg == NULL) {
+            return NULL;
+        }
+        while ((void *)msg->next != NULL) {
+            msg = (message *)msg->next;
+        }
+        return msg;
+    }
+
+    void thread_free(void *p)
+    {
+        message *new_free = (message *)p;
+        new_free->next = (uintptr_t)thread_messages;
+        thread_messages = new_free;
+    }
 
     bool release_local_areas()
     {
@@ -1669,6 +1625,7 @@ public:
     Area *get_next_area(Area::List *area_queue, uint64_t size,
         uint64_t alignment)
     {
+
 #define get_next_area_assert __LINE__
 #define get_next_area_head_is_null __LINE__
 #define get_next_area_head_is_not_null __LINE__
@@ -1955,7 +1912,7 @@ public:
             ContainerType root_ctype = root_section->getContainerType();
             if (root_ctype == PAGE) {
                 Exponent exp = root_section->getContainerExponent();
-                auto page = (Page *)root_section->getCollection(0, exp);
+                auto page = (Heap *)root_section->getCollection(0, exp);
                 auto queue = &pages[root_section->getContainerExponent() - 3];
                 list_remove(*queue, page);
                 return true;
@@ -2054,12 +2011,14 @@ struct thread_init
     ~thread_init();
 };
 
+static const int32_t thread_message_imit = 100;
 struct Allocator
 {
     thread_local static uint8_t main_index;
 
     int32_t _thread_idx;
     PartitionAllocator *part_alloc;
+    PartitionAllocator *thread_free_part_alloc;
     Pool *previous_pool;
     size_t previous_size;
     uintptr_t previous_pool_start;
@@ -2084,9 +2043,7 @@ private:
 
 public:
     inline static Allocator &get_thread_instance();
-
     inline bool is_main() { return _thread_idx == 0; }
-
     inline int64_t thread_id() { return (int64_t)this; }
 
     void *malloc(size_t s)
@@ -2100,6 +2057,9 @@ public:
         } else {
             previous_pool = NULL;
         }
+
+        flush_thread_free_queue();
+
         if (s <= LARGE_OBJECT_SIZE) {
             return alloc_from_pool(s);
         } else if (s <= AREA_SIZE_LARGE) {
@@ -2112,6 +2072,7 @@ public:
 
     void *malloc_page(size_t s)
     {
+        flush_thread_free_queue();
         if (s <= AREA_SIZE_LARGE) {
             // allocate form the large page
             return alloc_from_page(s);
@@ -2124,7 +2085,7 @@ public:
     {
         if (p == NULL)
             return;
-
+        flush_thread_free_queue();
         if (check_previous_pool(p)) {
             return previous_pool->freeBlock(p);
         } else {
@@ -2153,6 +2114,7 @@ public:
         auto midx = main_index;
         for (int i = 0; i < MAX_THREADS; i++) {
             if (partition_owners[i] == midx) {
+                thread_dequeue_all(partition_allocators[i].thread_free_queue);
                 bool was_released = partition_allocators[i].release_local_areas();
                 if (midx != i && was_released) {
                     release_partition_set(i);
@@ -2164,6 +2126,76 @@ public:
     }
 
 private:
+    void thread_enqueue(message_queue *queue, message *first, message *last)
+    {
+        atomic_store_explicit(&last->next, NULL, memory_order_release); // last.next = null
+        message *prev = (message *)atomic_exchange_explicit(&queue->tail, (uintptr_t)last, memory_order_release); // swap back and last
+        atomic_store_explicit(&prev->next, (uintptr_t)first, memory_order_release); // prev.next = first
+    }
+
+    void thread_dequeue_all(message_queue *queue)
+    {
+        message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+        message *curr = (message *)queue->head;
+
+        // loop between start and end addres
+        while (curr != back) {
+            message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+            if (next == NULL)
+                break;
+            free(curr);
+            curr = next;
+        }
+        queue->head = (uintptr_t)curr;
+    }
+
+    void thread_dequeue(message_queue *queue)
+    {
+        message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+        message *curr = (message *)queue->head;
+
+        // loop between start and end addres
+        if (curr != back) {
+            message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+            if (next == NULL)
+                return;
+            free(curr);
+            curr = next;
+        }
+        queue->head = (uintptr_t)curr;
+    }
+
+    void flush_thread_free_queue()
+    {
+        thread_dequeue_all(part_alloc->thread_free_queue);
+    }
+
+    void flush_thread_free()
+    {
+        if (thread_free_part_alloc != NULL) {
+            // get the first and last item of the tf queue
+            message *lm = part_alloc->get_last_message();
+            if (lm != NULL) {
+                thread_enqueue(thread_free_part_alloc->thread_free_queue, part_alloc->thread_messages, lm);
+                part_alloc->message_count = 0;
+            }
+        }
+    }
+
+    void thread_free(void *p, uint64_t pid)
+    {
+        auto _part_alloc = &partition_allocators[pid];
+        if (_part_alloc != thread_free_part_alloc) {
+            flush_thread_free();
+            thread_free_part_alloc = _part_alloc;
+        }
+        part_alloc->thread_free(p);
+        part_alloc->message_count++;
+        if (part_alloc->message_count > thread_message_imit) {
+            flush_thread_free();
+        }
+    }
+
     inline void free_from_section(void *p, size_t area_size)
     {
         Section *section = (Section *)((uintptr_t)p & ~(area_size - 1));
@@ -2189,7 +2221,7 @@ private:
                     }
                 }
             } else {
-                Page *page = (Page *)section->findCollection(p);
+                Heap *page = (Heap *)section->findCollection(p);
                 uint32_t pageIdx = section->getContainerExponent() - 3;
                 page->free(p, pageIdx > 0);
                 // if the free pools list is empty.
@@ -2202,6 +2234,8 @@ private:
                     }
                 }
             }
+        } else {
+            thread_free(p, section->partition_id);
         }
     }
 
@@ -2212,7 +2246,7 @@ private:
         if (_thread_idx == partition_owners[section->partition_id]) {
             auto _part_alloc = &partition_allocators[section->partition_id];
             if (section->getContainerType() == PAGE) {
-                auto page = (Page *)section->findCollection(p);
+                auto page = (Heap *)section->findCollection(p);
                 page->free(p, true);
                 // if the pool is disconnected from the queue
                 if (!page->isConnected()) {
@@ -2225,6 +2259,8 @@ private:
                 Area *area = (Area *)section;
                 _part_alloc->free_area(area);
             }
+        } else {
+            thread_free(p, section->partition_id);
         }
     }
 
@@ -2265,7 +2301,7 @@ private:
 
     void *alloc_from_page(size_t s)
     {
-        Page *start = NULL;
+        Heap *start = NULL;
         auto queue = &part_alloc->pages[sizeToPage(s)];
         if (queue->head != NULL) {
             start = queue->head;
@@ -2298,7 +2334,7 @@ private:
         new_section->prev = NULL;
 
         new_section->claimAll();
-        start = (Page *)new_section->getCollection(0, exponent);
+        start = (Heap *)new_section->getCollection(0, exponent);
         start->init(0, exponent);
 
         part_alloc->page_count++;
@@ -2375,6 +2411,8 @@ private:
             // try again
             auto new_partition_set_idx = reserve_any_partition_set_for(main_index);
             if (new_partition_set_idx != -1) {
+                flush_thread_free();
+                flush_thread_free_queue();
                 part_alloc = &partition_allocators[new_partition_set_idx];
                 ptr = alloc_from_pool(s);
             }
@@ -2487,5 +2525,9 @@ struct _MemoryBlock
         return NULL;
     }
 };
+
+#if defined(CLOGGING)
+
+#endif
 
 #endif /* Malloc_h */
