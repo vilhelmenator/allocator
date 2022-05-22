@@ -1219,12 +1219,12 @@ typedef struct message_queue_t
 
 #define EMPTY_MESSAGE()                                                                                                \
     {                                                                                                                  \
-        0UL                                                                                                            \
+        ATOMIC_VAR_INIT(0UL)                                                                                           \
     }
 cache_align message message_sentinals[MAX_THREADS] = {Z1024(EMPTY_MESSAGE)};
 #define zMessageQueue(tid)                                                                                             \
     {                                                                                                                  \
-        (uintptr_t) & message_sentinals[tid], (uintptr_t)&message_sentinals[tid]                                       \
+        ATOMIC_VAR_INIT((uintptr_t)&message_sentinals[tid]), ATOMIC_VAR_INIT((uintptr_t)&message_sentinals[tid])       \
     }
 #define MESSAGE_LAYOUT TH1024(zMessageQueue)
 cache_align message_queue message_queues[MAX_THREADS] = MESSAGE_LAYOUT;
@@ -1502,8 +1502,8 @@ message *partition_allocator_get_last_message(PartitionAllocator *pa)
     if (msg == NULL) {
         return NULL;
     }
-    while ((void *)msg->next != NULL) {
-        msg = (message *)msg->next;
+    while ((uintptr_t)msg->next != 0) {
+        msg = (message *)(uintptr_t)msg->next;
     }
     return msg;
 }
@@ -1970,7 +1970,7 @@ static AreaList partition_area_5 = {NULL, NULL, 0, ((uintptr_t)64 << 40), ((uint
 
 static cache_align PartitionAllocator partition_allocators[MAX_THREADS] = PARTITION_LAYOUT;
 
-static _Atomic(int32_t) global_thread_idx = 0;
+static _Atomic(int32_t) global_thread_idx = ATOMIC_VAR_INIT(0);
 
 static const int32_t thread_message_imit = 100;
 
@@ -2019,7 +2019,7 @@ static void allocator_thread_enqueue(message_queue *queue, message *first, messa
 static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 {
     message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    message *curr = (message *)queue->head;
+    message *curr = (message *)(uintptr_t)queue->head;
 
     // loop between start and end addres
     while (curr != back) {
@@ -2035,7 +2035,7 @@ static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
 {
     message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    message *curr = (message *)queue->head;
+    message *curr = (message *)(uintptr_t)queue->head;
 
     // loop between start and end addres
     if (curr != back) {
