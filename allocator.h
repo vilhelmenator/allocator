@@ -2,17 +2,17 @@
 /*
 
  Another random thought.
-    - if a complicated structure is something that the allocator understands. Such as a tree, or a graph.
-        : Can the allocator be used like a persistence util to traverse through the pointers and release them.
-        : A user app could collect all pointers into an array and call free for the whole buffer.
-        : Calling a destructor on an object would cause the system to defer free all the items until the destructor is done.
-        : allot::destruct( obj ) -> any nested calls to destruct would cause a deferred free operation.
-        : pass in a pointer to a struct. pass in a struct to describe the navigation path of a pointer tree.
-        : traverse the network of pointers and pass them to their correct pools or pages.
-        : destruct( ptr, schema ) -> no nested destruct calls.
-        : construct( ptr, schema ) ->
- 1.
- [ ] random allocations sizes.
+    - if a complicated structure is something that the allocator understands.
+Such as a tree, or a graph. : Can the allocator be used like a persistence util
+to traverse through the pointers and release them. : A user app could collect
+all pointers into an array and call free for the whole buffer. : Calling a
+destructor on an object would cause the system to defer free all the items until
+the destructor is done. : allot::destruct( obj ) -> any nested calls to destruct
+would cause a deferred free operation. : pass in a pointer to a struct. pass in
+a struct to describe the navigation path of a pointer tree. : traverse the
+network of pointers and pass them to their correct pools or pages. : destruct(
+ptr, schema ) -> no nested destruct calls. : construct( ptr, schema ) -> 1. [ ]
+random allocations sizes.
     - within a pool size class.
     - within a partition size class.
     - mix pool size classes.
@@ -27,24 +27,22 @@
  [ ] random allocations sizes.
     - same as previous allocation test, but with multiple threads.
     - all memory in separate threads.
-    - distribute memory among threads so that each thread is freeing memory into other threads and its own.
-    - distribute memory among threads so that each thread is only freeing memory into other threads.
-4.
- [ ] improve page allocations. ordererd lists. double free tests.
- [ ] memory API. alloc and string functions.
-5.
- [ ] add memory block objects and implicit list alocation support.
- [ ] stats. leaks.
- [ ] integrate with ALLOT
- [ ] test with builder. DONE!
+    - distribute memory among threads so that each thread is freeing memory into
+other threads and its own.
+    - distribute memory among threads so that each thread is only freeing memory
+into other threads. 4. [ ] improve page allocations. ordererd lists. double free
+tests. [ ] memory API. alloc and string functions. 5. [ ] add memory block
+objects and implicit list alocation support. [ ] stats. leaks. [ ] integrate
+with ALLOT [ ] test with builder. DONE!
  */
 #ifndef _alloc_h_
 #define _alloc_h_
 /*
 
  */
-#include "ctest.h"
-CLOGGER(_alloc_h_, 4096)
+#include "../ctest/ctest.h"
+#include "../cthread/cthread.h"
+CLOGGER(_alloc_h_)
 
 #if defined(_MSC_VER)
 #define WINDOWS
@@ -52,10 +50,10 @@ CLOGGER(_alloc_h_, 4096)
 
 #include <assert.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #ifdef WINDOWS
 #include <intrin.h>
 #include <memoryapi.h>
@@ -65,19 +63,14 @@ CLOGGER(_alloc_h_, 4096)
 #include <unistd.h>
 #endif
 
-#include <stdatomic.h>
 #define WSIZE 4 /* Word size in bytes */
 #define DSIZE 8 /* Double word size in bytes */
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
 #define SZ_GB (SZ_MB * SZ_KB)
 
-#define max(x, y) ((x) > (y) ? (x) : (y))
-#define min(x, y) ((x) < (y) ? (x) : (y))
-
-#define memory_block(x) memory_block_##(x)
-#define memory_block_0(x) (_MemoryBlock(x);)
-#define memory_block_1(x) (_MemoryBlock(alloca(x), x);)
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
 
 #define MIN_ALLOC_SIZE sizeof(void *)
 #define MAX_SMALL_SIZE 128 * MIN_ALLOC_SIZE
@@ -85,13 +78,13 @@ CLOGGER(_alloc_h_, 4096)
 
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
 
-#define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4 // 16k
-#define DEFAULT_PAGE_SIZE SMALL_OBJECT_SIZE * 8 // 128kb
-#define MEDIUM_OBJECT_SIZE DEFAULT_PAGE_SIZE // 128kb
-#define DEFAULT_MID_PAGE_SIZE MEDIUM_OBJECT_SIZE * 4 // 512kb
-#define LARGE_OBJECT_SIZE DEFAULT_MID_PAGE_SIZE * 4 // 2Mb
+#define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4    // 16k
+#define DEFAULT_PAGE_SIZE SMALL_OBJECT_SIZE * 8       // 128kb
+#define MEDIUM_OBJECT_SIZE DEFAULT_PAGE_SIZE          // 128kb
+#define DEFAULT_MID_PAGE_SIZE MEDIUM_OBJECT_SIZE * 4  // 512kb
+#define LARGE_OBJECT_SIZE DEFAULT_MID_PAGE_SIZE * 4   // 2Mb
 #define DEFAULT_LARGE_PAGE_SIZE LARGE_OBJECT_SIZE * 2 // 4Mb
-#define HUGE_OBJECT_SIZE DEFAULT_LARGE_PAGE_SIZE * 8 // 32Mb
+#define HUGE_OBJECT_SIZE DEFAULT_LARGE_PAGE_SIZE * 8  // 32Mb
 
 #define SECTION_SIZE (1ULL << 22ULL)
 
@@ -102,15 +95,13 @@ CLOGGER(_alloc_h_, 4096)
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
 
-#define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL) // 32Mb
+#define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL)  // 32Mb
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL) // 128Mb
-#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL) // 256Mb
+#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)  // 256Mb
 #define MASK_FULL 0xFFFFFFFFFFFFFFFF
 
-#define CACHED_POOL_COUNT 64
 #define POOL_BIN_COUNT 17 * 8 + 2
 #define HEADER_SIZE 64
-#define PAGE_BIN_COUNT 3
 
 #define AREA_SMALL_MAX_MEMORY AREA_SIZE_SMALL - HEADER_SIZE
 #define AREA_LARGE_MAX_MEMORY AREA_SIZE_LARGE - HEADER_SIZE
@@ -118,52 +109,78 @@ CLOGGER(_alloc_h_, 4096)
 #define PAGE_MAX_MEMORY AREA_SIZE_SMALL * 2 - HEADER_SIZE
 
 #define MAX_SMALL_AREAS 192 // 32Mb over 6Gb
-#define MAX_LARGE_AREAS 64 // 128Mb over 8Gb
-#define MAX_HUGE_AREAS 64 // 256Mb over 16Gb
+#define MAX_LARGE_AREAS 64  // 128Mb over 8Gb
+#define MAX_HUGE_AREAS 64   // 256Mb over 16Gb
 
-#define MAX_THREADS 1024 // don't change this...
+#define MAX_THREADS 1024
+#define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
 
-cache_align const uintptr_t size_clss_to_exponent[] {
+static int countBits(uint32_t v)
+{
+    uint32_t c = 0;
+    for (; v; c++) {
+        v &= v - 1; // clear the least significant bit set
+    }
+    return c;
+}
+static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
+{
+    uintptr_t mask = alignment - 1;
+    uintptr_t sm = (sz + mask);
+    if ((alignment & mask) == 0) {
+        return sm & ~mask;
+    } else {
+        return (sm / alignment) * alignment;
+    }
+}
+
+static inline uintptr_t align_down(uintptr_t sz, size_t alignment)
+{
+    uintptr_t mask = alignment - 1;
+    if ((alignment & mask) == 0) {
+        return (sz & ~mask);
+    } else {
+        return ((sz / alignment) * alignment);
+    }
+}
+static inline size_t align(size_t n) { return (n + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1); }
+cache_align const uintptr_t size_clss_to_exponent[] = {
     17, // 128k
     19, // 512k
     22, // 4Mb
     25, // 32Mb
     27, // 128Mb
-    28 // 256Mb
+    28  // 256Mb
 };
 
-enum AreaType {
-    AT_FIXED_32, //  containes small allocations
+typedef enum AreaType_t {
+    AT_FIXED_32,  //  containes small allocations
     AT_FIXED_128, //  reserved for a particular partition, collecting object
                   //  between 4 - 32 megs.
     AT_FIXED_256, //  reserved for a particular partition, collecting object
                   //  between 32 - 128 megs.
-    AT_VARIABLE, //  for objects, where we want a single allocatino per item in a
-                 //  dedicated partition.
-};
+    AT_VARIABLE,  //  for objects, where we want a single allocatino per item in
+                  //  a dedicated partition.
+} AreaType;
 //
 // partition counter
 //
-cache_align const uintptr_t partitions_offsets[] {
+cache_align const uintptr_t partitions_offsets[] = {
     // TERABYTES
     ((uintptr_t)2 << 40), // allocations smaller than SECTION_MAX_MEMORY
     ((uintptr_t)4 << 40),
-    ((uintptr_t)8 << 40), // SECTION_MAX_MEMORY < x < AREA_MAX_MEMORY
-    ((uintptr_t)16 << 40), // AREA_MAX_MEMORY < x < 1GB
-    ((uintptr_t)32 << 40), // resource allocations.
-    ((uintptr_t)64 << 40), // Huge allocations
+    ((uintptr_t)8 << 40),   // SECTION_MAX_MEMORY < x < AREA_MAX_MEMORY
+    ((uintptr_t)16 << 40),  // AREA_MAX_MEMORY < x < 1GB
+    ((uintptr_t)32 << 40),  // resource allocations.
+    ((uintptr_t)64 << 40),  // Huge allocations
     ((uintptr_t)128 << 40), // end
 };
 
-cache_align const uintptr_t partitions_size[] {
+cache_align const uintptr_t partitions_size[] = {
     // GIGABYTES
     ((uintptr_t)6 << 30), // the first two partitions are merged
     ((uintptr_t)6 << 30), //
-    ((uintptr_t)8 << 30),
-    ((uintptr_t)16 << 30),
-    ((uintptr_t)32 << 30),
-    ((uintptr_t)64 << 30),
-    ((uintptr_t)128 << 30),
+    ((uintptr_t)8 << 30), ((uintptr_t)16 << 30), ((uintptr_t)32 << 30), ((uintptr_t)64 << 30), ((uintptr_t)128 << 30),
 };
 
 const uint8_t partition_count = 7;
@@ -189,72 +206,66 @@ static inline uint32_t partition_id_from_addr_and_partition(uintptr_t p, int8_t 
 
 static inline int16_t partition_id_from_addr(uintptr_t p)
 {
-    auto pidx = partition_from_addr(p);
+    int8_t pidx = partition_from_addr(p);
     return partition_id_from_addr_and_partition(p, pidx);
 }
 
-int countBits(uint32_t v)
-{
-    uint32_t c = 0;
-    for (; v; c++) {
-        v &= v - 1; // clear the least significant bit set
-    }
-    return c;
-}
-
-typedef union bitmask
+typedef union Bitmask_u
 {
     uint64_t whole;
     uint32_t _w32[2];
+} Bitmask;
 
-    inline bool isSet_hi(uint8_t bit) { return _w32[1] & ((uint32_t)1 << bit); }
-    inline bool isSet_lo(uint8_t bit) { return _w32[0] & ((uint32_t)1 << bit); }
+static inline bool bitmask_is_set_hi(Bitmask *bm, uint8_t bit) { return bm->_w32[1] & ((uint32_t)1 << bit); }
+static inline bool bitmask_is_set_lo(Bitmask *bm, uint8_t bit) { return bm->_w32[0] & ((uint32_t)1 << bit); }
 
-    inline bool isFull_hi() { return _w32[1] == 0xFFFFFFFF; }
-    inline bool isFull_lo() { return _w32[0] == 0xFFFFFFFF; }
-    inline bool isEmpty_hi() { return _w32[1] == 0; }
-    inline bool isEmpty_lo() { return _w32[0] == 0; }
+static inline bool bitmask_is_full_hi(Bitmask *bm) { return bm->_w32[1] == 0xFFFFFFFF; }
+static inline bool bitmask_is_full_lo(Bitmask *bm) { return bm->_w32[0] == 0xFFFFFFFF; }
+static inline bool bitmask_is_empty_hi(Bitmask *bm) { return bm->_w32[1] == 0; }
 
-    inline void reserveAll() { whole = 0xFFFFFFFFFFFFFFFF; }
+static inline bool bitmask_is_empty_lo(Bitmask *bm) { return bm->_w32[0] == 0; }
 
-    inline void reserve_hi(uint8_t bit) { _w32[1] |= ((uint32_t)1 << bit); }
-    inline void reserve_lo(uint8_t bit) { _w32[0] |= ((uint32_t)1 << bit); }
+static inline void bitmask_reserve_all(Bitmask *bm) { bm->whole = 0xFFFFFFFFFFFFFFFF; }
 
-    inline void freeAll() { whole = 0; }
-    inline void freeIdx_hi(uint8_t bit) { _w32[1] &= ~((uint32_t)1 << bit); }
-    inline void freeIdx_lo(uint8_t bit) { _w32[0] &= ~((uint32_t)1 << bit); }
+static inline void bitmask_reserve_hi(Bitmask *bm, uint8_t bit) { bm->_w32[1] |= ((uint32_t)1 << bit); }
+static inline void bitmask_reserve_lo(Bitmask *bm, uint8_t bit) { bm->_w32[0] |= ((uint32_t)1 << bit); }
 
-    inline int8_t firstFree_hi()
-    {
-        auto m = ~_w32[1];
-        return __builtin_ctz(m);
+static inline void bitmask_free_all(Bitmask *bm) { bm->whole = 0; }
+
+static inline void bitmask_free_idx_hi(Bitmask *bm, uint8_t bit) { bm->_w32[1] &= ~((uint32_t)1 << bit); }
+static inline void bitmask_free_idx_lo(Bitmask *bm, uint8_t bit) { bm->_w32[0] &= ~((uint32_t)1 << bit); }
+
+static inline int8_t bitmask_first_free_hi(Bitmask *bm)
+{
+    uint32_t m = ~bm->_w32[1];
+    return __builtin_ctz(m);
+}
+
+static inline int8_t bitmask_first_free_lo(Bitmask *bm)
+{
+    uint32_t m = ~bm->_w32[0];
+    return __builtin_ctz(m);
+}
+
+static inline int8_t bitmask_allocate_bit_hi(Bitmask *bm)
+{
+    if (bitmask_is_full_hi(bm)) {
+        return -1;
     }
+    int8_t fidx = bitmask_first_free_hi(bm);
+    bitmask_reserve_hi(bm, fidx);
+    return fidx;
+}
 
-    inline int8_t firstFree_lo()
-    {
-        auto m = ~_w32[0];
-        return __builtin_ctz(m);
+static inline int8_t bitmask_allocate_bit_lo(Bitmask *bm)
+{
+    if (bitmask_is_full_lo(bm)) {
+        return -1;
     }
-
-    inline int8_t allocate_bit_hi()
-    {
-        if (isFull_hi()) {
-            return -1;
-        }
-        auto fidx = firstFree_hi();
-        reserve_hi(fidx);
-        return fidx;
-    }
-    inline int8_t allocate_bit_lo()
-    {
-        if (isFull_lo()) {
-            return -1;
-        }
-        auto fidx = firstFree_lo();
-        reserve_lo(fidx);
-        return fidx;
-    }
-} mask;
+    int8_t fidx = bitmask_first_free_lo(bm);
+    bitmask_reserve_lo(bm, fidx);
+    return fidx;
+}
 
 static inline size_t get_os_page_size()
 {
@@ -266,60 +277,38 @@ static inline size_t get_os_page_size()
     return sysconf(_SC_PAGESIZE);
 #endif
 }
-static size_t os_page_size = get_os_page_size();
+static size_t os_page_size = 4096;
 
-#define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
-
-static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
+typedef struct spinlock
 {
-    uintptr_t mask = alignment - 1;
-    uintptr_t sm = (sz + mask);
-    if ((alignment & mask) == 0) {
-        return sm & ~mask;
-    } else {
-        return (sm / alignment) * alignment;
-    }
-}
+    _Atomic(bool) lock_;
+} spinlock;
 
-static inline uintptr_t align_down(uintptr_t sz, size_t alignment)
+void spinlock_lock(spinlock *sl)
 {
-    uintptr_t mask = alignment - 1;
-    if ((alignment & mask) == 0) {
-        return (sz & ~mask);
-    } else {
-        return ((sz / alignment) * alignment);
-    }
-}
-
-struct spinlock
-{
-    std::atomic<bool> lock_ = { 0 };
-
-    void lock() noexcept
-    {
-        for (;;) {
-            // Optimistically assume the lock is free on the first try
-            if (!lock_.exchange(true, std::memory_order_acquire)) {
-                return;
-            }
-            // Wait for lock to be released without generating cache misses
-            while (lock_.load(std::memory_order_relaxed)) {
-                // Issue X86 PAUSE or ARM YIELD instruction to reduce contention between
-                // hyper-threads
-                __builtin_ia32_pause();
-            }
+    for (;;) {
+        // Optimistically assume the lock is free on the first try
+        if (!atomic_exchange_explicit(&sl->lock_, true, memory_order_acquire)) {
+            return;
+        }
+        // Wait for lock to be released without generating cache misses
+        while (atomic_load_explicit(&sl->lock_, memory_order_relaxed)) {
+            // Issue X86 PAUSE or ARM YIELD instruction to reduce contention
+            // between hyper-threads
+            __builtin_ia32_pause();
         }
     }
+}
 
-    bool try_lock() noexcept
-    {
-        // First do a relaxed load to check if lock is free in order to prevent
-        // unnecessary cache misses if someone does while(!try_lock())
-        return !lock_.load(std::memory_order_relaxed) && !lock_.exchange(true, std::memory_order_acquire);
-    }
+bool spinlock_try_lock(spinlock *sl)
+{
+    // First do a relaxed load to check if lock is free in order to prevent
+    // unnecessary cache misses if someone does while(!try_lock())
+    return !atomic_load_explicit(&sl->lock_, memory_order_relaxed) &&
+           !atomic_exchange_explicit(&sl->lock_, true, memory_order_acquire);
+}
 
-    void unlock() noexcept { lock_.store(false, std::memory_order_release); }
-};
+void spinlock_unlock(spinlock *sl) { atomic_store_explicit(&sl->lock_, false, memory_order_release); }
 
 /*
 partition_set
@@ -330,821 +319,825 @@ partition_set
         - move the local queue to the target queue
  */
 
-struct heap_block
+typedef struct HeapBlock_t
 {
     uint8_t *data;
+} HeapBlock;
+static inline uint32_t heap_block_get_header(HeapBlock *hb) { return *(uint32_t *)((uint8_t *)&hb->data - WSIZE); }
 
-    inline uint32_t get_header()
-    {
-        return *(uint32_t *)((uint8_t *)&data - WSIZE);
-    }
+static inline uint32_t heap_block_get_footer(HeapBlock *hb)
+{
+    uint32_t size = *(uint32_t *)((uint8_t *)&hb->data - WSIZE) & ~0x7;
+    return *(uint32_t *)((uint8_t *)&hb->data + (size)-DSIZE);
+}
 
-    inline uint32_t get_footer()
-    {
-        uint32_t size = *(uint32_t *)((uint8_t *)&data - WSIZE) & ~0x7;
-        return *(uint32_t *)((uint8_t *)&data + (size)-DSIZE);
-    }
+static inline uint32_t heap_block_get_Alloc(uint32_t v) { return v & 0x1; }
 
-    inline uint32_t get_Alloc(uint32_t v) { return v & 0x1; }
+static inline uint32_t heap_block_get_Size(uint32_t v) { return v & ~0x7; }
 
-    inline uint32_t get_Size(uint32_t v) { return v & ~0x7; }
+static inline void heap_block_set_header(HeapBlock *hb, uint32_t s, uint32_t v)
+{
+    *(uint32_t *)((uint8_t *)&hb->data - WSIZE) = (s | v);
+}
 
-    inline void set_header(uint32_t s, uint32_t v)
-    {
-        *(uint32_t *)((uint8_t *)&data - WSIZE) = (s | v);
-    }
+static inline void heap_block_set_footer(HeapBlock *hb, uint32_t s, uint32_t v)
+{
+    uint32_t size = (*(uint32_t *)((uint8_t *)&hb->data - WSIZE)) & ~0x7;
+    *(uint32_t *)((uint8_t *)(&hb->data) + (size)-DSIZE) = (s | v);
+}
 
-    inline void set_footer(uint32_t s, uint32_t v)
-    {
-        uint32_t size = (*(uint32_t *)((uint8_t *)&data - WSIZE)) & ~0x7;
-        *(uint32_t *)((uint8_t *)(&data) + (size)-DSIZE) = (s | v);
-    }
+static inline HeapBlock *heap_block_next(HeapBlock *hb)
+{
+    uint32_t size = *(uint32_t *)((uint8_t *)&hb->data - WSIZE) & ~0x7;
+    return (HeapBlock *)((uint8_t *)&hb->data + (size));
+}
 
-    inline heap_block *next()
-    {
-        uint32_t size = *(uint32_t *)((uint8_t *)&data - WSIZE) & ~0x7;
-        return (heap_block *)((uint8_t *)&data + (size));
-    }
-
-    inline heap_block *prev()
-    {
-        uint32_t size = *(uint32_t *)((uint8_t *)&data - DSIZE) & ~0x7;
-        return (heap_block *)((uint8_t *)&data - (size));
-    }
-};
+static inline HeapBlock *heap_block_prev(HeapBlock *hb)
+{
+    uint32_t size = *(uint32_t *)((uint8_t *)&hb->data - DSIZE) & ~0x7;
+    return (HeapBlock *)((uint8_t *)&hb->data - (size));
+}
 
 #define HEAP_NODE_OVERHEAD 8
 
-struct heap_node
+typedef struct HeapNode_t
 {
     size_t *prev;
     size_t *next;
-    inline void setNext(heap_node *p)
-    {
-        next = (size_t *)p;
-    }
-    inline void setPrev(heap_node *p)
-    {
-        prev = (size_t *)p;
-    }
-    inline heap_node *getNext()
-    {
-        return (heap_node *)next;
-    }
-    inline heap_node *getPrev()
-    {
-        return (heap_node *)prev;
-    }
-};
+} HeapNode;
+static inline void heap_node_set_next(HeapNode *_hn, HeapNode *p) { _hn->next = (size_t *)p; }
+static inline void heap_node_set_prev(HeapNode *_hn, HeapNode *p) { _hn->prev = (size_t *)p; }
+static inline HeapNode *heap_node_get_next(HeapNode *_hn) { return (HeapNode *)_hn->next; }
+static inline HeapNode *heap_node_get_prev(HeapNode *_hn) { return (HeapNode *)_hn->prev; }
 
-static inline size_t align(size_t n)
+typedef struct Block_t
 {
-    return (n + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1);
-}
+    struct Block_t *next;
+} Block;
 
-struct Block
-{
-    Block *next;
-};
+typedef enum ExponentType_e { EXP_PUNY = 0, EXP_SMALL, EXP_MEDIUM, EXP_LARGE, EXP_HUGE, EXP_GIGANTIC } ExponentType;
 
-enum Exponent {
-    EXP_PUNY = 0,
-    EXP_SMALL,
-    EXP_MEDIUM,
-    EXP_LARGE,
-    EXP_HUGE,
-    EXP_GIGANTIC
-};
-
-enum ContainerType {
-    PAGE,
+typedef enum ContainerType_e {
+    HEAP,
     POOL,
     SLAB,
-};
+} ContainerType;
 
-inline int32_t getContainerExponent(size_t s, ContainerType t)
+static inline int32_t get_container_exponent(size_t s, ContainerType t)
 {
-    if (t == PAGE) {
-        if (s <= MEDIUM_OBJECT_SIZE) { // 16k - 4Mb
-            return EXP_LARGE; // 32
+    if (t == HEAP) {
+        if (s <= MEDIUM_OBJECT_SIZE) {      // 16k - 4Mb
+            return EXP_LARGE;               // 32
         } else if (s <= HUGE_OBJECT_SIZE) { // 4Mb - 32Mb
-            return EXP_HUGE; // 128
-        } else { // for large than 32Mb objects.
-            return EXP_GIGANTIC; // 256
+            return EXP_HUGE;                // 128
+        } else {                            // for large than 32Mb objects.
+            return EXP_GIGANTIC;            // 256
         }
     } else {
-        if (s <= SMALL_OBJECT_SIZE) { // 8 - 16k
-            return EXP_PUNY; // 128k
+        if (s <= SMALL_OBJECT_SIZE) {         // 8 - 16k
+            return EXP_PUNY;                  // 128k
         } else if (s <= MEDIUM_OBJECT_SIZE) { // 16k - 128k
-            return EXP_SMALL; // 512k
+            return EXP_SMALL;                 // 512k
         } else {
             return EXP_MEDIUM; // 4M for > 128k objects.
         }
     }
 }
+typedef struct Queue_t
+{
+    void *head;
+    void *tail;
+} Queue;
+
+typedef struct NodeTemplate_t
+{
+    void *prev;
+    void *next;
+} NodeTemplate;
 
 // list functions
-template <typename L>
-static inline bool list_isEmpty(L &list)
+static inline bool list_isEmpty(void *q) { return ((Queue *)q)->head == NULL; }
+static void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
-    return list.first == NULL;
-}
-
-template <typename L, typename T>
-static inline void list_remove(L &list, T *a)
-{
-    if (a->getPrev() != NULL)
-        a->getPrev()->setNext(a->getNext());
-    if (a->getNext() != NULL)
-        a->getNext()->setPrev(a->getPrev());
-    if (a == list.head)
-        list.head = a->getNext();
-    if (a == list.tail)
-        list.tail = a->getPrev();
-    a->setNext(NULL);
-    a->setPrev(NULL);
-}
-
-template <typename L, typename T>
-static inline void list_enqueue(L &list, T *a)
-{
-    a->setNext(list.head);
-    a->setPrev(NULL);
-    if (list.head != NULL) {
-        list.head->setPrev(a);
-        list.head = a;
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    tn->next = tq->head;
+    tn->prev = NULL;
+    if (tq->head != 0) {
+        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tq->head + prev_offset);
+        temp->prev = node;
+        tq->head = node;
     } else {
-        list.tail = list.head = a;
+        tq->tail = tq->head = node;
     }
 }
 
-template <typename L, typename T>
-static inline void list_insert_sort(L &list, T *a)
+static void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
-    if (list.tail == NULL) {
-        list.tail = list.head = a;
-        return;
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    if (tn->prev != NULL) {
+        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tn->prev + prev_offset);
+        temp->next = tn->next;
     }
-
-    if (list.tail < a) {
-        list.tail->setNext(a);
-        a->setNext(NULL);
-        a->setPrev(list.tail);
-        list.tail = a;
-        return;
+    if (tn->next != NULL) {
+        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tn->next + prev_offset);
+        temp->prev = tn->prev;
     }
-
-    T *current = list.head;
-    while (current->getNext() != NULL && current->getNext() < a) {
-        current = current->getNext();
-    }
-    a->setPrev(current->getPrev());
-    a->setNext(current->getNext());
-    current->setPrev(a);
+    if (node == tq->head)
+        tq->head = tn->next;
+    if (node == tq->tail)
+        tq->tail = tn->prev;
+    tn->next = NULL;
+    tn->prev = NULL;
 }
 
-template <typename L, typename T>
-static inline void list_insert_at(L &list, T *t, T *a)
+static void _list_insert_at(void *queue, void *target, void *node, size_t head_offset, size_t prev_offset)
 {
-    if (list.tail == NULL) {
-        list.tail = list.head = a;
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    NodeTemplate *ttn = (NodeTemplate *)((uint8_t *)target + prev_offset);
+    if (tq->tail == NULL) {
+        tq->tail = tq->head = node;
         return;
     }
-
-    a->setNext(t->getNext());
-    a->setPrev(t);
-    if (t->getNext() != NULL) {
-        t->getNext()->setPrev(a);
+    tn->next = ttn->next;
+    tn->prev = target;
+    if (tn->next != NULL) {
+        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tn->next + prev_offset);
+        temp->prev = node;
     } else {
-        list.tail = a;
+        tq->tail = node;
     }
-    t->setNext(a);
+    ttn->next = node;
 }
 
-struct Area
+static void _list_insert_sort(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
-    // The area is overlapping with the first section. And they share some
-    // attributes.
-    static const uintptr_t small_area_mask = 0xff;
-    static const uintptr_t large_area_mask = 0xffffffff;
-    static const uintptr_t ptr_mask = 0x0000ffffffffffff;
-    static const uintptr_t inv_ptr_mask = 0xffff000000000000;
-    struct List
-    {
-        Area *head;
-        Area *tail;
-        uint32_t partition_id;
-        uintptr_t start_addr;
-        uintptr_t end_addr;
-        AreaType type;
-        size_t area_count;
-        Area *previous_area;
-    };
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    if (tq->tail == NULL) {
+        tq->tail = tq->head = node;
+        return;
+    }
 
+    if (tq->tail < node) {
+        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tq->tail + prev_offset);
+        temp->next = node;
+        tn->next = NULL;
+        tn->prev = tq->tail;
+        tq->tail = node;
+        return;
+    }
+
+    NodeTemplate *current = (NodeTemplate *)((uint8_t *)tq->head + prev_offset);
+    while (current->next != NULL && current->next < node) {
+        current = (NodeTemplate *)((NodeTemplate *)((uint8_t *)current->next + prev_offset))->next;
+    }
+    tn->prev = current->prev;
+    tn->next = current->next;
+    current->prev = node;
+}
+
+#define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+#define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+#define list_insert_at(q, t, n) _list_insert_at(q, t, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+#define list_insert_sort(q, t, n)                                                                                      \
+    _list_insert_sort(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+
+const uintptr_t _Area_small_area_mask = 0xff;
+const uintptr_t _Area_large_area_mask = 0xffffffff;
+const uintptr_t _Area_ptr_mask = 0x0000ffffffffffff;
+const uintptr_t _Area_inv_ptr_mask = 0xffff000000000000;
+
+typedef struct Area_t
+{
     int64_t partition_id;
-    bitmask constr_mask; // containers that have been constructed.
-    bitmask active_mask; // containers that can be destructed.
+    Bitmask constr_mask; // containers that have been constructed.
+    Bitmask active_mask; // containers that can be destructed.
 
-private:
     // these members are shared with the first section in the memory block. so,
     // the first high 16 bits are reserved by the section.
     size_t size;
-    Area *prev;
-    Area *next;
+    struct Area_t *prev;
+    struct Area_t *next;
+} Area;
 
-public:
-    inline bool isEmpty() { return active_mask.isEmpty_hi(); }
-    inline bool isFree() { return isEmpty(); }
-    inline bool isClaimed(uint8_t idx) { return constr_mask.isSet_hi(idx); }
+typedef struct AreaList_t
+{
+    Area *head;
+    Area *tail;
+    uint32_t partition_id;
+    uintptr_t start_addr;
+    uintptr_t end_addr;
+    AreaType type;
+    size_t area_count;
+    Area *previous_area;
+} AreaList;
 
-    inline void freeIdx(uint8_t i)
-    {
-        active_mask.freeIdx_hi(i);
-    }
+static inline Area *area_get_prev(Area *a)
+{
+    return (Area *)((uintptr_t)a->prev & _Area_ptr_mask);
+} // remove the top 16 bits
+static inline Area *area_get_next(Area *a)
+{
+    return (Area *)((uintptr_t)a->next & _Area_ptr_mask);
+} // remove the top 16 bits
 
-    inline void freeAll()
-    {
-        active_mask.freeAll();
-    }
-
-    inline void reserveIdx(uint8_t i)
-    {
-        constr_mask.reserve_hi(i);
-        active_mask.reserve_hi(i);
-    }
-
-    inline void reserveAll()
-    {
-        constr_mask.reserveAll();
-        active_mask.reserveAll();
-    }
-
-    int8_t get_section_count()
-    {
-        auto area_size = getSize();
-        if (area_size == AREA_SIZE_SMALL) {
-            return 8;
-        } else if (area_size == AREA_SIZE_LARGE) {
-            return 32;
-        } else {
-            return 1;
-        }
-    }
-
-    inline int8_t claimSection()
-    {
-        return constr_mask.allocate_bit_hi();
-    }
-
-    inline void claimAll()
-    {
-        constr_mask.reserveAll();
-    }
-
-    inline void claimIdx(uint8_t idx)
-    {
-        constr_mask.reserve_hi(idx);
-    }
-
-    bool isFull()
-    {
-        if (active_mask.isFull_hi()) {
-            return true;
-        }
-        if (getSize() == AREA_SIZE_SMALL) {
-            return ((active_mask.whole >> 32) & small_area_mask) == small_area_mask;
-        } else {
-            return ((active_mask.whole >> 32) & large_area_mask) == large_area_mask;
-        }
-    }
-    inline Area *getPrev() const
-    {
-        return (Area *)((uintptr_t)prev & ptr_mask);
-    } // remove the top 16 bits
-    inline Area *getNext() const
-    {
-        return (Area *)((uintptr_t)next & ptr_mask);
-    } // remove the top 16 bits
-    inline void setPrev(Area *p)
-    {
-        prev = (Area *)(((inv_ptr_mask & (uintptr_t)prev) | (uintptr_t)p));
-    };
-    inline void setNext(Area *n)
-    {
-        next = (Area *)(((inv_ptr_mask & (uintptr_t)next) | (uintptr_t)n));
-    };
-
-    inline size_t getSize() { return size; }
-    inline void setSize(size_t s) { size = s; }
-
-    static Area *fromAddr(uintptr_t p)
-    {
-        static const uint64_t masks[] = {
-            ~(AREA_SIZE_SMALL - 1),
-            ~(AREA_SIZE_SMALL - 1),
-            ~(AREA_SIZE_LARGE - 1),
-            ~(AREA_SIZE_HUGE - 1),
-            0xffffffffffffffff,
-            0xffffffffffffffff,
-            0xffffffffffffffff
-        };
-
-        auto pidx = partition_from_addr(p);
-        if (pidx < 0) {
-            return NULL;
-        }
-        return (Area *)(p & masks[pidx]);
-    }
+static inline void area_set_prev(Area *a, Area *p)
+{
+    a->prev = (Area *)(((_Area_inv_ptr_mask & (uintptr_t)a->prev) | (uintptr_t)p));
+};
+static inline void area_set_next(Area *a, Area *n)
+{
+    a->next = (Area *)(((_Area_inv_ptr_mask & (uintptr_t)a->next) | (uintptr_t)n));
 };
 
-struct Section
+static inline void area_list_remove(AreaList *q, Area *a)
 {
-    struct Queue
-    {
-        Section *head;
-        Section *tail;
-    };
+    if (area_get_prev(a) != NULL)
+        area_set_next(area_get_prev(a), area_get_next(a));
+    if (area_get_next(a) != NULL)
+        area_set_prev(area_get_next(a), area_get_prev(a));
+    if (a == q->head)
+        q->head = area_get_next(a);
+    if (a == q->tail)
+        q->tail = area_get_prev(a);
+    area_set_next(a, NULL);
+    area_set_prev(a, NULL);
+}
+static inline void area_list_insert_at(AreaList *q, Area *t, Area *a)
+{
+    if (q->tail == NULL) {
+        q->tail = q->head = a;
+        return;
+    }
+
+    area_set_next(a, area_get_next(t));
+    area_set_prev(a, t);
+    if (area_get_next(t) != NULL) {
+        area_set_prev(area_get_next(t), a);
+    } else {
+        q->tail = a;
+    }
+    area_set_next(t, a);
+}
+static inline bool area_is_empty(Area *a) { return bitmask_is_empty_hi(&a->active_mask); }
+static inline bool area_is_free(Area *a) { return area_is_empty(a); }
+static inline bool area_is_claimed(Area *a, uint8_t idx) { return bitmask_is_set_hi(&a->constr_mask, idx); }
+
+static inline void area_free_idx(Area *a, uint8_t i) { bitmask_free_idx_hi(&a->active_mask, i); }
+
+static inline void area_free_all(Area *a) { bitmask_free_all(&a->active_mask); }
+
+static inline void area_reserve_idx(Area *a, uint8_t i)
+{
+    bitmask_reserve_hi(&a->constr_mask, i);
+    bitmask_reserve_hi(&a->active_mask, i);
+}
+
+static inline void area_reserve_all(Area *a)
+{
+    bitmask_reserve_all(&a->constr_mask);
+    bitmask_reserve_all(&a->active_mask);
+}
+
+static int8_t area_get_section_count(Area *a)
+{
+    size_t area_size = a->size;
+    if (area_size == AREA_SIZE_SMALL) {
+        return 8;
+    } else if (area_size == AREA_SIZE_LARGE) {
+        return 32;
+    } else {
+        return 1;
+    }
+}
+
+static inline int8_t area_claim_section(Area *a) { return bitmask_allocate_bit_hi(&a->constr_mask); }
+
+static inline void area_claim_all(Area *a) { bitmask_reserve_all(&a->constr_mask); }
+
+static inline void area_claim_idx(Area *a, uint8_t idx) { bitmask_reserve_hi(&a->constr_mask, idx); }
+
+static bool area_is_full(Area *a)
+{
+    if (bitmask_is_full_hi(&a->active_mask)) {
+        return true;
+    }
+    if (a->size == AREA_SIZE_SMALL) {
+        return ((a->active_mask.whole >> 32) & _Area_small_area_mask) == _Area_small_area_mask;
+    } else {
+        return ((a->active_mask.whole >> 32) & _Area_large_area_mask) == _Area_large_area_mask;
+    }
+}
+
+static inline size_t area_get_size(Area *a) { return a->size; }
+static inline void area_set_size(Area *a, size_t s) { a->size = s; }
+
+static Area *area_from_addr(uintptr_t p)
+{
+    static const uint64_t masks[] = {~(AREA_SIZE_SMALL - 1), ~(AREA_SIZE_SMALL - 1), ~(AREA_SIZE_LARGE - 1),
+                                     ~(AREA_SIZE_HUGE - 1),  0xffffffffffffffff,     0xffffffffffffffff,
+                                     0xffffffffffffffff};
+
+    int8_t pidx = partition_from_addr(p);
+    if (pidx < 0) {
+        return NULL;
+    }
+    return (Area *)(p & masks[pidx]);
+}
+
+typedef struct Section_t
+{
     int64_t partition_id;
     // 24 bytes as the section header
-    bitmask constr_mask; // 32 pages bit per page.   // lower 32 bits per section/ high
-    bitmask active_mask;
+    Bitmask constr_mask; // 32 pages bit per page.   // lower 32 bits per
+                         // section/ high
+    Bitmask active_mask;
 
-private:
-    // An area and section can overlap, and the prev next pointer of an area will
-    // always be under the 32tb range. top 16 bits area always zero.
-    size_t asize; // lower 32 bits per section/ high bits are for area
-    size_t container_type; // top 16 bits.
+    // An area and section can overlap, and the prev next pointer of an area
+    // will always be under the 32tb range. top 16 bits area always zero.
+    size_t asize;              // lower 32 bits per section/ high bits are for area
+    size_t container_type;     // top 16 bits.
     size_t container_exponent; // top 16 bits.
-public:
+
     int32_t idx; // index in parent area.
 
     // links to sections.
-    Section *prev;
-    Section *next;
+    struct Section_t *prev;
+    struct Section_t *next;
 
     uint8_t collections[1];
-    inline bool isConnected() { return prev != NULL || next != NULL; }
+} Section;
 
-    uint8_t get_collection_count()
-    {
-        if (getContainerType() != POOL) {
-            return 1;
-        }
-        switch (getContainerExponent()) {
-        case Exponent::EXP_PUNY: {
-            return 32;
-        }
-        case Exponent::EXP_SMALL: {
-            return 8;
-        }
-        default: {
-            return 1;
-        }
-        }
-    }
-
-    inline void freeIdx(uint8_t i)
-    {
-        active_mask.freeIdx_lo(i);
-        auto section_empty = active_mask.isEmpty_lo();
-        if (section_empty) {
-            // what partition are we in.
-            auto area = Area::fromAddr((uintptr_t)this);
-            switch (getContainerType()) {
-            case POOL: {
-                area->freeIdx(idx);
-                break;
-            }
-            default: // SLAB
-                area->freeAll();
-                break;
-            }
-        }
-    }
-    inline bool isClaimed(uint8_t idx) { return constr_mask.isSet_lo(idx); }
-    inline void reserveIdx(uint8_t i)
-    {
-        active_mask.reserve_lo(i);
-        auto area = Area::fromAddr((uintptr_t)this);
-        area->reserveIdx(idx);
-    }
-
-    inline void claimIdx(uint8_t i)
-    {
-        constr_mask.reserve_lo(i);
-        auto area = Area::fromAddr((uintptr_t)this);
-        area->claimIdx(idx);
-    }
-
-    inline void claimAll()
-    {
-        constr_mask.reserveAll();
-        auto area = Area::fromAddr((uintptr_t)this);
-        area->claimIdx(idx);
-    }
-
-    inline uint8_t reserveNext()
-    {
-        auto idx = active_mask.allocate_bit_lo();
-        claimIdx(idx);
-        return idx;
-    }
-
-    inline void reserveAll()
-    {
-        claimAll();
-        auto area = Area::fromAddr((uintptr_t)this);
-        area->reserveIdx(idx);
-        active_mask.reserveAll();
-    }
-
-    inline void freeAll()
-    {
-        active_mask.freeAll();
-        auto area = Area::fromAddr((uintptr_t)this);
-        area->freeIdx(idx);
-    }
-
-    inline Section *getPrev() const { return prev; }
-    inline Section *getNext() const { return next; }
-    inline void setPrev(Section *p) { prev = p; }
-    inline void setNext(Section *n) { next = n; }
-    inline ContainerType getContainerType() const
-    {
-        return (
-            ContainerType)((uint16_t)((container_type & 0xffff000000000000) >> 48));
-    }
-    inline Exponent getContainerExponent() const
-    {
-        return (Exponent)(uint16_t)((container_exponent & 0xffff000000000000) >> 48);
-    }
-    inline void setContainerType(ContainerType pt)
-    {
-        container_type |= ((uint64_t)pt << 48);
-    }
-    inline void setContainerExponent(uint16_t prt)
-    {
-        container_exponent |= ((uint64_t)prt << 48);
-    }
-    inline size_t getSize() const { return asize; }
-
-    inline bool isFull() const
-    {
-        switch (getContainerExponent()) {
-        case Exponent::EXP_PUNY: {
-            return (active_mask.whole & 0xffffffff) == 0xffffffff;
-        }
-        case Exponent::EXP_SMALL: {
-            return (active_mask.whole & 0xff) == 0xff;
-        }
-        default: {
-            return (active_mask.whole & 0x1) == 0x1;
-        }
-        }
-    }
-
-    inline void *findCollection(void *p) const
-    {
-        const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&collections[0];
-        const auto exp = size_clss_to_exponent[(container_exponent & 0xffff000000000000) >> 48];
-        const auto page_size = 1 << exp;
-        const int32_t idx = (int32_t)((size_t)diff >> exp);
-        return (void *)((uint8_t *)&collections[0] + page_size * idx);
-    }
-
-    inline uintptr_t getCollection(int8_t idx, Exponent exp) const
-    {
-        return (uintptr_t)((uint8_t *)&collections[0] + (1 << size_clss_to_exponent[exp]) * idx);
-    }
-};
-
-struct Pool
+static inline bool section_is_connected(Section *s) { return s->prev != NULL || s->next != NULL; }
+static inline ContainerType section_get_container_type(Section *s)
 {
-    struct Queue
-    {
-        Pool *head;
-        Pool *tail;
-        size_t size;
-    };
+    return (ContainerType)((uint16_t)((s->container_type & 0xffff000000000000) >> 48));
+}
+static inline ExponentType section_get_container_exponent(Section *s)
+{
+    return (ExponentType)(uint16_t)((s->container_exponent & 0xffff000000000000) >> 48);
+}
+static uint8_t section_get_collection_count(Section *s)
+{
+    if (section_get_container_type(s) != POOL) {
+        return 1;
+    }
+    switch (section_get_container_exponent(s)) {
+    case EXP_PUNY: {
+        return 32;
+    }
+    case EXP_SMALL: {
+        return 8;
+    }
+    default: {
+        return 1;
+    }
+    }
+}
 
+static inline void section_free_idx(Section *s, uint8_t i)
+{
+    bitmask_free_idx_lo(&s->active_mask, i);
+    bool section_empty = bitmask_is_empty_lo(&s->active_mask);
+    if (section_empty) {
+        // what partition are we in.
+        Area *area = area_from_addr((uintptr_t)s);
+        switch (section_get_container_type(s)) {
+        case POOL: {
+            area_free_idx(area, s->idx);
+            break;
+        }
+        default: // SLAB
+            area_free_all(area);
+            break;
+        }
+    }
+}
+static inline bool section_is_claimed(Section *s, uint8_t idx) { return bitmask_is_set_lo(&s->constr_mask, idx); }
+static inline void section_reserve_idx(Section *s, uint8_t i)
+{
+    bitmask_reserve_lo(&s->active_mask, i);
+    Area *area = area_from_addr((uintptr_t)s);
+    area_reserve_idx(area, s->idx);
+}
+
+static inline void section_claim_idx(Section *s, uint8_t i)
+{
+    bitmask_reserve_lo(&s->constr_mask, i);
+    Area *area = area_from_addr((uintptr_t)s);
+    area_claim_idx(area, s->idx);
+}
+
+static inline void section_claim_all(Section *s)
+{
+    bitmask_reserve_all(&s->constr_mask);
+    Area *area = area_from_addr((uintptr_t)s);
+    area_claim_idx(area, s->idx);
+}
+
+static inline uint8_t section_reserve_next(Section *s)
+{
+    int8_t idx = bitmask_allocate_bit_lo(&s->active_mask);
+    section_claim_idx(s, idx);
+    return idx;
+}
+
+static inline void section_reserve_all(Section *s)
+{
+    section_claim_all(s);
+    Area *area = area_from_addr((uintptr_t)s);
+    area_reserve_idx(area, s->idx);
+    bitmask_reserve_all(&s->active_mask);
+}
+
+static inline void section_free_all(Section *s)
+{
+    bitmask_free_all(&s->active_mask);
+    Area *area = area_from_addr((uintptr_t)s);
+    area_free_idx(area, s->idx);
+}
+
+static inline Section *section_get_prev(Section *s) { return s->prev; }
+static inline Section *section_get_next(Section *s) { return s->next; }
+static inline void section_set_prev(Section *s, Section *p) { s->prev = p; }
+static inline void section_set_next(Section *s, Section *n) { s->next = n; }
+
+static inline void section_set_container_type(Section *s, ContainerType pt)
+{
+    s->container_type |= ((uint64_t)pt << 48);
+}
+static inline void section_set_container_exponent(Section *s, uint16_t prt)
+{
+    s->container_exponent |= ((uint64_t)prt << 48);
+}
+static inline size_t section_get_size(Section *s) { return s->asize; }
+
+static inline bool section_is_full(Section *s)
+{
+    switch (section_get_container_exponent(s)) {
+    case EXP_PUNY: {
+        return (s->active_mask.whole & 0xffffffff) == 0xffffffff;
+    }
+    case EXP_SMALL: {
+        return (s->active_mask.whole & 0xff) == 0xff;
+    }
+    default: {
+        return (s->active_mask.whole & 0x1) == 0x1;
+    }
+    }
+}
+
+static inline void *section_find_collection(Section *s, void *p)
+{
+    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&s->collections[0];
+    const uintptr_t exp = size_clss_to_exponent[(s->container_exponent & 0xffff000000000000) >> 48];
+    const int32_t collection_size = 1 << exp;
+    const int32_t idx = (int32_t)((size_t)diff >> exp);
+    return (void *)((uint8_t *)&s->collections[0] + collection_size * idx);
+}
+
+static inline uintptr_t section_get_collection(Section *s, int8_t idx, ExponentType exp)
+{
+    return (uintptr_t)((uint8_t *)&s->collections[0] + (1 << size_clss_to_exponent[exp]) * idx);
+}
+
+typedef struct Pool_t
+{
     int32_t idx;
-    uint32_t block_size; //
-    int32_t num_available; // num of available blocks. // num of committed blocks.
-    int32_t num_committed; // the number of free blocks. page_size/block_size
+    uint32_t block_size;
+    int32_t num_available; // num of available blocks.
+    int32_t num_committed;
     int32_t num_used;
 
     Block *free;
-    Pool *prev;
-    Pool *next;
-
-    inline bool ownsAddr(void *p) const
-    {
-        uintptr_t start = (uintptr_t)&blocks[0];
-        uintptr_t end = (uintptr_t)((uint8_t *)start + (num_available * block_size));
-        return (uintptr_t)p >= start && (uintptr_t)p <= end;
-    }
-
-    inline bool isEmpty() const { return num_used == 0; }
-    inline bool isFull() const { return num_used >= num_available; }
-    inline bool isAlmostFull() const { return num_used >= (num_available - 1); }
-    inline bool isFullyCommited() const { return num_committed >= num_available; }
-    inline bool isConnected() const { return prev != NULL || next != NULL; }
-
-    inline void freeBlock(void *p)
-    {
-        Block *new_free = (Block *)p;
-        new_free->next = free;
-        free = new_free;
-        num_used--;
-        if (num_used == 0) {
-            Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->freeIdx(idx);
-        }
-    }
-
-    void init(int8_t pidx, uint32_t blockSize, Exponent partition)
-    {
-        auto psize = 1 << size_clss_to_exponent[partition];
-
-        uintptr_t section_end = align_up((uintptr_t)this, SECTION_SIZE);
-        auto remaining_size = section_end - (uintptr_t)&blocks[0];
-        auto block_memory = psize - sizeof(Pool);
-
-        idx = pidx;
-        block_size = blockSize;
-        num_available = (int)(min(remaining_size, block_memory) / blockSize);
-        num_committed = 0;
-        num_used = 0;
-        next = NULL;
-        prev = NULL;
-        free = NULL;
-        extendPool();
-    }
-
-    inline void *aquireBlock()
-    {
-        if (!isFull()) {
-            extendPool();
-            return getFreeBlock();
-        }
-        return NULL;
-    }
-
-    inline Block *getFreeBlock()
-    {
-        if (num_used == 0) {
-            Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->reserveIdx(idx);
-        }
-        num_used++;
-        auto res = free;
-        free = res->next;
-        return res;
-    }
-
-    bool extendPool()
-    {
-        if (free == NULL) {
-            if (!isFullyCommited()) {
-                uintptr_t start = (uintptr_t)((uint8_t *)&blocks[0] + (num_committed * block_size));
-                uint32_t steps = 1;
-                uint32_t remaining = (num_available - num_committed);
-                if (block_size < os_page_size) {
-                    steps = (uint32_t)min(os_page_size / block_size, remaining);
-                }
-
-                Block *block = (Block *)start;
-                num_committed += steps;
-                for (uint32_t i = 0; i < steps - 1; i++) {
-                    Block *next = (Block *)((uint8_t *)block + block_size);
-                    block->next = next;
-                    block = next;
-                }
-                block->next = NULL;
-                free = (Block *)start;
-                return true;
-            }
-        }
-        return false;
-    }
-
-public:
+    struct Pool_t *prev;
+    struct Pool_t *next;
     uint8_t blocks[1];
-    inline Pool *getPrev() const { return prev; }
-    inline Pool *getNext() const { return next; }
-    inline void setPrev(Pool *p) { prev = p; }
-    inline void setNext(Pool *n) { next = n; }
-};
+} Pool;
 
-struct Heap
+typedef struct PoolQueue_t
 {
-    struct Queue
-    {
-        Heap *head;
-        Heap *tail;
-    };
-    struct FreeQueue
-    {
-        heap_node *head;
-        heap_node *tail;
-    };
+    Pool *head;
+    Pool *tail;
+    size_t size;
+} PoolQueue;
+
+static inline bool pool_owns_addr(Pool *p, void *addr)
+{
+    uintptr_t start = (uintptr_t)&p->blocks[0];
+    uintptr_t end = (uintptr_t)((uint8_t *)start + (p->num_available * p->block_size));
+    return (uintptr_t)addr >= start && (uintptr_t)addr <= end;
+}
+
+static inline bool pool_is_empty(Pool *p) { return p->num_used == 0; }
+static inline bool pool_is_full(Pool *p) { return p->num_used >= p->num_available; }
+static inline bool pool_is_almost_full(Pool *p) { return p->num_used >= (p->num_available - 1); }
+static inline bool pool_is_fully_commited(Pool *p) { return p->num_committed >= p->num_available; }
+static inline bool pool_is_connected(Pool *p) { return p->prev != NULL || p->next != NULL; }
+
+static inline void pool_free_block(Pool *p, void *block)
+{
+    Block *new_free = (Block *)block;
+    new_free->next = p->free;
+    p->free = new_free;
+    p->num_used--;
+    if (p->num_used == 0) {
+        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+        section_free_idx(section, p->idx);
+    }
+}
+
+static bool pool_extend(Pool *p)
+{
+    if (p->free == NULL) {
+        if (!pool_is_fully_commited(p)) {
+            uintptr_t start = (uintptr_t)((uint8_t *)&p->blocks[0] + (p->num_committed * p->block_size));
+            uint32_t steps = 1;
+            uint32_t remaining = (p->num_available - p->num_committed);
+            if (p->block_size < os_page_size) {
+                steps = (uint32_t)MIN(os_page_size / p->block_size, remaining);
+            }
+
+            Block *block = (Block *)start;
+            p->num_committed += steps;
+            for (uint32_t i = 0; i < steps - 1; i++) {
+                Block *next = (Block *)((uint8_t *)block + p->block_size);
+                block->next = next;
+                block = next;
+            }
+            block->next = NULL;
+            p->free = (Block *)start;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void pool_init(Pool *p, int8_t pidx, uint32_t blockSize, ExponentType partition)
+{
+    int32_t psize = 1 << size_clss_to_exponent[partition];
+
+    uintptr_t section_end = align_up((uintptr_t)p, SECTION_SIZE);
+    size_t remaining_size = section_end - (uintptr_t)&p->blocks[0];
+    size_t block_memory = psize - sizeof(Pool);
+
+    p->idx = pidx;
+    p->block_size = blockSize;
+    p->num_available = (int)(MIN(remaining_size, block_memory) / blockSize);
+    p->num_committed = 0;
+    p->num_used = 0;
+    p->next = NULL;
+    p->prev = NULL;
+    p->free = NULL;
+    pool_extend(p);
+}
+
+static inline Block *pool_get_free_block(Pool *p)
+{
+    if (p->num_used == 0) {
+        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+        section_reserve_idx(section, p->idx);
+    }
+    p->num_used++;
+    Block *res = p->free;
+    p->free = res->next;
+    return res;
+}
+
+static inline void *pool_aquire_block(Pool *p)
+{
+    if (!pool_is_full(p)) {
+        pool_extend(p);
+        return pool_get_free_block(p);
+    }
+    return NULL;
+}
+
+static inline Pool *pool_get_prev(Pool *p) { return p->prev; }
+static inline Pool *pool_get_next(Pool *p) { return p->next; }
+static inline void pool_set_prev(Pool *p, Pool *pr) { p->prev = pr; }
+static inline void pool_set_next(Pool *p, Pool *n) { p->next = n; }
+
+typedef struct FreeQueue_t
+{
+    HeapNode *head;
+    HeapNode *tail;
+} FreeQueue;
+
+typedef struct Heap_t
+{
     //
     int32_t idx;
     uint32_t total_memory; // how much do we have available in total
-    uint32_t used_memory; // how much have we used
-    uint32_t min_block; // what is the minum size block available;
-    uint32_t max_block; // what is the maximum size block available;
+    uint32_t used_memory;  // how much have we used
+    uint32_t min_block;    // what is the minum size block available;
+    uint32_t max_block;    // what is the maximum size block available;
     uint32_t num_allocations;
 
     uint8_t *start;
     FreeQueue free_nodes;
 
-    Heap *prev;
-    Heap *next;
+    struct Heap_t *prev;
+    struct Heap_t *next;
 
-    inline bool isConnected() { return prev != NULL || next != NULL; }
+    uint8_t blocks[1];
+} Heap;
 
-    inline bool has_room(size_t s)
-    {
-        if ((used_memory + s + HEAP_NODE_OVERHEAD) > total_memory) {
-            return false;
-        }
-        if (s <= max_block && s >= min_block) {
-            return true;
-        }
+static inline bool heap_is_connected(Heap *h) { return h->prev != NULL || h->next != NULL; }
+
+static inline bool heap_has_room(Heap *h, size_t s)
+{
+    if ((h->used_memory + s + HEAP_NODE_OVERHEAD) > h->total_memory) {
         return false;
     }
+    if (s <= h->max_block && s >= h->min_block) {
+        return true;
+    }
+    return false;
+}
 
-    inline void *getBlock(uint32_t s)
-    {
-        if (s <= DSIZE * 2) {
-            s = DSIZE * 2 + HEAP_NODE_OVERHEAD;
-        } else {
-            s = DSIZE * ((s + HEAP_NODE_OVERHEAD + DSIZE - 1) / DSIZE);
+static inline void heap_place(Heap *h, void *bp, uint32_t asize)
+{
+    HeapBlock *hb = (HeapBlock *)bp;
+    int32_t csize = heap_block_get_header(hb) & ~0x7;
+    if ((csize - asize) >= (DSIZE + HEAP_NODE_OVERHEAD)) {
+        heap_block_set_header(hb, asize, 1);
+        heap_block_set_footer(hb, asize, 1);
+        hb = heap_block_next(hb);
+        heap_block_set_header(hb, csize - asize, 0);
+        heap_block_set_footer(hb, csize - asize, 0);
+        list_enqueue(&h->free_nodes, (HeapNode *)hb);
+    } else {
+        heap_block_set_header(hb, csize, 1);
+        heap_block_set_footer(hb, csize, 1);
+    }
+}
+
+static inline void *heap_find_fit(Heap *h, uint32_t asize)
+{
+    HeapNode *current = h->free_nodes.head;
+    while (current != NULL) {
+        HeapBlock *hb = (HeapBlock *)current;
+        int header = heap_block_get_header(hb);
+        uint32_t bsize = header & ~0x7;
+        if (asize <= bsize) {
+            list_remove(&h->free_nodes, current);
+            heap_place(h, current, asize);
+            return current;
         }
-        void *ptr = find_fit(s);
+        current = heap_node_get_next(current);
+    }
+    return NULL;
+}
 
-        used_memory += s;
-        if (num_allocations == 0) {
-            Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->reserveAll();
+static inline void *heap_get_block(Heap *h, uint32_t s)
+{
+    if (s <= DSIZE * 2) {
+        s = DSIZE * 2 + HEAP_NODE_OVERHEAD;
+    } else {
+        s = DSIZE * ((s + HEAP_NODE_OVERHEAD + DSIZE - 1) / DSIZE);
+    }
+    void *ptr = heap_find_fit(h, s);
+
+    h->used_memory += s;
+    if (h->num_allocations == 0) {
+        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+        section_reserve_all(section);
+    }
+    h->num_allocations++;
+    return ptr;
+}
+
+static inline void *heap_coalesce(Heap *h, void *bp)
+{
+    HeapBlock *hb = (HeapBlock *)bp;
+    int32_t size = heap_block_get_header(hb) & ~0x7;
+    HeapBlock *prev_block = heap_block_prev(hb);
+    HeapBlock *next_block = heap_block_next(hb);
+    int prev_header = heap_block_get_header(prev_block);
+    int next_header = heap_block_get_header(next_block);
+
+    size_t prev_alloc = prev_header & 0x1;
+    size_t next_alloc = next_header & 0x1;
+
+    HeapNode *hn = (HeapNode *)bp;
+    if (!(prev_alloc && next_alloc)) {
+        size_t prev_size = prev_header & ~0x7;
+        size_t next_size = next_header & ~0x7;
+
+        // next is free
+        if (prev_alloc && !next_alloc) {
+            size += next_size;
+            heap_block_set_header(hb, size, 0);
+            heap_block_set_footer(hb, size, 0);
+            HeapNode *h_next = (HeapNode *)next_block;
+            list_remove(&h->free_nodes, h_next);
+            list_enqueue(&h->free_nodes, hn);
+        } // prev is fre
+        else if (!prev_alloc && next_alloc) {
+            size += prev_size;
+            heap_block_set_footer(hb, size, 0);
+            heap_block_set_header(prev_block, size, 0);
+            bp = (void *)heap_block_prev(hb);
+        } else { // both next and prev are free
+            size += prev_size + next_size;
+            heap_block_set_header(prev_block, size, 0);
+            heap_block_set_footer(next_block, size, 0);
+            bp = (void *)heap_block_prev(hb);
+            HeapNode *h_next = (HeapNode *)next_block;
+            list_remove(&h->free_nodes, h_next);
         }
-        num_allocations++;
-        return ptr;
+    } else {
+        list_enqueue(&h->free_nodes, hn);
     }
 
-    void free(void *bp, bool should_coalesce)
-    {
-        if (bp == 0)
-            return;
+    return bp;
+}
 
-        heap_block *hb = (heap_block *)bp;
-        auto size = hb->get_header() & ~0x7;
-        hb->set_header(size, 0);
-        hb->set_footer(size, 0);
+static inline void heap_reset(Heap *h)
+{
+    h->free_nodes = (FreeQueue){NULL, NULL};
+    HeapBlock *hb = (HeapBlock *)h->start;
+    list_enqueue(&h->free_nodes, (HeapNode *)h->start);
+    heap_block_set_header(hb, h->total_memory, 0);
+    heap_block_set_footer(hb, h->total_memory, 0);
+    heap_block_set_header(heap_block_next(hb), 0, 1);
+}
 
-        if (should_coalesce) {
-            coalesce(bp);
-        } else {
-            list_enqueue(free_nodes, (heap_node *)bp);
-        }
-        used_memory -= size;
-        num_allocations--;
-        if (num_allocations == 0) {
-            Section *section = (Section *)((uintptr_t)this & ~(SECTION_SIZE - 1));
-            section->freeAll();
-            reset();
-        }
+static void heap_free(Heap *h, void *bp, bool should_coalesce)
+{
+    if (bp == 0)
+        return;
+
+    HeapBlock *hb = (HeapBlock *)bp;
+    uint32_t size = heap_block_get_header(hb) & ~0x7;
+    heap_block_set_header(hb, size, 0);
+    heap_block_set_footer(hb, size, 0);
+
+    if (should_coalesce) {
+        heap_coalesce(h, bp);
+    } else {
+        list_enqueue(&h->free_nodes, (HeapNode *)bp);
     }
-
-    inline void reset()
-    {
-        free_nodes = { NULL, NULL };
-        heap_block *hb = (heap_block *)start;
-        list_enqueue(free_nodes, (heap_node *)start);
-        hb->set_header(total_memory, 0);
-        hb->set_footer(total_memory, 0);
-        hb->next()->set_header(0, 1);
+    h->used_memory -= size;
+    h->num_allocations--;
+    if (h->num_allocations == 0) {
+        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+        section_free_all(section);
+        heap_reset(h);
     }
+}
 
-    inline void extend()
-    {
-        *start = 0;
-        *(start + WSIZE) = DSIZE | 1; /* Prologue header */
-        *(start + DSIZE) = (DSIZE | 1); /* Prologue footer */
-        *(start + WSIZE + DSIZE) = 1; /* Epilogue header */
-        start = start + DSIZE * 2;
+static inline void heap_extend(Heap *h)
+{
+    *h->start = 0;
+    *(h->start + WSIZE) = DSIZE | 1;   /* Prologue header */
+    *(h->start + DSIZE) = (DSIZE | 1); /* Prologue footer */
+    *(h->start + WSIZE + DSIZE) = 1;   /* Epilogue header */
+    h->start = h->start + DSIZE * 2;
 
-        reset();
-    }
+    heap_reset(h);
+}
 
-    inline void *coalesce(void *bp)
-    {
-        heap_block *hb = (heap_block *)bp;
-        auto size = hb->get_header() & ~0x7;
-        heap_block *prev_block = hb->prev();
-        heap_block *next_block = hb->next();
-        int prev_header = prev_block->get_header();
-        int next_header = next_block->get_header();
+static void heap_init(Heap *h, int8_t pidx, ExponentType partition)
+{
+    size_t psize = 1 << size_clss_to_exponent[partition];
+    uintptr_t section_end = align_up((uintptr_t)h, psize);
+    size_t remaining_size = section_end - (uintptr_t)&h->blocks[0];
 
-        size_t prev_alloc = prev_header & 0x1;
-        size_t next_alloc = next_header & 0x1;
+    size_t block_memory = psize - sizeof(Heap) - sizeof(Section);
+    size_t header_footer_offset = sizeof(uintptr_t) * 2;
+    h->idx = pidx;
+    h->used_memory = 0;
+    h->total_memory = (uint32_t)((MIN(remaining_size, block_memory)) - header_footer_offset - HEAP_NODE_OVERHEAD);
+    h->max_block = h->total_memory;
+    h->min_block = sizeof(uintptr_t);
+    h->num_allocations = 0;
+    h->start = &h->blocks[0];
+    h->next = NULL;
+    h->prev = NULL;
+    heap_extend(h);
+}
 
-        heap_node *hn = (heap_node *)bp;
-        if (!(prev_alloc && next_alloc)) {
-            size_t prev_size = prev_header & ~0x7;
-            size_t next_size = next_header & ~0x7;
+inline Heap *heap_get_prev(Heap *h) { return h->prev; }
+inline Heap *heap_get_next(Heap *h) { return h->next; }
+inline void heap_set_prev(Heap *h, Heap *p) { h->prev = p; }
+inline void heap_set_ext(Heap *h, Heap *n) { h->next = n; }
 
-            // next is free
-            if (prev_alloc && !next_alloc) {
-                size += next_size;
-                hb->set_header(size, 0);
-                hb->set_footer(size, 0);
-                heap_node *h_next = (heap_node *)next_block;
-                list_remove(free_nodes, h_next);
-                list_enqueue(free_nodes, hn);
-            } // prev is fre
-            else if (!prev_alloc && next_alloc) {
-                size += prev_size;
-                hb->set_footer(size, 0);
-                prev_block->set_header(size, 0);
-                bp = (void *)hb->prev();
-            } else { // both next and prev are free
-                size += prev_size + next_size;
-                prev_block->set_header(size, 0);
-                next_block->set_footer(size, 0);
-                bp = (void *)hb->prev();
-                heap_node *h_next = (heap_node *)next_block;
-                list_remove(free_nodes, h_next);
-            }
-        } else {
-            list_enqueue(free_nodes, hn);
-        }
+// lockless message queue
+typedef struct message_t
+{
+    _Atomic(uintptr_t) next;
+} message;
 
-        return bp;
-    }
-
-    inline void place(void *bp, uint32_t asize)
-    {
-        heap_block *hb = (heap_block *)bp;
-        auto csize = hb->get_header() & ~0x7;
-        if ((csize - asize) >= (DSIZE + HEAP_NODE_OVERHEAD)) {
-            hb->set_header(asize, 1);
-            hb->set_footer(asize, 1);
-            hb = hb->next();
-            hb->set_header(csize - asize, 0);
-            hb->set_footer(csize - asize, 0);
-            list_enqueue(free_nodes, (heap_node *)hb);
-        } else {
-            hb->set_header(csize, 1);
-            hb->set_footer(csize, 1);
-        }
-    }
-
-    inline void *find_fit(uint32_t asize)
-    {
-        auto current = free_nodes.head;
-        while (current != NULL) {
-            heap_block *hb = (heap_block *)current;
-            int header = hb->get_header();
-            uint32_t bsize = header & ~0x7;
-            if (asize <= bsize) {
-                list_remove(free_nodes, current);
-                place(current, asize);
-                return current;
-            }
-            current = current->getNext();
-        }
-        return NULL;
-    }
-
-    void init(int8_t pidx, Exponent partition)
-    {
-        auto psize = 1 << size_clss_to_exponent[partition];
-        uintptr_t section_end = align_up((uintptr_t)this, psize);
-        auto remaining_size = section_end - (uintptr_t)&blocks[0];
-
-        auto block_memory = psize - sizeof(Heap) - sizeof(Section);
-        auto header_footer_offset = sizeof(uintptr_t) * 2;
-        idx = pidx;
-        used_memory = 0;
-        total_memory = (uint32_t)((min(remaining_size, block_memory)) - header_footer_offset - HEAP_NODE_OVERHEAD);
-        max_block = total_memory;
-        min_block = sizeof(uintptr_t);
-        num_allocations = 0;
-        start = &blocks[0];
-        next = NULL;
-        prev = NULL;
-        extend();
-    }
-
-public:
-    uint8_t blocks[1];
-    inline Heap *getPrev() const { return prev; }
-    inline Heap *getNext() const { return next; }
-    inline void setPrev(Heap *p) { prev = p; }
-    inline void setNext(Heap *n) { next = n; }
-};
+typedef struct message_queue_t
+{
+    _Atomic(uintptr_t) head;
+    _Atomic(uintptr_t) tail;
+} message_queue;
 
 #define Z4(x) x(), x(), x(), x()
 #define Z8(x) Z4(x), Z4(x)
@@ -1156,81 +1149,91 @@ public:
 #define Z512(x) Z256(x), Z256(x)
 #define Z1024(x) Z512(x), Z512(x)
 
-#define zQueue(x)                           \
-    {                                       \
-        NULL, NULL, sizeof(uintptr_t) * (x) \
+#define zQueue(x)                                                                                                      \
+    {                                                                                                                  \
+        NULL, NULL, sizeof(uintptr_t) * (x)                                                                            \
     }
-#define zPoolQueue                                                                                                                          \
-    {                                                                                                                                       \
-        zQueue(0), zQueue(1), zQueue(2), zQueue(3), zQueue(4), zQueue(5), zQueue(6), zQueue(7),                                             \
-            zQueue(8), zQueue(9), zQueue(10), zQueue(11), zQueue(12), zQueue(13), zQueue(14), zQueue(15),                                   \
-            zQueue(16), zQueue(18), zQueue(20), zQueue(22), zQueue(24), zQueue(26), zQueue(28), zQueue(30),                                 \
-            zQueue(32), zQueue(36), zQueue(40), zQueue(44), zQueue(48), zQueue(52), zQueue(56), zQueue(60),                                 \
-            zQueue(64), zQueue(72), zQueue(80), zQueue(88), zQueue(96), zQueue(104), zQueue(112), zQueue(120),                              \
-            zQueue(128), zQueue(144), zQueue(160), zQueue(176), zQueue(192), zQueue(208), zQueue(224), zQueue(240),                         \
-            zQueue(256), zQueue(288), zQueue(320), zQueue(352), zQueue(384), zQueue(416), zQueue(448), zQueue(480),                         \
-            zQueue(512), zQueue(576), zQueue(640), zQueue(704), zQueue(768), zQueue(832), zQueue(896), zQueue(960),                         \
-            zQueue(1024), zQueue(1152), zQueue(1280), zQueue(1408), zQueue(1536), zQueue(1664), zQueue(1792), zQueue(1920),                 \
-            zQueue(2048), zQueue(2304), zQueue(2560), zQueue(2816), zQueue(3072), zQueue(3328), zQueue(3584), zQueue(3840),                 \
-            zQueue(4096), zQueue(4608), zQueue(5120), zQueue(5632), zQueue(6144), zQueue(6656), zQueue(7168), zQueue(7680),                 \
-            zQueue(8192), zQueue(9216), zQueue(10240), zQueue(11264), zQueue(12288), zQueue(13312), zQueue(14336), zQueue(15360),           \
-            zQueue(16384), zQueue(18432), zQueue(20480), zQueue(22528), zQueue(24576), zQueue(26624), zQueue(28672), zQueue(30720),         \
-            zQueue(32768), zQueue(36864), zQueue(40960), zQueue(45056), zQueue(49152), zQueue(53248), zQueue(57344), zQueue(61440),         \
-            zQueue(65536), zQueue(73728), zQueue(81920), zQueue(90112), zQueue(98304), zQueue(106496), zQueue(114688), zQueue(122880),      \
-            zQueue(131072), zQueue(147456), zQueue(163840), zQueue(180224), zQueue(196608), zQueue(212992), zQueue(229376), zQueue(245760), \
-            zQueue(262144), zQueue(294912), zQueue(327680), zQueue(360448), zQueue(393216), zQueue(425984), zQueue(458752), zQueue(491520), \
-            zQueue(524288), zQueue(589824)                                                                                                  \
-    }
-
-#define POOL_HEAP() zPoolQueue
-#define zPageQueue                                     \
-    {                                                  \
-        { NULL, NULL }, { NULL, NULL }, { NULL, NULL } \
+#define zPoolQueue                                                                                                     \
+    {                                                                                                                  \
+        zQueue(0), zQueue(1), zQueue(2), zQueue(3), zQueue(4), zQueue(5), zQueue(6), zQueue(7), zQueue(8), zQueue(9),  \
+            zQueue(10), zQueue(11), zQueue(12), zQueue(13), zQueue(14), zQueue(15), zQueue(16), zQueue(18),            \
+            zQueue(20), zQueue(22), zQueue(24), zQueue(26), zQueue(28), zQueue(30), zQueue(32), zQueue(36),            \
+            zQueue(40), zQueue(44), zQueue(48), zQueue(52), zQueue(56), zQueue(60), zQueue(64), zQueue(72),            \
+            zQueue(80), zQueue(88), zQueue(96), zQueue(104), zQueue(112), zQueue(120), zQueue(128), zQueue(144),       \
+            zQueue(160), zQueue(176), zQueue(192), zQueue(208), zQueue(224), zQueue(240), zQueue(256), zQueue(288),    \
+            zQueue(320), zQueue(352), zQueue(384), zQueue(416), zQueue(448), zQueue(480), zQueue(512), zQueue(576),    \
+            zQueue(640), zQueue(704), zQueue(768), zQueue(832), zQueue(896), zQueue(960), zQueue(1024), zQueue(1152),  \
+            zQueue(1280), zQueue(1408), zQueue(1536), zQueue(1664), zQueue(1792), zQueue(1920), zQueue(2048),          \
+            zQueue(2304), zQueue(2560), zQueue(2816), zQueue(3072), zQueue(3328), zQueue(3584), zQueue(3840),          \
+            zQueue(4096), zQueue(4608), zQueue(5120), zQueue(5632), zQueue(6144), zQueue(6656), zQueue(7168),          \
+            zQueue(7680), zQueue(8192), zQueue(9216), zQueue(10240), zQueue(11264), zQueue(12288), zQueue(13312),      \
+            zQueue(14336), zQueue(15360), zQueue(16384), zQueue(18432), zQueue(20480), zQueue(22528), zQueue(24576),   \
+            zQueue(26624), zQueue(28672), zQueue(30720), zQueue(32768), zQueue(36864), zQueue(40960), zQueue(45056),   \
+            zQueue(49152), zQueue(53248), zQueue(57344), zQueue(61440), zQueue(65536), zQueue(73728), zQueue(81920),   \
+            zQueue(90112), zQueue(98304), zQueue(106496), zQueue(114688), zQueue(122880), zQueue(131072),              \
+            zQueue(147456), zQueue(163840), zQueue(180224), zQueue(196608), zQueue(212992), zQueue(229376),            \
+            zQueue(245760), zQueue(262144), zQueue(294912), zQueue(327680), zQueue(360448), zQueue(393216),            \
+            zQueue(425984), zQueue(458752), zQueue(491520), zQueue(524288), zQueue(589824)                             \
     }
 
-#define PAGE_HEAP() zPageQueue
-#define zSectionQueue \
-                      \
-    {                 \
-        NULL, NULL    \
+#define POOL_INIT() zPoolQueue
+#define zHeapQueue                                                                                                     \
+    {                                                                                                                  \
+        {NULL, NULL}, {NULL, NULL}, { NULL, NULL }                                                                     \
     }
 
-#define SECTION_HEAP() zSectionQueue
+#define HEAP_INIT() zHeapQueue
+#define zSectionQueue                                                                                                  \
+                                                                                                                       \
+    {                                                                                                                  \
+        NULL, NULL                                                                                                     \
+    }
 
-#define TH10(tid, TH)                                                         \
-    TH(tid), TH(tid + 1), TH(tid + 2), TH(tid + 3), TH(tid + 4), TH(tid + 5), \
-        TH(tid + 6), TH(tid + 7), TH(tid + 8), TH(tid + 9)
-#define TH100(tid, x)                                                              \
-    TH10(tid * 100, x), TH10(tid * 100 + 10, x), TH10(tid * 100 + 20, x),          \
-        TH10(tid * 100 + 30, x), TH10(tid * 100 + 40, x), TH10(tid * 100 + 50, x), \
-        TH10(tid * 100 + 60, x), TH10(tid * 100 + 70, x), TH10(tid * 100 + 80, x), \
-        TH10(tid * 100 + 90, x)
-#define TH1000(x)                                                    \
-    TH100(0, x), TH100(1, x), TH100(2, x), TH100(3, x), TH100(4, x), \
-        TH100(5, x), TH100(6, x), TH100(7, x), TH100(8, x), TH100(9, x)
-#define TH1024(x)                                                          \
-    {                                                                      \
-        TH1000(x), x(1000), x(1001), x(1002), x(1003), x(1004), x(1005),   \
-            x(1006), x(1007), x(1008), x(1009), x(1010), x(1011), x(1012), \
-            x(1013), x(1014), x(1015), x(1016), x(1017), x(1018), x(1019), \
-            x(1020), x(1021), x(1022), x(1023)                             \
+#define SECTION_INIT() zSectionQueue
+
+#define TH10(tid, TH)                                                                                                  \
+    TH(tid), TH(tid + 1), TH(tid + 2), TH(tid + 3), TH(tid + 4), TH(tid + 5), TH(tid + 6), TH(tid + 7), TH(tid + 8),   \
+        TH(tid + 9)
+#define TH100(tid, x)                                                                                                  \
+    TH10(tid * 100, x), TH10(tid * 100 + 10, x), TH10(tid * 100 + 20, x), TH10(tid * 100 + 30, x),                     \
+        TH10(tid * 100 + 40, x), TH10(tid * 100 + 50, x), TH10(tid * 100 + 60, x), TH10(tid * 100 + 70, x),            \
+        TH10(tid * 100 + 80, x), TH10(tid * 100 + 90, x)
+#define TH1000(x)                                                                                                      \
+    TH100(0, x), TH100(1, x), TH100(2, x), TH100(3, x), TH100(4, x), TH100(5, x), TH100(6, x), TH100(7, x),            \
+        TH100(8, x), TH100(9, x)
+#define TH1024(x)                                                                                                      \
+    {                                                                                                                  \
+        TH1000(x), x(1000), x(1001), x(1002), x(1003), x(1004), x(1005), x(1006), x(1007), x(1008), x(1009), x(1010),  \
+            x(1011), x(1012), x(1013), x(1014), x(1015), x(1016), x(1017), x(1018), x(1019), x(1020), x(1021),         \
+            x(1022), x(1023)                                                                                           \
     }
 
 #define NEG() -1
 #define ZERO() 0
 #define VALUE(x) x
-#define EMPTY_OWNERS \
-    {                \
-        Z1024(NEG)   \
+#define EMPTY_OWNERS                                                                                                   \
+    {                                                                                                                  \
+        Z1024(NEG)                                                                                                     \
     }
 #define DEFAULT_OWNERS TH1024(VALUE)
 
+#define EMPTY_MESSAGE()                                                                                                \
+    {                                                                                                                  \
+        0UL                                                                                                            \
+    }
+cache_align message message_sentinals[MAX_THREADS] = {Z1024(EMPTY_MESSAGE)};
+#define zMessageQueue(tid)                                                                                             \
+    {                                                                                                                  \
+        (uintptr_t) & message_sentinals[tid], (uintptr_t)&message_sentinals[tid]                                       \
+    }
+#define MESSAGE_LAYOUT TH1024(zMessageQueue)
+cache_align message_queue message_queues[MAX_THREADS] = MESSAGE_LAYOUT;
 static cache_align int64_t partition_owners[MAX_THREADS] = EMPTY_OWNERS;
 
-std::mutex partition_mutex;
+mutex_t partition_mutex;
 static inline int8_t reserve_any_partition_set()
 {
-    std::unique_lock<std::mutex> lock(partition_mutex);
+    mutex_lock(&partition_mutex);
     int8_t reserved_id = -1;
     for (int i = 0; i < 1024; i++) {
         if (partition_owners[i] == -1) {
@@ -1239,11 +1242,12 @@ static inline int8_t reserve_any_partition_set()
             break;
         }
     }
+    mutex_unlock(&partition_mutex);
     return reserved_id;
 }
 static inline int8_t reserve_any_partition_set_for(int8_t midx)
 {
-    std::unique_lock<std::mutex> lock(partition_mutex);
+    mutex_lock(&partition_mutex);
     int8_t reserved_id = -1;
     for (int i = 0; i < 1024; i++) {
         if (partition_owners[i] == -1) {
@@ -1252,23 +1256,26 @@ static inline int8_t reserve_any_partition_set_for(int8_t midx)
             break;
         }
     }
+    mutex_unlock(&partition_mutex);
     return reserved_id;
 }
 static inline bool reserve_partition_set(int8_t idx, int8_t midx)
 {
-    std::unique_lock<std::mutex> lock(partition_mutex);
+    mutex_lock(&partition_mutex);
     if (partition_owners[idx] == -1) {
         partition_owners[idx] = midx;
         return true;
     }
+    mutex_unlock(&partition_mutex);
     return false;
 }
 
 static inline void release_partition_set(int8_t idx)
 {
     if (idx >= 0) {
-        std::unique_lock<std::mutex> lock(partition_mutex);
+        mutex_lock(&partition_mutex);
         partition_owners[idx] = -1;
+        mutex_unlock(&partition_mutex);
     }
 }
 
@@ -1286,10 +1293,7 @@ static inline bool decommit_memory(void *base, size_t size)
 #ifdef WINDOWS
     return VirtualFree(base, size, MEM_DECOMMIT);
 #else
-    return (mmap(base, size, PROT_NONE,
-                (MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE), -1,
-                0)
-        == base);
+    return (mmap(base, size, PROT_NONE, (MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE), -1, 0) == base);
 #endif
 }
 
@@ -1328,7 +1332,8 @@ static inline bool reset_memory(void *base, size_t size)
     int flags = MEM_RESET;
     void *p = VirtualAlloc(base, size, flags, PAGE_READWRITE);
     if (p == base && base != NULL) {
-        VirtualUnlock(base, size); // VirtualUnlock after MEM_RESET removes the memory from the working set
+        VirtualUnlock(base, size); // VirtualUnlock after MEM_RESET removes the
+                                   // memory from the working set
     }
     if (p != base)
         return false;
@@ -1361,9 +1366,8 @@ static bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
 }
 // yes, for the rare occation an issue arises, we just lock the mutex to avoid
 // thread clashing issues on windows
-std::mutex aligned_alloc_mutex;
-static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
-    bool commit, uintptr_t end)
+mutex_t aligned_alloc_mutex;
+static void *alloc_memory_aligned(void *base, size_t size, size_t alignment, bool commit, uintptr_t end)
 {
     // alignment is smaller than a page size or not a power of two.
     if (!(alignment >= os_page_size && POWER_OF_TWO(alignment)))
@@ -1372,14 +1376,15 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
     if (size >= (SIZE_MAX - alignment))
         return NULL;
 
-    std::unique_lock<std::mutex> lock(aligned_alloc_mutex);
+    mutex_lock(&aligned_alloc_mutex);
     void *ptr = alloc_memory(base, size, commit);
-    if (ptr == NULL)
-        return NULL;
+    if (ptr == NULL) {
+        goto err;
+    }
 
     if (!safe_to_aquire(base, ptr, size, end)) {
         free_memory(ptr, size);
-        return NULL;
+        goto err;
     }
 
     if (((uintptr_t)ptr % alignment != 0)) {
@@ -1390,20 +1395,21 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
         // Now we attempt to overallocate
         size_t adj_size = size + alignment;
         ptr = alloc_memory(base, adj_size, commit);
-        if (ptr == NULL)
-            return NULL;
+        if (ptr == NULL) {
+            goto err;
+        }
 
         // if the new ptr is not in our current partition set
         if (!safe_to_aquire(base, ptr, adj_size, end)) {
             free_memory(ptr, adj_size);
-            return NULL;
+            goto err;
         }
 
         // if we got our aligned memory
         if (((uintptr_t)ptr % alignment) == 0) {
             // drop our excess request
             decommit_memory((uint8_t *)ptr + size, alignment);
-            return ptr;
+            goto success;
         }
         // we are still not aligned, but we have an address that is aligned.
         free_memory(ptr, adj_size);
@@ -1413,26 +1419,32 @@ static void *alloc_memory_aligned(void *base, size_t size, size_t alignment,
         ptr = alloc_memory(aligned_p, size, commit);
         if (ptr == NULL) {
             // Why would this fail?
-            return NULL;
+            goto err;
         }
         if (!safe_to_aquire(base, ptr, size, end)) {
             free_memory(ptr, size);
-            return NULL;
+            goto err;
         }
 
         // if the system fails to get memory from the part we just released.
-        // there is some other allocator screwing with our assumptions... so FAIL!
+        // there is some other allocator screwing with our assumptions... so
+        // FAIL!
         if (((uintptr_t)ptr % alignment) != 0) {
             free_memory(ptr, size);
-            return NULL;
+            goto err;
         }
     }
+success:
+    mutex_unlock(&aligned_alloc_mutex);
     return ptr;
+err:
+    mutex_unlock(&aligned_alloc_mutex);
+    return NULL;
 }
 
-cache_align Pool::Queue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = { Z1024(POOL_HEAP) };
-cache_align Heap::Queue page_queues[MAX_THREADS][3] = { Z1024(PAGE_HEAP) };
-cache_align Section::Queue section_queues[MAX_THREADS] = { Z1024(SECTION_HEAP) };
+cache_align PoolQueue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = {Z1024(POOL_INIT)};
+cache_align Queue heap_queues[MAX_THREADS][3] = {Z1024(HEAP_INIT)};
+cache_align Queue section_queues[MAX_THREADS] = {Z1024(SECTION_INIT)};
 
 static inline uint8_t sizeToPool(size_t as)
 {
@@ -1457,37 +1469,22 @@ static inline uint8_t sizeToPage(size_t as)
     }
 }
 
-// lockless message queue
-typedef struct message_t
-{
-    _Atomic(uintptr_t) next;
-} message;
-
-typedef struct message_queue_t
-{
-    _Atomic(uintptr_t) head;
-    _Atomic(uintptr_t) tail;
-} message_queue;
-
 typedef void (*free_func)(void *);
-struct PartitionAllocator
+typedef struct PartitionAllocator_t
 {
-public:
-    Area::List area_01;
-    Area::List area_2;
-    Area::List area_3;
-    static Area::List area_4;
-    static Area::List area_5;
+    AreaList area_01;
+    AreaList area_2;
+    AreaList area_3;
 
     // sections local to this thread with free pages or pools
-    Section::Queue *sections;
+    Queue *sections;
     // free pages that have room for various size allocations.
-    Heap::Queue *pages;
+    Queue *heaps;
     // how man pages in total have been allocated.
-    uint32_t page_count;
+    uint32_t heap_count;
 
     // free pools of various sizes.
-    Pool::Queue *pools;
+    PoolQueue *pools;
     // how many pools in total have been allocated.
     uint32_t pool_count;
 
@@ -1496,463 +1493,444 @@ public:
     uint32_t message_count;
     // a queue of messages from other threads.
     message_queue *thread_free_queue;
+} PartitionAllocator;
 
-    message *get_last_message()
-    {
-        message *msg = thread_messages;
-        if (msg == NULL) {
-            return NULL;
-        }
-        while ((void *)msg->next != NULL) {
-            msg = (message *)msg->next;
-        }
-        return msg;
+Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_size, uint64_t alignment);
+message *partition_allocator_get_last_message(PartitionAllocator *pa)
+{
+    message *msg = pa->thread_messages;
+    if (msg == NULL) {
+        return NULL;
     }
-
-    void thread_free(void *p)
-    {
-        message *new_free = (message *)p;
-        new_free->next = (uintptr_t)thread_messages;
-        thread_messages = new_free;
+    while ((void *)msg->next != NULL) {
+        msg = (message *)msg->next;
     }
+    return msg;
+}
 
-    bool release_local_areas()
-    {
-        bool was_released = false;
-        if (area_01.area_count) {
-            was_released |= release_areas_from_queue(&area_01);
-        }
-        if (area_2.area_count) {
-            was_released |= release_areas_from_queue(&area_2);
-        }
-        if (area_3.area_count) {
-            was_released |= release_areas_from_queue(&area_3);
-        }
-        return was_released;
-    }
+void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
+{
+    message *new_free = (message *)p;
+    new_free->next = (uintptr_t)pa->thread_messages;
+    pa->thread_messages = new_free;
+}
 
-    void free_area(Area *area)
-    {
-        size_t size = area->getSize();
-        if (size == AREA_SIZE_SMALL) {
-            free_area(area, AreaType::AT_FIXED_32);
-        } else if (size == AREA_SIZE_LARGE) {
-            free_area(area, AreaType::AT_FIXED_128);
-        } else if (size == AREA_SIZE_HUGE) {
-            free_area(area, AreaType::AT_FIXED_256);
+static Area *partition_allocator_get_next_area(AreaList *area_queue, uint64_t size, uint64_t alignment)
+{
+
+    void *aligned_addr = NULL;
+    Area *insert = NULL;
+    uintptr_t asize = align_up(size, alignment);
+    uint64_t delta = (uint64_t)((uint8_t *)area_queue->end_addr - area_queue->start_addr);
+    if (area_queue->head == NULL) {
+        aligned_addr = (void *)area_queue->start_addr;
+    } else {
+        // is there room at the end
+        //
+        uint64_t tail_end = (uint64_t)((uint8_t *)area_queue->tail + area_get_size(area_queue->tail));
+        delta = (uint64_t)((uint8_t *)area_queue->end_addr - tail_end);
+        if (delta < size && (area_queue->tail != area_queue->head)) {
+            Area *current = area_queue->head;
+            while (current != area_queue->tail) {
+                Area *next = area_get_next(current);
+                size_t c_size = area_get_size(current);
+                size_t c_end = c_size + (size_t)(uint8_t *)current;
+                delta = (uint64_t)((uint8_t *)next - c_end);
+                if (delta >= asize) {
+                    insert = current;
+                    break;
+                }
+                current = next;
+            }
+        } else if (delta >= size) {
+            insert = area_queue->tail;
+        }
+
+        if (insert == NULL) {
+            delta = (uint64_t)((uint8_t *)area_queue->head - area_queue->start_addr);
         } else {
-            free_area(area, AreaType::AT_VARIABLE);
+            size_t si = area_get_size(insert);
+            size_t offset = (uintptr_t)((uint8_t *)insert + si);
+            aligned_addr = (void *)align_up((uintptr_t)offset, alignment);
         }
     }
-
-    Area::List *get_area_queue(Area *area)
-    {
-        size_t size = area->getSize();
-        if (size == AREA_SIZE_SMALL) {
-            return &area_01;
-        } else if (size == AREA_SIZE_LARGE) {
-            return &area_2;
-        } else {
-            return &area_3;
-        }
+    if (delta < size) {
+        return NULL;
     }
 
-    Area *get_area(size_t size, ContainerType t)
-    {
-        Area *curr_area = NULL;
-        uint32_t small_area_limit = LARGE_OBJECT_SIZE;
-        if (t == PAGE) {
-            small_area_limit = MEDIUM_OBJECT_SIZE;
-        }
-        if (size <= small_area_limit) {
-            curr_area = get_free_area(size, AreaType::AT_FIXED_32);
-            if (curr_area == NULL) {
-                bool was_released = release_single_area_from_queue(&area_01);
-                was_released |= release_single_area_from_queue(&area_2);
-                if (was_released) {
-                    // try again.
-                    curr_area = get_free_area(size, AreaType::AT_FIXED_32);
-                }
-            }
-        } else if (size <= AREA_SIZE_SMALL) {
-            curr_area = get_free_area(size, AreaType::AT_FIXED_128);
-            if (curr_area == NULL) {
-                bool was_released = release_single_area_from_queue(&area_2);
-                was_released |= release_single_area_from_queue(&area_3);
-                if (was_released) {
-                    // try again.
-                    curr_area = get_free_area(size, AreaType::AT_FIXED_128);
-                }
-            }
-        } else if (size <= AREA_SIZE_LARGE) {
-            curr_area = get_free_area(size, AreaType::AT_FIXED_256);
-            if (curr_area == NULL) {
-                if (release_single_area_from_queue(&area_3)) {
-                    // try again.
-                    curr_area = get_free_area(size, AreaType::AT_FIXED_256);
-                }
-            }
-        } else {
-            curr_area = get_free_area(size, AreaType::AT_VARIABLE);
-            if (curr_area == NULL) {
-                if (release_single_area_from_queue(&area_3)) {
-                    // try again.
-                    curr_area = get_free_area(size, AreaType::AT_VARIABLE);
-                }
-            }
-        }
-
-        return curr_area;
+    Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, size, alignment, true, area_queue->end_addr);
+    if (new_area == NULL) {
+        return NULL;
     }
+    new_area->active_mask = (Bitmask){0};
+    new_area->constr_mask = (Bitmask){0};
+    new_area->partition_id = area_queue->partition_id;
+    area_set_next(new_area, NULL);
+    area_set_prev(new_area, NULL);
+    area_list_insert_at(area_queue, insert, new_area);
+    // list_enqueue(*area_queue, new_area);
+    return new_area;
+}
 
-    Section *alloc_section(size_t size, ContainerType t)
-    {
-        Area *new_area = get_area(size, t);
-        if (new_area == NULL) {
-            return NULL;
+bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *area)
+{
+    if (area_is_free(area)) {
+
+        // all sections should be free and very likely in the free sections
+        // list.
+        int num_sections = area_get_section_count(area);
+        Section *root_section = (Section *)area;
+        ContainerType root_ctype = section_get_container_type(root_section);
+        if (root_ctype == HEAP) {
+            ExponentType exp = section_get_container_exponent(root_section);
+            Heap *heap = (Heap *)section_get_collection(root_section, 0, exp);
+            Queue *queue = &pa->heaps[section_get_container_exponent(root_section) - 3];
+            list_remove(queue, heap);
+            return true;
         }
 
-        int32_t section_idx = claim_section(new_area);
+        for (int i = 0; i < num_sections; i++) {
+            Section *section = (Section *)((uint8_t *)area + SECTION_SIZE * i);
 
-        Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
-        section->constr_mask = { 0 };
-        section->active_mask = { 0 };
-        section->idx = section_idx;
-        section->partition_id = new_area->partition_id;
-        return section;
-    }
-
-    Area *get_next_area(Area::List *area_queue, uint64_t size,
-        uint64_t alignment)
-    {
-
-#define get_next_area_assert __LINE__
-#define get_next_area_head_is_null __LINE__
-#define get_next_area_head_is_not_null __LINE__
-#define get_next_area_room_internally __LINE__
-#define get_next_area_room_at_the_end __LINE__
-#define get_next_area_room_at_the_front __LINE__
-#define get_next_area_no_room_left __LINE__
-
-        void *aligned_addr = NULL;
-        Area *insert = NULL;
-        auto asize = align_up(size, alignment);
-        uint64_t delta = (uint64_t)((uint8_t *)area_queue->end_addr - area_queue->start_addr);
-        log_assert(_alloc_h_, get_next_area_assert, alignment > size);
-        if (area_queue->head == NULL) {
-            aligned_addr = (void *)area_queue->start_addr;
-            log_define(_alloc_h_, get_next_area_head_is_null);
-        } else {
-            // is there room at the end
-            //
-            log_define(_alloc_h_, get_next_area_head_is_not_null);
-            uint64_t tail_end = (uint64_t)((uint8_t *)area_queue->tail + area_queue->tail->getSize());
-            delta = (uint64_t)((uint8_t *)area_queue->end_addr - tail_end);
-            if (delta < size && (area_queue->tail != area_queue->head)) {
-                Area *current = area_queue->head;
-                while (current != area_queue->tail) {
-                    Area *next = current->getNext();
-                    size_t c_size = current->getSize();
-                    size_t c_end = c_size + (size_t)(uint8_t *)current;
-                    delta = (uint64_t)((uint8_t *)next - c_end);
-                    if (delta >= asize) {
-                        log_define(_alloc_h_, get_next_area_room_internally);
-                        insert = current;
-                        break;
-                    }
-                    current = next;
-                }
-            } else if (delta >= size) {
-                log_define(_alloc_h_, get_next_area_room_at_the_end);
-                insert = area_queue->tail;
+            if (!area_is_claimed(area, i)) {
+                continue;
             }
+            int num_collections = section_get_collection_count(section);
+            ExponentType exp = section_get_container_exponent(section);
 
-            if (insert == NULL) {
-                log_define(_alloc_h_, get_next_area_room_at_the_front);
-                delta = (uint64_t)((uint8_t *)area_queue->head - area_queue->start_addr);
-            } else {
-                auto si = insert->getSize();
-                auto offset = (uintptr_t)((uint8_t *)insert + si);
-                aligned_addr = (void *)align_up((uintptr_t)offset, alignment);
-            }
-        }
-        if (delta < size) {
-            log_define(_alloc_h_, get_next_area_no_room_left);
-            return NULL;
-        }
-
-        Area *new_area = (Area *)alloc_memory_aligned(aligned_addr, size, alignment, true, area_queue->end_addr);
-        if (new_area == NULL) {
-            return NULL;
-        }
-        new_area->active_mask = { 0 };
-        new_area->constr_mask = { 0 };
-        new_area->partition_id = area_queue->partition_id;
-        new_area->setNext(NULL);
-        new_area->setPrev(NULL);
-        list_insert_at(*area_queue, insert, new_area);
-        // list_enqueue(*area_queue, new_area);
-        return new_area;
-    }
-
-    Area *alloc_area(Area::List *area_queue, uint64_t area_size,
-        uint64_t alignment)
-    {
-        Area *new_area = get_next_area(area_queue, area_size, alignment);
-        if (new_area == NULL) {
-            return NULL;
-        }
-        area_queue->previous_area = new_area;
-        area_queue->area_count++;
-        return new_area;
-    }
-
-    void free_area(Area *a, AreaType t)
-    {
-        switch (t) {
-        case AT_FIXED_32: {
-            area_01.area_count--;
-            list_remove(area_01, a);
-            if ((a == area_01.previous_area) || (area_01.area_count == 0)) {
-                area_01.previous_area = NULL;
-            }
-
-            break;
-        }
-        case AT_FIXED_128: {
-            area_2.area_count--;
-            list_remove(area_2, a);
-            if ((a == area_2.previous_area) || (area_2.area_count == 0)) {
-                area_2.previous_area = NULL;
-            }
-            break;
-        }
-        default: {
-            area_3.area_count--;
-            list_remove(area_3, a);
-            if ((a == area_3.previous_area) || (area_3.area_count == 0)) {
-                area_3.previous_area = NULL;
-            }
-            break;
-        }
-        };
-        free_memory(a, a->getSize());
-    }
-
-    uint32_t get_max_area_count(AreaType t)
-    {
-        switch (t) {
-        case AT_FIXED_32: {
-            return MAX_SMALL_AREAS;
-        }
-        case AT_FIXED_128: {
-            return MAX_LARGE_AREAS;
-        }
-        default: {
-            return MAX_HUGE_AREAS;
-        }
-        };
-    }
-    Area::List *get_current_queue(AreaType t, size_t s, size_t *area_size, size_t *alignement)
-    {
-        switch (t) {
-        case AT_FIXED_32: {
-            *area_size = AREA_SIZE_SMALL;
-            *alignement = *area_size;
-            return &area_01;
-        }
-        case AT_FIXED_128: {
-            *area_size = AREA_SIZE_LARGE;
-            *alignement = *area_size;
-            return &area_2;
-        }
-        case AT_FIXED_256: {
-            *area_size = AREA_SIZE_HUGE;
-            *alignement = *area_size;
-            return &area_3;
-        }
-        default: {
-            *area_size = s;
-            *alignement = AREA_SIZE_HUGE;
-            return &area_3;
-        }
-        };
-    }
-
-    Area::List *promote_area(AreaType *t, size_t *area_size, size_t *alignement)
-    {
-        switch (*t) {
-        case AT_FIXED_32: {
-            *area_size = AREA_SIZE_LARGE;
-            *alignement = *area_size;
-            *t = AT_FIXED_128;
-            return &area_2;
-        }
-        case AT_FIXED_128: {
-            *area_size = AREA_SIZE_HUGE;
-            *alignement = *area_size;
-            *t = AT_FIXED_256;
-            return &area_3;
-        }
-        default: {
-            return NULL;
-        }
-        };
-    }
-
-    Area *get_free_area_from_queue(Area::List *current_queue)
-    {
-        // the areas are empty
-        Area *new_area = NULL;
-        Area *previous_area = current_queue->previous_area;
-        if (previous_area != NULL) {
-            if (!previous_area->isFull()) {
-                new_area = previous_area;
-            }
-        } else {
-            if (current_queue->head != NULL) {
-                Area *start = current_queue->head;
-                while (start != NULL) {
-                    auto next = start->getNext();
-                    if (!start->isFull()) {
-                        new_area = start;
-                        break;
-                    }
-                    start = next;
-                }
-            }
-        }
-        return new_area;
-    }
-
-    Area *get_free_area(size_t s, AreaType t)
-    {
-        size_t area_size = AREA_SIZE_SMALL;
-        size_t alignment = area_size;
-        Area::List *current_queue = get_current_queue(t, s, &area_size, &alignment);
-
-        // the areas are empty
-        Area *new_area = get_free_area_from_queue(current_queue);
-        // try promoting first.
-        if (new_area == NULL && (get_max_area_count(t) == current_queue->area_count)) {
-            current_queue = promote_area(&t, &area_size, &alignment);
-            if (current_queue == NULL) {
-                return NULL;
-            }
-            new_area = get_free_area_from_queue(current_queue);
-            if (new_area == NULL && (get_max_area_count(t) == current_queue->area_count)) {
-                return NULL;
-            }
-        }
-
-        if (new_area == NULL) {
-            if (area_size < os_page_size) {
-                area_size = os_page_size;
-            }
-            new_area = alloc_area(current_queue, area_size, alignment);
-            if (new_area == NULL) {
-                return NULL;
-            }
-            new_area->setSize(area_size);
-        }
-
-        return new_area;
-    }
-
-    uint32_t claim_section(Area *area)
-    {
-        return area->claimSection();
-    }
-
-    bool release_areas_from_queue(Area::List *queue)
-    {
-        bool was_released = false;
-        Area *start = queue->head;
-        // find free section.
-        // detach all pools/pages/sections.
-        while (start != NULL) {
-            auto next = start->getNext();
-            was_released |= try_release_containers(start);
-            start = next;
-        }
-        start = queue->head;
-        while (start != NULL) {
-            auto next = start->getNext();
-            was_released |= try_release_area(start);
-            start = next;
-        }
-        return was_released;
-    }
-
-    bool release_single_area_from_queue(Area::List *queue)
-    {
-        bool was_released = false;
-        Area *start = queue->head;
-        // find free section.
-        // detach all pools/pages/sections.
-        while (start != NULL) {
-            auto next = start->getNext();
-            was_released |= try_release_containers(start);
-            if (was_released) {
-                was_released |= try_release_area(start);
-                break;
-            }
-            start = next;
-        }
-        return was_released;
-    }
-
-    bool try_release_containers(Area *area)
-    {
-        if (area->isFree()) {
-
-            // all sections should be free and very likely in the free sections list.
-            int num_sections = area->get_section_count();
-            Section *root_section = (Section *)area;
-            ContainerType root_ctype = root_section->getContainerType();
-            if (root_ctype == PAGE) {
-                Exponent exp = root_section->getContainerExponent();
-                auto page = (Heap *)root_section->getCollection(0, exp);
-                auto queue = &pages[root_section->getContainerExponent() - 3];
-                list_remove(*queue, page);
-                return true;
-            }
-
-            for (int i = 0; i < num_sections; i++) {
-                Section *section = (Section *)((uint8_t *)area + SECTION_SIZE * i);
-
-                if (!area->isClaimed(i)) {
+            for (int j = 0; j < num_collections; j++) {
+                if (!section_is_claimed(section, j)) {
                     continue;
                 }
-                int num_collections = section->get_collection_count();
-                Exponent exp = section->getContainerExponent();
-
-                for (int j = 0; j < num_collections; j++) {
-                    if (!section->isClaimed(j)) {
-                        continue;
-                    }
-                    auto pool = (Pool *)section->getCollection(j, exp);
-                    auto queue = &pools[sizeToPool(pool->block_size)];
-                    list_remove(*queue, pool);
-                }
-
-                list_remove(*sections, section);
+                Pool *pool = (Pool *)section_get_collection(section, j, exp);
+                PoolQueue *queue = &pa->pools[sizeToPool(pool->block_size)];
+                list_remove(queue, pool);
             }
-            return true;
+
+            list_remove(pa->sections, section);
         }
-        return false;
+        return true;
+    }
+    return false;
+}
+
+void partition_allocator_free_area(PartitionAllocator *pa, Area *a, AreaType t)
+{
+    switch (t) {
+    case AT_FIXED_32: {
+        pa->area_01.area_count--;
+        area_list_remove(&pa->area_01, a);
+        if ((a == pa->area_01.previous_area) || (pa->area_01.area_count == 0)) {
+            pa->area_01.previous_area = NULL;
+        }
+
+        break;
+    }
+    case AT_FIXED_128: {
+        pa->area_2.area_count--;
+        area_list_remove(&pa->area_2, a);
+        if ((a == pa->area_2.previous_area) || (pa->area_2.area_count == 0)) {
+            pa->area_2.previous_area = NULL;
+        }
+        break;
+    }
+    default: {
+        pa->area_3.area_count--;
+        area_list_remove(&pa->area_3, a);
+        if ((a == pa->area_3.previous_area) || (pa->area_3.area_count == 0)) {
+            pa->area_3.previous_area = NULL;
+        }
+        break;
+    }
+    };
+    free_memory(a, area_get_size(a));
+}
+
+void partition_allocator_try_free_area(PartitionAllocator *pa, Area *area)
+{
+    size_t size = area_get_size(area);
+    if (size == AREA_SIZE_SMALL) {
+        partition_allocator_free_area(pa, area, AT_FIXED_32);
+    } else if (size == AREA_SIZE_LARGE) {
+        partition_allocator_free_area(pa, area, AT_FIXED_128);
+    } else if (size == AREA_SIZE_HUGE) {
+        partition_allocator_free_area(pa, area, AT_FIXED_256);
+    } else {
+        partition_allocator_free_area(pa, area, AT_VARIABLE);
+    }
+}
+
+bool partition_allocator_try_release_area(PartitionAllocator *pa, Area *area)
+{
+    if (area_is_free(area)) {
+
+        partition_allocator_try_free_area(pa, area);
+        return true;
+    }
+    return false;
+}
+
+bool partition_allocator_release_areas_from_queue(PartitionAllocator *pa, AreaList *queue)
+{
+    bool was_released = false;
+    Area *start = queue->head;
+    // find free section.
+    // detach all pools/pages/sections.
+    while (start != NULL) {
+        Area *next = area_get_next(start);
+        was_released |= partition_allocator_try_release_containers(pa, start);
+        start = next;
+    }
+    start = queue->head;
+    while (start != NULL) {
+        Area *next = area_get_next(start);
+        was_released |= partition_allocator_try_release_area(pa, start);
+        start = next;
+    }
+    return was_released;
+}
+
+bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, AreaList *queue)
+{
+    bool was_released = false;
+    Area *start = queue->head;
+    // find free section.
+    // detach all pools/pages/sections.
+    while (start != NULL) {
+        Area *next = area_get_next(start);
+        was_released |= partition_allocator_try_release_containers(pa, start);
+        if (was_released) {
+            was_released |= partition_allocator_try_release_area(pa, start);
+            break;
+        }
+        start = next;
+    }
+    return was_released;
+}
+
+bool partition_allocator_release_local_areas(PartitionAllocator *pa)
+{
+    bool was_released = false;
+    if (pa->area_01.area_count) {
+        was_released |= partition_allocator_release_areas_from_queue(pa, &pa->area_01);
+    }
+    if (pa->area_2.area_count) {
+        was_released |= partition_allocator_release_areas_from_queue(pa, &pa->area_2);
+    }
+    if (pa->area_3.area_count) {
+        was_released |= partition_allocator_release_areas_from_queue(pa, &pa->area_3);
+    }
+    return was_released;
+}
+
+AreaList *partition_allocator_get_area_queue(PartitionAllocator *pa, Area *area)
+{
+    size_t size = area_get_size(area);
+    if (size == AREA_SIZE_SMALL) {
+        return &pa->area_01;
+    } else if (size == AREA_SIZE_LARGE) {
+        return &pa->area_2;
+    } else {
+        return &pa->area_3;
+    }
+}
+
+static Area *partition_allocator_get_free_area_from_queue(AreaList *current_queue)
+{
+    // the areas are empty
+    Area *new_area = NULL;
+    Area *previous_area = current_queue->previous_area;
+    if (previous_area != NULL) {
+        if (!area_is_full(previous_area)) {
+            new_area = previous_area;
+        }
+    } else {
+        if (current_queue->head != NULL) {
+            Area *start = current_queue->head;
+            while (start != NULL) {
+                Area *next = area_get_next(start);
+                if (!area_is_full(start)) {
+                    new_area = start;
+                    break;
+                }
+                start = next;
+            }
+        }
+    }
+    return new_area;
+}
+
+static inline uint32_t partition_allocator_get_max_area_count(AreaType t)
+{
+    switch (t) {
+    case AT_FIXED_32: {
+        return MAX_SMALL_AREAS;
+    }
+    case AT_FIXED_128: {
+        return MAX_LARGE_AREAS;
+    }
+    default: {
+        return MAX_HUGE_AREAS;
+    }
+    };
+}
+AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType t, size_t s, size_t *area_size,
+                                                size_t *alignement)
+{
+    switch (t) {
+    case AT_FIXED_32: {
+        *area_size = AREA_SIZE_SMALL;
+        *alignement = *area_size;
+        return &pa->area_01;
+    }
+    case AT_FIXED_128: {
+        *area_size = AREA_SIZE_LARGE;
+        *alignement = *area_size;
+        return &pa->area_2;
+    }
+    case AT_FIXED_256: {
+        *area_size = AREA_SIZE_HUGE;
+        *alignement = *area_size;
+        return &pa->area_3;
+    }
+    default: {
+        *area_size = s;
+        *alignement = AREA_SIZE_HUGE;
+        return &pa->area_3;
+    }
+    };
+}
+
+AreaList *partition_allocator_promote_area(PartitionAllocator *pa, AreaType *t, size_t *area_size, size_t *alignement)
+{
+    switch (*t) {
+    case AT_FIXED_32: {
+        *area_size = AREA_SIZE_LARGE;
+        *alignement = *area_size;
+        *t = AT_FIXED_128;
+        return &pa->area_2;
+    }
+    case AT_FIXED_128: {
+        *area_size = AREA_SIZE_HUGE;
+        *alignement = *area_size;
+        *t = AT_FIXED_256;
+        return &pa->area_3;
+    }
+    default: {
+        return NULL;
+    }
+    };
+}
+
+Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaType t)
+{
+    size_t area_size = AREA_SIZE_SMALL;
+    size_t alignment = area_size;
+    AreaList *current_queue = partition_allocator_get_current_queue(pa, t, s, &area_size, &alignment);
+
+    // the areas are empty
+    Area *new_area = partition_allocator_get_free_area_from_queue(current_queue);
+    // try promoting first.
+    if (new_area == NULL && (partition_allocator_get_max_area_count(t) == current_queue->area_count)) {
+        current_queue = partition_allocator_promote_area(pa, &t, &area_size, &alignment);
+        if (current_queue == NULL) {
+            return NULL;
+        }
+        new_area = partition_allocator_get_free_area_from_queue(current_queue);
+        if (new_area == NULL && (partition_allocator_get_max_area_count(t) == current_queue->area_count)) {
+            return NULL;
+        }
     }
 
-    bool try_release_area(Area *area)
-    {
-        if (area->isFree()) {
-
-            free_area(area);
-            return true;
+    if (new_area == NULL) {
+        if (area_size < os_page_size) {
+            area_size = os_page_size;
         }
-        return false;
+        new_area = partition_allocator_alloc_area(current_queue, area_size, alignment);
+        if (new_area == NULL) {
+            return NULL;
+        }
+        area_set_size(new_area, area_size);
     }
-};
+
+    return new_area;
+}
+static uint32_t partition_allocator_claim_section(Area *area) { return area_claim_section(area); }
+Area *partition_allocator_get_area(PartitionAllocator *pa, size_t size, ContainerType t)
+{
+    Area *curr_area = NULL;
+    uint32_t small_area_limit = LARGE_OBJECT_SIZE;
+    if (t == HEAP) {
+        small_area_limit = MEDIUM_OBJECT_SIZE;
+    }
+    if (size <= small_area_limit) {
+        curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_32);
+        if (curr_area == NULL) {
+            bool was_released = partition_allocator_release_single_area_from_queue(pa, &pa->area_01);
+            was_released |= partition_allocator_release_single_area_from_queue(pa, &pa->area_2);
+            if (was_released) {
+                // try again.
+                curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_32);
+            }
+        }
+    } else if (size <= AREA_SIZE_SMALL) {
+        curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_128);
+        if (curr_area == NULL) {
+            bool was_released = partition_allocator_release_single_area_from_queue(pa, &pa->area_2);
+            was_released |= partition_allocator_release_single_area_from_queue(pa, &pa->area_3);
+            if (was_released) {
+                // try again.
+                curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_128);
+            }
+        }
+    } else if (size <= AREA_SIZE_LARGE) {
+        curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_256);
+        if (curr_area == NULL) {
+            if (partition_allocator_release_single_area_from_queue(pa, &pa->area_3)) {
+                // try again.
+                curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_256);
+            }
+        }
+    } else {
+        curr_area = partition_allocator_get_free_area(pa, size, AT_VARIABLE);
+        if (curr_area == NULL) {
+            if (partition_allocator_release_single_area_from_queue(pa, &pa->area_3)) {
+                // try again.
+                curr_area = partition_allocator_get_free_area(pa, size, AT_VARIABLE);
+            }
+        }
+    }
+
+    return curr_area;
+}
+
+Section *partition_allocator_alloc_section(PartitionAllocator *pa, size_t size, ContainerType t)
+{
+    Area *new_area = partition_allocator_get_area(pa, size, t);
+    if (new_area == NULL) {
+        return NULL;
+    }
+
+    int32_t section_idx = partition_allocator_claim_section(new_area);
+
+    Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
+    section->constr_mask = (Bitmask){0};
+    section->active_mask = (Bitmask){0};
+    section->idx = section_idx;
+    section->partition_id = new_area->partition_id;
+    return section;
+}
+
+Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_size, uint64_t alignment)
+{
+    Area *new_area = partition_allocator_get_next_area(area_queue, area_size, alignment);
+    if (new_area == NULL) {
+        return NULL;
+    }
+    area_queue->previous_area = new_area;
+    area_queue->area_count++;
+    return new_area;
+}
 
 // create our 1024 static area containers by macro expansion
 #define PARTITION_01 ((uintptr_t)2 << 40)
@@ -1962,60 +1940,42 @@ public:
 #define PARTITION_5 ((uintptr_t)64 << 40)
 #define PARTITION_6 ((uintptr_t)128 << 40)
 
-#define PARTITION_DEFINE(tid)                                      \
-    {                                                              \
-        {                                                          \
-            NULL,                                                  \
-            NULL,                                                  \
-            tid,                                                   \
-            (tid) * (SZ_GB * 6) + PARTITION_01,                    \
-            (tid) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6),      \
-            AreaType::AT_FIXED_32,                                 \
-            0,                                                     \
-            NULL                                                   \
-        },                                                         \
-            { NULL,                                                \
-                NULL,                                              \
-                tid,                                               \
-                (tid) * (SZ_GB * 8) + PARTITION_2,                 \
-                (tid) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8),   \
-                AreaType::AT_FIXED_128,                            \
-                0,                                                 \
-                NULL },                                            \
-            { NULL, NULL, tid, (tid) * (SZ_GB * 16) + PARTITION_3, \
-                (tid) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16), \
-                AreaType::AT_FIXED_256, 0, NULL },                 \
-            &section_queues[tid],                                  \
-            page_queues[tid],                                      \
-            0,                                                     \
-            pool_queues[tid],                                      \
-            0,                                                     \
+#define PARTITION_DEFINE(tid)                                                                                          \
+    {                                                                                                                  \
+        {NULL,        NULL, tid, (tid) * (SZ_GB * 6) + PARTITION_01, (tid) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6), \
+         AT_FIXED_32, 0,    NULL},                                                                                     \
+            {NULL,                                                                                                     \
+             NULL,                                                                                                     \
+             tid,                                                                                                      \
+             (tid) * (SZ_GB * 8) + PARTITION_2,                                                                        \
+             (tid) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8),                                                          \
+             AT_FIXED_128,                                                                                             \
+             0,                                                                                                        \
+             NULL},                                                                                                    \
+            {NULL,                                                                                                     \
+             NULL,                                                                                                     \
+             tid,                                                                                                      \
+             (tid) * (SZ_GB * 16) + PARTITION_3,                                                                       \
+             (tid) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16),                                                        \
+             AT_FIXED_256,                                                                                             \
+             0,                                                                                                        \
+             NULL},                                                                                                    \
+            &section_queues[tid], heap_queues[tid], 0, pool_queues[tid], 0, 0, 0, &message_queues[tid]                 \
     }
 
 #define PARTITION_LAYOUT TH1024(PARTITION_DEFINE)
 
-Area::List PartitionAllocator::area_4 = { NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AreaType::AT_VARIABLE, 0, NULL };
-Area::List PartitionAllocator::area_5 = {
-    NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AreaType::AT_VARIABLE, 0, NULL
-};
+static AreaList partition_area_4 = {NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AT_VARIABLE, 0, NULL};
+static AreaList partition_area_5 = {NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AT_VARIABLE, 0, NULL};
 
 static cache_align PartitionAllocator partition_allocators[MAX_THREADS] = PARTITION_LAYOUT;
 
-static std::atomic<int32_t> global_thread_idx = { 0 };
-
-struct thread_init
-{
-    int8_t base_partition_set;
-    // constructor
-    thread_init();
-    ~thread_init();
-};
+static _Atomic(int32_t) global_thread_idx = 0;
 
 static const int32_t thread_message_imit = 100;
-struct Allocator
-{
-    thread_local static uint8_t main_index;
 
+typedef struct Allocator_t
+{
     int32_t _thread_idx;
     PartitionAllocator *part_alloc;
     PartitionAllocator *thread_free_part_alloc;
@@ -2023,511 +1983,461 @@ struct Allocator
     size_t previous_size;
     uintptr_t previous_pool_start;
     uintptr_t previous_pool_end;
+} Allocator;
 
-private:
-    inline void set_previous_pool(Pool *p)
-    {
-        previous_pool = p;
-        previous_pool_start = (uintptr_t)&p->blocks[0];
-        previous_pool_end = (uintptr_t)((uint8_t *)previous_pool_start + (p->num_available * p->block_size));
+static thread_local uint8_t allocator_main_index = -1;
+static thread_local Allocator *thread_instance = NULL;
+
+static void allocator_free(Allocator *a, void *p);
+
+static inline void allocator_set_previous_pool(Allocator *a, Pool *p)
+{
+    a->previous_pool = p;
+    a->previous_pool_start = (uintptr_t)&p->blocks[0];
+    a->previous_pool_end = (uintptr_t)((uint8_t *)a->previous_pool_start + (p->num_available * p->block_size));
+}
+
+static inline bool allocator_check_previous_pool(Allocator *a, void *p)
+{
+    if (a->previous_pool) {
+        return (uintptr_t)p >= a->previous_pool_start && (uintptr_t)p <= a->previous_pool_end;
+    } else {
+        return false;
     }
+}
 
-    inline bool check_previous_pool(void *p) const
-    {
-        if (previous_pool) {
-            return (uintptr_t)p >= previous_pool_start && (uintptr_t)p <= previous_pool_end;
-        } else {
-            return false;
-        }
+static void allocator_thread_enqueue(message_queue *queue, message *first, message *last)
+{
+    atomic_store_explicit(&last->next, (uintptr_t)NULL,
+                          memory_order_release); // last.next = null
+    message *prev = (message *)atomic_exchange_explicit(&queue->tail, (uintptr_t)last,
+                                                        memory_order_release); // swap back and last
+    atomic_store_explicit(&prev->next, (uintptr_t)first,
+                          memory_order_release); // prev.next = first
+}
+
+static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
+{
+    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    message *curr = (message *)queue->head;
+
+    // loop between start and end addres
+    while (curr != back) {
+        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+        if (next == NULL)
+            break;
+        allocator_free(a, curr);
+        curr = next;
     }
+    queue->head = (uintptr_t)curr;
+}
 
-public:
-    inline static Allocator &get_thread_instance();
-    inline bool is_main() { return _thread_idx == 0; }
-    inline int64_t thread_id() { return (int64_t)this; }
+static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
+{
+    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    message *curr = (message *)queue->head;
 
-    void *malloc(size_t s)
-    {
-        if (previous_pool != NULL && previous_size == s) {
-            if (previous_pool->free != NULL) {
-                return previous_pool->getFreeBlock();
-            } else {
-                previous_pool = NULL;
-            }
-        } else {
-            previous_pool = NULL;
-        }
-
-        flush_thread_free_queue();
-
-        if (s <= LARGE_OBJECT_SIZE) {
-            return alloc_from_pool(s);
-        } else if (s <= AREA_SIZE_LARGE) {
-            // allocate form the large page
-            return alloc_from_page(s);
-        } else {
-            return alloc_slab(s);
-        }
-    }
-
-    void *malloc_page(size_t s)
-    {
-        flush_thread_free_queue();
-        if (s <= AREA_SIZE_LARGE) {
-            // allocate form the large page
-            return alloc_from_page(s);
-        } else {
-            return alloc_slab(s);
-        }
-    }
-
-    void free(void *p)
-    {
-        if (p == NULL)
+    // loop between start and end addres
+    if (curr != back) {
+        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+        if (next == NULL)
             return;
-        flush_thread_free_queue();
-        if (check_previous_pool(p)) {
-            return previous_pool->freeBlock(p);
-        } else {
-            previous_pool = NULL;
-        }
-        switch (partition_from_addr((uintptr_t)p)) {
-        case 0:
-        case 1:
-            free_from_section(p, AREA_SIZE_SMALL);
-            break;
-        case 2:
-            free_from_section(p, AREA_SIZE_LARGE);
-            break;
-        case 3:
-            free_huge(p);
-            break;
-        default:
-            break;
+        allocator_free(a, curr);
+        curr = next;
+    }
+    queue->head = (uintptr_t)curr;
+}
+
+static void allocator_flush_thread_free_queue(Allocator *a)
+{
+    if (a->part_alloc->thread_free_queue->head != a->part_alloc->thread_free_queue->tail) {
+        allocator_thread_dequeue_all(a, a->part_alloc->thread_free_queue);
+    }
+}
+
+static void allocator_flush_thread_free(Allocator *a)
+{
+    if (a->thread_free_part_alloc != NULL) {
+        // get the first and last item of the tf queue
+        message *lm = partition_allocator_get_last_message(a->part_alloc);
+        if (lm != NULL) {
+            allocator_thread_enqueue(a->thread_free_part_alloc->thread_free_queue, a->part_alloc->thread_messages, lm);
+            a->part_alloc->message_count = 0;
         }
     }
+}
 
-    bool release_local_areas()
-    {
-        previous_pool = NULL;
-        bool result = false;
-        auto midx = main_index;
-        for (int i = 0; i < MAX_THREADS; i++) {
-            if (partition_owners[i] == midx) {
-                thread_dequeue_all(partition_allocators[i].thread_free_queue);
-                bool was_released = partition_allocators[i].release_local_areas();
-                if (midx != i && was_released) {
-                    release_partition_set(i);
+static void allocator_thread_free(Allocator *a, void *p, uint64_t pid)
+{
+    PartitionAllocator *_part_alloc = &partition_allocators[pid];
+    if (_part_alloc != a->thread_free_part_alloc) {
+        allocator_flush_thread_free(a);
+        a->thread_free_part_alloc = _part_alloc;
+    }
+    partition_allocator_thread_free(a->part_alloc, p);
+    a->part_alloc->message_count++;
+    if (a->part_alloc->message_count > thread_message_imit) {
+        allocator_flush_thread_free(a);
+    }
+}
+
+static inline void allocator_free_from_section(Allocator *a, void *p, size_t area_size)
+{
+    Section *section = (Section *)((uintptr_t)p & ~(area_size - 1));
+    // if it is page section, free
+    if (a->_thread_idx == partition_owners[section->partition_id]) {
+        if (section_get_container_type(section) == POOL) {
+            section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+            Pool *pool = (Pool *)section_find_collection(section, p);
+            pool_free_block(pool, p);
+            allocator_set_previous_pool(a, pool);
+            if (!pool_is_connected(pool)) {
+                // reconnect
+                PartitionAllocator *_part_alloc = &partition_allocators[section->partition_id];
+                PoolQueue *queue = &_part_alloc->pools[sizeToPool(pool->block_size)];
+                if (queue->head != pool && queue->tail != pool) {
+                    list_enqueue(queue, pool);
                 }
-                result |= was_released;
+                Queue *sections = _part_alloc->sections;
+                if (!section_is_connected(section)) {
+                    if (sections->head != section && sections->tail != section) {
+                        list_enqueue(sections, section);
+                    }
+                }
+            }
+        } else {
+            Heap *heap = (Heap *)section_find_collection(section, p);
+            uint32_t heapIdx = section_get_container_exponent(section) - 3;
+            heap_free(heap, p, heapIdx > 0);
+            // if the free pools list is empty.
+            if (!heap_is_connected(heap)) {
+                // reconnect
+                PartitionAllocator *_part_alloc = &partition_allocators[section->partition_id];
+                Queue *queue = &_part_alloc->heaps[heapIdx];
+                if (queue->head != heap && queue->tail != heap) {
+                    list_enqueue(queue, heap);
+                }
             }
         }
-        return result;
+    } else {
+        allocator_thread_free(a, p, section->partition_id);
     }
+}
 
-private:
-    void thread_enqueue(message_queue *queue, message *first, message *last)
-    {
-        atomic_store_explicit(&last->next, NULL, memory_order_release); // last.next = null
-        message *prev = (message *)atomic_exchange_explicit(&queue->tail, (uintptr_t)last, memory_order_release); // swap back and last
-        atomic_store_explicit(&prev->next, (uintptr_t)first, memory_order_release); // prev.next = first
+static inline void allocator_free_huge(Allocator *a, void *p)
+{
+    Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_HUGE - 1));
+    // if it is page section, free
+    if (a->_thread_idx == partition_owners[section->partition_id]) {
+        PartitionAllocator *_part_alloc = &partition_allocators[section->partition_id];
+        if (section_get_container_type(section) == HEAP) {
+            Heap *heap = (Heap *)section_find_collection(section, p);
+            heap_free(heap, p, true);
+            // if the pool is disconnected from the queue
+            if (!heap_is_connected(heap)) {
+                Queue *queue = &_part_alloc->heaps[section_get_container_exponent(section) - 3];
+                // reconnect
+                list_enqueue(queue, heap);
+            }
+        } else // SLAB
+        {
+            Area *area = (Area *)section;
+            partition_allocator_try_free_area(_part_alloc, area);
+        }
+    } else {
+        allocator_thread_free(a, p, section->partition_id);
     }
+}
 
-    void thread_dequeue_all(message_queue *queue)
-    {
-        message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-        message *curr = (message *)queue->head;
+static Section *allocator_get_free_section(Allocator *a, size_t s, ContainerType t)
+{
+    int32_t exponent = get_container_exponent(s, t);
+    Section *free_section = (Section *)a->part_alloc->sections->head;
 
-        // loop between start and end addres
-        while (curr != back) {
-            message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
-            if (next == NULL)
+    // find free section.
+    while (free_section != NULL) {
+        Section *next = free_section->next;
+        if (section_get_container_exponent(free_section) == exponent) {
+            if (!section_is_full(free_section)) {
                 break;
-            free(curr);
-            curr = next;
-        }
-        queue->head = (uintptr_t)curr;
-    }
-
-    void thread_dequeue(message_queue *queue)
-    {
-        message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-        message *curr = (message *)queue->head;
-
-        // loop between start and end addres
-        if (curr != back) {
-            message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
-            if (next == NULL)
-                return;
-            free(curr);
-            curr = next;
-        }
-        queue->head = (uintptr_t)curr;
-    }
-
-    void flush_thread_free_queue()
-    {
-        thread_dequeue_all(part_alloc->thread_free_queue);
-    }
-
-    void flush_thread_free()
-    {
-        if (thread_free_part_alloc != NULL) {
-            // get the first and last item of the tf queue
-            message *lm = part_alloc->get_last_message();
-            if (lm != NULL) {
-                thread_enqueue(thread_free_part_alloc->thread_free_queue, part_alloc->thread_messages, lm);
-                part_alloc->message_count = 0;
-            }
-        }
-    }
-
-    void thread_free(void *p, uint64_t pid)
-    {
-        auto _part_alloc = &partition_allocators[pid];
-        if (_part_alloc != thread_free_part_alloc) {
-            flush_thread_free();
-            thread_free_part_alloc = _part_alloc;
-        }
-        part_alloc->thread_free(p);
-        part_alloc->message_count++;
-        if (part_alloc->message_count > thread_message_imit) {
-            flush_thread_free();
-        }
-    }
-
-    inline void free_from_section(void *p, size_t area_size)
-    {
-        Section *section = (Section *)((uintptr_t)p & ~(area_size - 1));
-        // if it is page section, free
-        if (_thread_idx == partition_owners[section->partition_id]) {
-            if (section->getContainerType() == POOL) {
-                section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-                Pool *pool = (Pool *)section->findCollection(p);
-                pool->freeBlock(p);
-                set_previous_pool(pool);
-                if (!pool->isConnected()) {
-                    // reconnect
-                    auto _part_alloc = &partition_allocators[section->partition_id];
-                    auto queue = &_part_alloc->pools[sizeToPool(pool->block_size)];
-                    if (queue->head != pool && queue->tail != pool) {
-                        list_enqueue(*queue, pool);
-                    }
-                    auto sections = _part_alloc->sections;
-                    if (!section->isConnected()) {
-                        if (sections->head != section && sections->tail != section) {
-                            list_enqueue(*sections, section);
-                        }
-                    }
-                }
             } else {
-                Heap *page = (Heap *)section->findCollection(p);
-                uint32_t pageIdx = section->getContainerExponent() - 3;
-                page->free(p, pageIdx > 0);
-                // if the free pools list is empty.
-                if (!page->isConnected()) {
-                    // reconnect
-                    auto _part_alloc = &partition_allocators[section->partition_id];
-                    auto queue = &_part_alloc->pages[pageIdx];
-                    if (queue->head != page && queue->tail != page) {
-                        list_enqueue(*queue, page);
-                    }
-                }
+                list_remove(a->part_alloc->sections, free_section);
             }
-        } else {
-            thread_free(p, section->partition_id);
         }
+        free_section = next;
     }
 
-    inline void free_huge(void *p)
-    {
-        Section *section = (Section *)((uintptr_t)p & ~(AREA_SIZE_HUGE - 1));
-        // if it is page section, free
-        if (_thread_idx == partition_owners[section->partition_id]) {
-            auto _part_alloc = &partition_allocators[section->partition_id];
-            if (section->getContainerType() == PAGE) {
-                auto page = (Heap *)section->findCollection(p);
-                page->free(p, true);
-                // if the pool is disconnected from the queue
-                if (!page->isConnected()) {
-                    auto queue = &_part_alloc->pages[section->getContainerExponent() - 3];
-                    // reconnect
-                    list_enqueue(*queue, page);
-                }
-            } else // SLAB
-            {
-                Area *area = (Area *)section;
-                _part_alloc->free_area(area);
-            }
-        } else {
-            thread_free(p, section->partition_id);
-        }
-    }
-
-    Section *get_free_section(size_t s, ContainerType t)
-    {
-        auto exponent = getContainerExponent(s, t);
-        auto free_section = part_alloc->sections->head;
-
-        // find free section.
-        while (free_section != NULL) {
-            auto next = free_section->next;
-            if (free_section->getContainerExponent() == exponent) {
-                if (!free_section->isFull()) {
-                    break;
-                } else {
-                    list_remove(*part_alloc->sections, free_section);
-                }
-            }
-            free_section = next;
-        }
-
-        if (free_section == NULL) {
-            auto new_section = part_alloc->alloc_section(s, t);
-            if (new_section == NULL) {
-                return NULL;
-            }
-            new_section->setContainerExponent(exponent);
-            new_section->setContainerType(t);
-
-            new_section->next = NULL;
-            new_section->prev = NULL;
-            list_enqueue(*part_alloc->sections, new_section);
-
-            free_section = new_section;
-        }
-        return free_section;
-    }
-
-    void *alloc_from_page(size_t s)
-    {
-        Heap *start = NULL;
-        auto queue = &part_alloc->pages[sizeToPage(s)];
-        if (queue->head != NULL) {
-            start = queue->head;
-            while (start != NULL) {
-                auto next = start->next;
-                if (start->has_room(s)) {
-                    return start->getBlock((uint32_t)s);
-                } else {
-                    // disconnect full pages
-                    list_remove(*queue, start);
-                }
-                start = next;
-            }
-        }
-
-        Area *new_area = part_alloc->get_area(s, ContainerType::PAGE);
-        if (new_area == NULL) {
+    if (free_section == NULL) {
+        Section *new_section = partition_allocator_alloc_section(a->part_alloc, s, t);
+        if (new_section == NULL) {
             return NULL;
         }
-
-        Section *new_section = (Section *)((uint8_t *)new_area);
-        new_section->idx = 0;
-
-        auto exponent = (Exponent)getContainerExponent(s, ContainerType::PAGE);
-        new_section->partition_id = new_area->partition_id;
-        new_section->setContainerExponent(exponent);
-        new_section->setContainerType(ContainerType::PAGE);
+        section_set_container_exponent(new_section, exponent);
+        section_set_container_type(new_section, t);
 
         new_section->next = NULL;
         new_section->prev = NULL;
+        list_enqueue(a->part_alloc->sections, new_section);
 
-        new_section->claimAll();
-        start = (Heap *)new_section->getCollection(0, exponent);
-        start->init(0, exponent);
-
-        part_alloc->page_count++;
-        list_enqueue(*queue, start);
-        return start->getBlock((uint32_t)s);
+        free_section = new_section;
     }
+    return free_section;
+}
 
-    void *alloc_slab(size_t s)
-    {
-        auto totalSize = sizeof(Area) + s;
-        Area *area = part_alloc->get_area(totalSize, ContainerType::PAGE);
-        if (area == NULL) {
-            return NULL;
-        }
-        auto section = (Section *)area;
-        area->reserveAll();
-        section->reserveAll();
-        section->setContainerType(ContainerType::SLAB);
-        return &section->collections[0];
-    }
-
-    inline Pool *alloc_pool(size_t s)
-    {
-        auto sfree_section = get_free_section(s, ContainerType::POOL);
-        if (sfree_section == NULL) {
-            return NULL;
-        }
-
-        unsigned int coll_idx = sfree_section->reserveNext();
-        auto exp = sfree_section->getContainerExponent();
-        Pool *p = (Pool *)sfree_section->getCollection(coll_idx, exp);
-        p->init(coll_idx, (uint32_t)s, exp);
-        return p;
-    }
-
-    inline void *alloc_from_pool(size_t s)
-    {
-        auto queue = &part_alloc->pools[sizeToPool(s)];
-        Pool *start = queue->head;
-
-        if (start != NULL) {
-            if (start->free == NULL) {
-                if (start->extendPool()) {
-                    previous_pool = start;
-                    previous_size = s;
-                    return start->getFreeBlock();
-                }
-                list_remove(*queue, start);
+static void *allocator_alloc_from_page(Allocator *a, size_t s)
+{
+    Heap *start = NULL;
+    Queue *queue = &a->part_alloc->heaps[sizeToPage(s)];
+    if (queue->head != NULL) {
+        start = (Heap *)queue->head;
+        while (start != NULL) {
+            Heap *next = start->next;
+            if (heap_has_room(start, s)) {
+                return heap_get_block(start, (uint32_t)s);
             } else {
-                previous_pool = start;
-                previous_size = s;
-                return start->getFreeBlock();
+                // disconnect full pages
+                list_remove(queue, start);
             }
+            start = next;
         }
-
-        start = alloc_pool(s);
-        if (start == NULL) {
-            return NULL;
-        }
-
-        part_alloc->pool_count++;
-        list_enqueue(*queue, start);
-        set_previous_pool(start);
-        previous_size = s;
-        return start->getFreeBlock();
     }
 
-    inline void *try_alloc_from_pool(size_t s)
-    {
-        void *ptr = alloc_from_pool(s);
-        if (ptr == NULL) {
-            previous_pool = NULL;
-            // claim a new partition set
-            // try again
-            auto new_partition_set_idx = reserve_any_partition_set_for(main_index);
-            if (new_partition_set_idx != -1) {
-                flush_thread_free();
-                flush_thread_free_queue();
-                part_alloc = &partition_allocators[new_partition_set_idx];
-                ptr = alloc_from_pool(s);
-            }
-        }
-        return ptr;
+    Area *new_area = partition_allocator_get_area(a->part_alloc, s, HEAP);
+    if (new_area == NULL) {
+        return NULL;
     }
-};
 
-#define ALLOC_DEFINE(tid)                              \
-    {                                                  \
-        tid, &partition_allocators[tid], NULL, 0, 0, 0 \
+    Section *new_section = (Section *)((uint8_t *)new_area);
+    new_section->idx = 0;
+
+    ExponentType exponent = (ExponentType)get_container_exponent(s, HEAP);
+    new_section->partition_id = new_area->partition_id;
+    section_set_container_exponent(new_section, exponent);
+    section_set_container_type(new_section, HEAP);
+
+    new_section->next = NULL;
+    new_section->prev = NULL;
+
+    section_claim_all(new_section);
+    start = (Heap *)section_get_collection(new_section, 0, exponent);
+    heap_init(start, 0, exponent);
+
+    a->part_alloc->heap_count++;
+    list_enqueue(queue, start);
+    return heap_get_block(start, (uint32_t)s);
+}
+
+static void *allocator_alloc_slab(Allocator *a, size_t s)
+{
+    size_t totalSize = sizeof(Area) + s;
+    Area *area = partition_allocator_get_area(a->part_alloc, totalSize, HEAP);
+    if (area == NULL) {
+        return NULL;
+    }
+    Section *section = (Section *)area;
+    area_reserve_all(area);
+    section_reserve_all(section);
+    section_set_container_type(section, SLAB);
+    return &section->collections[0];
+}
+
+static inline Pool *allocator_alloc_pool(Allocator *a, size_t s)
+{
+    Section *sfree_section = allocator_get_free_section(a, s, POOL);
+    if (sfree_section == NULL) {
+        return NULL;
+    }
+
+    unsigned int coll_idx = section_reserve_next(sfree_section);
+    ExponentType exp = section_get_container_exponent(sfree_section);
+    Pool *p = (Pool *)section_get_collection(sfree_section, coll_idx, exp);
+    pool_init(p, coll_idx, (uint32_t)s, exp);
+    return p;
+}
+
+static inline void *allocator_alloc_from_pool(Allocator *a, size_t s)
+{
+    PoolQueue *queue = &a->part_alloc->pools[sizeToPool(s)];
+    Pool *start = queue->head;
+
+    if (start != NULL) {
+        if (start->free == NULL) {
+            if (pool_extend(start)) {
+                a->previous_pool = start;
+                a->previous_size = s;
+                return pool_get_free_block(start);
+            }
+            list_remove(queue, start);
+        } else {
+            a->previous_pool = start;
+            a->previous_size = s;
+            return pool_get_free_block(start);
+        }
+    }
+
+    start = allocator_alloc_pool(a, s);
+    if (start == NULL) {
+        return NULL;
+    }
+
+    a->part_alloc->pool_count++;
+    list_enqueue(queue, start);
+    allocator_set_previous_pool(a, start);
+    a->previous_size = s;
+    return pool_get_free_block(start);
+}
+
+static inline bool allocator_is_main(Allocator *a) { return a->_thread_idx == 0; }
+static inline int64_t allocator_thread_id(Allocator *a) { return (int64_t)a; }
+
+void *allocator_malloc(Allocator *a, size_t s)
+{
+    if (a->previous_pool != NULL && a->previous_size == s) {
+        if (a->previous_pool->free != NULL) {
+            return pool_get_free_block(a->previous_pool);
+        } else {
+            a->previous_pool = NULL;
+        }
+    } else {
+        a->previous_pool = NULL;
+    }
+
+    allocator_flush_thread_free_queue(a);
+
+    if (s <= LARGE_OBJECT_SIZE) {
+        return allocator_alloc_from_pool(a, s);
+    } else if (s <= AREA_SIZE_LARGE) {
+        // allocate form the large page
+        return allocator_alloc_from_page(a, s);
+    } else {
+        return allocator_alloc_slab(a, s);
+    }
+}
+
+void *allocator_malloc_page(Allocator *a, size_t s)
+{
+    allocator_flush_thread_free_queue(a);
+    if (s <= AREA_SIZE_LARGE) {
+        // allocate form the large page
+        return allocator_alloc_from_page(a, s);
+    } else {
+        return allocator_alloc_slab(a, s);
+    }
+}
+
+void allocator_free(Allocator *a, void *p)
+{
+    if (p == NULL)
+        return;
+    allocator_flush_thread_free_queue(a);
+    if (allocator_check_previous_pool(a, p)) {
+        return pool_free_block(a->previous_pool, p);
+    } else {
+        a->previous_pool = NULL;
+    }
+    switch (partition_from_addr((uintptr_t)p)) {
+    case 0:
+    case 1:
+        allocator_free_from_section(a, p, AREA_SIZE_SMALL);
+        break;
+    case 2:
+        allocator_free_from_section(a, p, AREA_SIZE_LARGE);
+        break;
+    case 3:
+        allocator_free_huge(a, p);
+        break;
+    default:
+        break;
+    }
+}
+
+bool allocator_release_local_areas(Allocator *a)
+{
+    a->previous_pool = NULL;
+    bool result = false;
+    uint8_t midx = allocator_main_index;
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (partition_owners[i] == midx) {
+            allocator_thread_dequeue_all(a, partition_allocators[i].thread_free_queue);
+            bool was_released = partition_allocator_release_local_areas(&partition_allocators[i]);
+            if (midx != i && was_released) {
+                release_partition_set(i);
+            }
+            result |= was_released;
+        }
+    }
+    return result;
+}
+
+static inline void *allocator_try_alloc_from_pool(Allocator *a, size_t s)
+{
+    void *ptr = allocator_alloc_from_pool(a, s);
+    if (ptr == NULL) {
+        a->previous_pool = NULL;
+        // claim a new partition set
+        // try again
+        int8_t new_partition_set_idx = reserve_any_partition_set_for(allocator_main_index);
+        if (new_partition_set_idx != -1) {
+            allocator_flush_thread_free(a);
+            allocator_flush_thread_free_queue(a);
+            a->part_alloc = &partition_allocators[new_partition_set_idx];
+            ptr = allocator_alloc_from_pool(a, s);
+        }
+    }
+    return ptr;
+}
+
+#define ALLOC_DEFINE(tid)                                                                                              \
+    {                                                                                                                  \
+        tid, &partition_allocators[tid], NULL, 0, 0, 0, 0                                                              \
     }
 #define ALLOC_LAYOUT TH1024(ALLOC_DEFINE)
 static cache_align Allocator allocator_list[MAX_THREADS] = ALLOC_LAYOUT;
 
-/*
-    how do I attach an allocator to the thread.
-
- */
-
-// MemoryBlock:
-// Buff, Vec, Str -- all have direct access to heap
-//  - reallocate. - reserve.
-//
-// Allocator
-//   Section
-//      pagesize
-//      pages[]
-//   Page
-//      number of free bytes
-//      number of allocated bytes
-//      first free offset.
-//   Map a requested size to a section.
-//      map an address to
-// handle memory within scope limits.
-struct _MemoryBlock
+bool allocator_initilized = false;
+static void allocator_destroy()
 {
-    enum mtype {
-        M_STACK, // src memory is on the local stack
-        M_HEAP, // src memory was source from malloc. large requests, or pools
-                // unable to hand out memory.
-        M_POOL, // src memory was sourced from a linear thread local pool. small
-                // requests.
-        M_FIXED_POOL, // src memory was sourced from a fixed pool of medium sized
-                      // requests. count limit. falls back on heap.
-        M_NULL, // memory allocation failure.
-    };
+    if (!thread_instance)
+        return;
+    static bool done = false;
+    if (done)
+        return;
+    done = true;
 
-    void *src_mem; // pointer to allocated memory.
-    mtype src_type; // where is the current memory sourced from.
-    size_t req_size; // size requested.
-    size_t src_size; // size returned. Will be >= to requested size.
-
-    _MemoryBlock()
-    {
-        src_type = M_NULL;
-        req_size = 0;
-        src_size = 0;
-        src_mem = NULL;
-    }
-
-    _MemoryBlock(void *m, size_t s)
-    {
-        src_type = M_STACK;
-        src_size = s;
-        src_mem = m;
-        req_size = s;
-    }
-
-    _MemoryBlock(size_t s) { alloc(s); }
-
-    ~_MemoryBlock()
-    {
-        if (src_type != M_HEAP) {
-            // free(src_mem);
-        } else if (src_type == M_FIXED_POOL) {
-            // Allot::DeallocFixed(src_mem, src_size);
-        }
-    }
-
-    void *alloc(size_t s)
-    {
-        if (src_type == M_NULL) {
-            // src_size = s;
-            // src_mem = fixed_pool_allocate(s);
-            // if(src_mem == NULL)
-            // {
-            //    src_mem = malloc(size);
-            //    src_type = M_HEAP;
-            // }
-            // else
-            // {
-            //    src_type = M_FIXED_POOL;
-            // }
-        } else {
-            // memory has not been released .. error
-        }
-        return NULL;
-    }
-
-    void free()
-    {
-        if (src_type != M_NULL) {
-        }
-    }
-
-    void *realloc(size_t s)
-    {
-        //
-        return NULL;
-    }
-};
-
-#if defined(CLOGGING)
-
+#if defined(_WIN32) && !defined(MI_SHARED_LIB)
+    tls_set(alloc_tls_key, NULL);
+    tls_delete(alloc_tls_key);
 #endif
 
+    release_partition_set(allocator_main_index);
+    // clean memory
+}
+
+static void allocator_init()
+{
+    if (thread_instance) {
+        return;
+    }
+    os_page_size = get_os_page_size();
+    allocator_main_index = reserve_any_partition_set();
+    thread_instance = &allocator_list[allocator_main_index];
+}
+
+#if defined(__cplusplus)
+struct thread_init
+{
+    thread_init() { allocator_init(); }
+    ~thread_init() { allocator_destroy(); }
+};
+static thread_init init;
+
+#elif defined(__GNUC__) || defined(__clang__)
+static void __attribute__((constructor)) library_init(void) { allocator_init(); }
+static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
+#endif
+Allocator *allocator_get_thread_instance()
+{
+    allocator_init();
+    return thread_instance;
+}
 #endif /* Malloc_h */

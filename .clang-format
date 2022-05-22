@@ -1,7 +1,8 @@
-BasedOnStyle: WebKit
+BasedOnStyle: LLVM
 
 PointerAlignment: Right
-ColumnLimit: 0
+ColumnLimit: 120
+IndentWidth: 4
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterClass:      true
@@ -16,4 +17,4 @@ BraceWrapping:
   BeforeElse:      false
   IndentBraces:    false
 NamespaceIndentation: All
-AllowShortCaseLabelsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: false
