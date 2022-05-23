@@ -1,40 +1,4 @@
 
-/*
-
- Another random thought.
-    - if a complicated structure is something that the allocator understands.
-Such as a tree, or a graph. : Can the allocator be used like a persistence util
-to traverse through the pointers and release them. : A user app could collect
-all pointers into an array and call free for the whole buffer. : Calling a
-destructor on an object would cause the system to defer free all the items until
-the destructor is done. : allot::destruct( obj ) -> any nested calls to destruct
-would cause a deferred free operation. : pass in a pointer to a struct. pass in
-a struct to describe the navigation path of a pointer tree. : traverse the
-network of pointers and pass them to their correct pools or pages. : destruct(
-ptr, schema ) -> no nested destruct calls. : construct( ptr, schema ) -> 1. [ ]
-random allocations sizes.
-    - within a pool size class.
-    - within a partition size class.
-    - mix pool size classes.
-    - mix partition size classes.
-    - when allocator is empty.
-    - when allocator is getting half full and bleeding over partitions.
-    - when allocator is getting full and running out of memory.
-2.
- [ ] add thread free for pools.
- [ ] add thread free for pages.
- [ ] test thread free performance from multiple threads.
- [ ] random allocations sizes.
-    - same as previous allocation test, but with multiple threads.
-    - all memory in separate threads.
-    - distribute memory among threads so that each thread is freeing memory into
-other threads and its own.
-    - distribute memory among threads so that each thread is only freeing memory
-into other threads. 4. [ ] improve page allocations. ordererd lists. double free
-tests. [ ] memory API. alloc and string functions. 5. [ ] add memory block
-objects and implicit list alocation support. [ ] stats. leaks. [ ] integrate
-with ALLOT [ ] test with builder. DONE!
- */
 #ifndef _alloc_h_
 #define _alloc_h_
 /*
@@ -1221,13 +1185,13 @@ typedef struct message_queue_t
     {                                                                                                                  \
         ATOMIC_VAR_INIT(0UL)                                                                                           \
     }
-cache_align message message_sentinals[MAX_THREADS] = {Z1024(EMPTY_MESSAGE)};
+static cache_align message message_sentinals[MAX_THREADS] = {Z1024(EMPTY_MESSAGE)};
 #define zMessageQueue(tid)                                                                                             \
     {                                                                                                                  \
         ATOMIC_VAR_INIT((uintptr_t)&message_sentinals[tid]), ATOMIC_VAR_INIT((uintptr_t)&message_sentinals[tid])       \
     }
 #define MESSAGE_LAYOUT TH1024(zMessageQueue)
-cache_align message_queue message_queues[MAX_THREADS] = MESSAGE_LAYOUT;
+static cache_align message_queue message_queues[MAX_THREADS] = MESSAGE_LAYOUT;
 static cache_align int64_t partition_owners[MAX_THREADS] = EMPTY_OWNERS;
 
 mutex_t partition_mutex;
@@ -1490,13 +1454,14 @@ typedef struct PartitionAllocator_t
 
     // collection of messages for other threads
     message *thread_messages;
-    uint32_t message_count;
+    uint32_t message_count; // how many threaded message have we acccumuated for passing out
     // a queue of messages from other threads.
     message_queue *thread_free_queue;
+
 } PartitionAllocator;
 
-Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_size, uint64_t alignment);
-message *partition_allocator_get_last_message(PartitionAllocator *pa)
+static Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_size, uint64_t alignment);
+static message *partition_allocator_get_last_message(PartitionAllocator *pa)
 {
     message *msg = pa->thread_messages;
     if (msg == NULL) {
@@ -1508,11 +1473,12 @@ message *partition_allocator_get_last_message(PartitionAllocator *pa)
     return msg;
 }
 
-void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
+static void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
 {
     message *new_free = (message *)p;
     new_free->next = (uintptr_t)pa->thread_messages;
     pa->thread_messages = new_free;
+    pa->message_count++;
 }
 
 static Area *partition_allocator_get_next_area(AreaList *area_queue, uint64_t size, uint64_t alignment)
@@ -1572,7 +1538,7 @@ static Area *partition_allocator_get_next_area(AreaList *area_queue, uint64_t si
     return new_area;
 }
 
-bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *area)
+static bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *area)
 {
     if (area_is_free(area)) {
 
@@ -1614,7 +1580,7 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
     return false;
 }
 
-void partition_allocator_free_area(PartitionAllocator *pa, Area *a, AreaType t)
+static void partition_allocator_free_area(PartitionAllocator *pa, Area *a, AreaType t)
 {
     switch (t) {
     case AT_FIXED_32: {
@@ -1646,7 +1612,7 @@ void partition_allocator_free_area(PartitionAllocator *pa, Area *a, AreaType t)
     free_memory(a, area_get_size(a));
 }
 
-void partition_allocator_try_free_area(PartitionAllocator *pa, Area *area)
+static void partition_allocator_try_free_area(PartitionAllocator *pa, Area *area)
 {
     size_t size = area_get_size(area);
     if (size == AREA_SIZE_SMALL) {
@@ -1660,7 +1626,7 @@ void partition_allocator_try_free_area(PartitionAllocator *pa, Area *area)
     }
 }
 
-bool partition_allocator_try_release_area(PartitionAllocator *pa, Area *area)
+static bool partition_allocator_try_release_area(PartitionAllocator *pa, Area *area)
 {
     if (area_is_free(area)) {
 
@@ -1670,7 +1636,7 @@ bool partition_allocator_try_release_area(PartitionAllocator *pa, Area *area)
     return false;
 }
 
-bool partition_allocator_release_areas_from_queue(PartitionAllocator *pa, AreaList *queue)
+static bool partition_allocator_release_areas_from_queue(PartitionAllocator *pa, AreaList *queue)
 {
     bool was_released = false;
     Area *start = queue->head;
@@ -1690,7 +1656,7 @@ bool partition_allocator_release_areas_from_queue(PartitionAllocator *pa, AreaLi
     return was_released;
 }
 
-bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, AreaList *queue)
+static bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, AreaList *queue)
 {
     bool was_released = false;
     Area *start = queue->head;
@@ -1708,7 +1674,7 @@ bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, 
     return was_released;
 }
 
-bool partition_allocator_release_local_areas(PartitionAllocator *pa)
+static bool partition_allocator_release_local_areas(PartitionAllocator *pa)
 {
     bool was_released = false;
     if (pa->area_01.area_count) {
@@ -1723,7 +1689,7 @@ bool partition_allocator_release_local_areas(PartitionAllocator *pa)
     return was_released;
 }
 
-AreaList *partition_allocator_get_area_queue(PartitionAllocator *pa, Area *area)
+static AreaList *partition_allocator_get_area_queue(PartitionAllocator *pa, Area *area)
 {
     size_t size = area_get_size(area);
     if (size == AREA_SIZE_SMALL) {
@@ -1774,8 +1740,8 @@ static inline uint32_t partition_allocator_get_max_area_count(AreaType t)
     }
     };
 }
-AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType t, size_t s, size_t *area_size,
-                                                size_t *alignement)
+static AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType t, size_t s, size_t *area_size,
+                                                       size_t *alignement)
 {
     switch (t) {
     case AT_FIXED_32: {
@@ -1801,7 +1767,8 @@ AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType
     };
 }
 
-AreaList *partition_allocator_promote_area(PartitionAllocator *pa, AreaType *t, size_t *area_size, size_t *alignement)
+static AreaList *partition_allocator_promote_area(PartitionAllocator *pa, AreaType *t, size_t *area_size,
+                                                  size_t *alignement)
 {
     switch (*t) {
     case AT_FIXED_32: {
@@ -1822,7 +1789,7 @@ AreaList *partition_allocator_promote_area(PartitionAllocator *pa, AreaType *t, 
     };
 }
 
-Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaType t)
+static Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaType t)
 {
     size_t area_size = AREA_SIZE_SMALL;
     size_t alignment = area_size;
@@ -1856,7 +1823,7 @@ Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaTy
     return new_area;
 }
 static uint32_t partition_allocator_claim_section(Area *area) { return area_claim_section(area); }
-Area *partition_allocator_get_area(PartitionAllocator *pa, size_t size, ContainerType t)
+static Area *partition_allocator_get_area(PartitionAllocator *pa, size_t size, ContainerType t)
 {
     Area *curr_area = NULL;
     uint32_t small_area_limit = LARGE_OBJECT_SIZE;
@@ -1904,7 +1871,7 @@ Area *partition_allocator_get_area(PartitionAllocator *pa, size_t size, Containe
     return curr_area;
 }
 
-Section *partition_allocator_alloc_section(PartitionAllocator *pa, size_t size, ContainerType t)
+static Section *partition_allocator_alloc_section(PartitionAllocator *pa, size_t size, ContainerType t)
 {
     Area *new_area = partition_allocator_get_area(pa, size, t);
     if (new_area == NULL) {
@@ -1921,7 +1888,7 @@ Section *partition_allocator_alloc_section(PartitionAllocator *pa, size_t size, 
     return section;
 }
 
-Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_size, uint64_t alignment)
+static Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_size, uint64_t alignment)
 {
     Area *new_area = partition_allocator_get_next_area(area_queue, area_size, alignment);
     if (new_area == NULL) {
@@ -2015,42 +1982,13 @@ static void allocator_thread_enqueue(message_queue *queue, message *first, messa
     atomic_store_explicit(&prev->next, (uintptr_t)first,
                           memory_order_release); // prev.next = first
 }
-
-static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
-{
-    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    message *curr = (message *)(uintptr_t)queue->head;
-
-    // loop between start and end addres
-    while (curr != back) {
-        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
-        if (next == NULL)
-            break;
-        allocator_free(a, curr);
-        curr = next;
-    }
-    queue->head = (uintptr_t)curr;
-}
-
-static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
-{
-    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    message *curr = (message *)(uintptr_t)queue->head;
-
-    // loop between start and end addres
-    if (curr != back) {
-        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
-        if (next == NULL)
-            return;
-        allocator_free(a, curr);
-        curr = next;
-    }
-    queue->head = (uintptr_t)curr;
-}
+static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue);
+static void allocator_thread_dequeue(Allocator *a, message_queue *queue);
 
 static void allocator_flush_thread_free_queue(Allocator *a)
 {
-    if (a->part_alloc->thread_free_queue->head != a->part_alloc->thread_free_queue->tail) {
+    Queue *q = (Queue *)a->part_alloc->thread_free_queue;
+    if ((uintptr_t)q->head != (uintptr_t)q->tail) {
         allocator_thread_dequeue_all(a, a->part_alloc->thread_free_queue);
     }
 }
@@ -2075,7 +2013,6 @@ static void allocator_thread_free(Allocator *a, void *p, uint64_t pid)
         a->thread_free_part_alloc = _part_alloc;
     }
     partition_allocator_thread_free(a->part_alloc, p);
-    a->part_alloc->message_count++;
     if (a->part_alloc->message_count > thread_message_imit) {
         allocator_flush_thread_free(a);
     }
@@ -2290,6 +2227,60 @@ static inline void *allocator_alloc_from_pool(Allocator *a, size_t s)
 static inline bool allocator_is_main(Allocator *a) { return a->_thread_idx == 0; }
 static inline int64_t allocator_thread_id(Allocator *a) { return (int64_t)a; }
 
+static inline void _allocator_free(Allocator *a, void *p)
+{
+    if (allocator_check_previous_pool(a, p)) {
+        return pool_free_block(a->previous_pool, p);
+    } else {
+        a->previous_pool = NULL;
+    }
+    switch (partition_from_addr((uintptr_t)p)) {
+    case 0:
+    case 1:
+        allocator_free_from_section(a, p, AREA_SIZE_SMALL);
+        break;
+    case 2:
+        allocator_free_from_section(a, p, AREA_SIZE_LARGE);
+        break;
+    case 3:
+        allocator_free_huge(a, p);
+        break;
+    default:
+        break;
+    }
+}
+static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
+{
+    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    message *curr = (message *)(uintptr_t)queue->head;
+
+    // loop between start and end addres
+    while (curr != back) {
+        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+        if (next == NULL)
+            break;
+        _allocator_free(a, curr);
+        curr = next;
+    }
+    queue->head = (uintptr_t)curr;
+}
+
+static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
+{
+    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    message *curr = (message *)(uintptr_t)queue->head;
+
+    // loop between start and end addres
+    if (curr != back) {
+        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+        if (next == NULL)
+            return;
+        _allocator_free(a, curr);
+        curr = next;
+    }
+    queue->head = (uintptr_t)curr;
+}
+
 void *allocator_malloc(Allocator *a, size_t s)
 {
     if (a->previous_pool != NULL && a->previous_size == s) {
@@ -2330,25 +2321,7 @@ void allocator_free(Allocator *a, void *p)
     if (p == NULL)
         return;
     allocator_flush_thread_free_queue(a);
-    if (allocator_check_previous_pool(a, p)) {
-        return pool_free_block(a->previous_pool, p);
-    } else {
-        a->previous_pool = NULL;
-    }
-    switch (partition_from_addr((uintptr_t)p)) {
-    case 0:
-    case 1:
-        allocator_free_from_section(a, p, AREA_SIZE_SMALL);
-        break;
-    case 2:
-        allocator_free_from_section(a, p, AREA_SIZE_LARGE);
-        break;
-    case 3:
-        allocator_free_huge(a, p);
-        break;
-    default:
-        break;
-    }
+    _allocator_free(a, p);
 }
 
 bool allocator_release_local_areas(Allocator *a)
