@@ -1,6 +1,26 @@
 {
     "files.associations": {
         "iterator": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "__mutex_base": "cpp",
+        "memory": "cpp",
+        "mutex": "cpp",
+        "__debug": "cpp",
+        "array": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "vector": "cpp",
+        "__hash_table": "cpp",
+        "__split_buffer": "cpp",
+        "bitset": "cpp",
+        "initializer_list": "cpp",
+        "unordered_map": "cpp",
+        "utility": "cpp",
+        "complex": "cpp",
+        "algorithm": "cpp",
+        "optional": "cpp",
+        "ios": "cpp",
+        "locale": "cpp",
+        "atomic": "cpp"
     }
 }

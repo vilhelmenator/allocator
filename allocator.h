@@ -1,9 +1,7 @@
 
 #ifndef _alloc_h_
 #define _alloc_h_
-/*
 
- */
 #include "../ctest/ctest.h"
 #include "../cthread/cthread.h"
 CLOGGER(_alloc_h_)
@@ -274,15 +272,6 @@ bool spinlock_try_lock(spinlock *sl)
 
 void spinlock_unlock(spinlock *sl) { atomic_store_explicit(&sl->lock_, false, memory_order_release); }
 
-/*
-partition_set
-    - free to local queue. if not the same thread.
-    - if the last foreign thread id was different.
-        - move the local queue to targt queue
-    - if the local queue is not empty when allocation is requested
-        - move the local queue to the target queue
- */
-
 typedef struct HeapBlock_t
 {
     uint8_t *data;
@@ -324,16 +313,6 @@ static inline HeapBlock *heap_block_prev(HeapBlock *hb)
 
 #define HEAP_NODE_OVERHEAD 8
 
-typedef struct HeapNode_t
-{
-    size_t *prev;
-    size_t *next;
-} HeapNode;
-static inline void heap_node_set_next(HeapNode *_hn, HeapNode *p) { _hn->next = (size_t *)p; }
-static inline void heap_node_set_prev(HeapNode *_hn, HeapNode *p) { _hn->prev = (size_t *)p; }
-static inline HeapNode *heap_node_get_next(HeapNode *_hn) { return (HeapNode *)_hn->next; }
-static inline HeapNode *heap_node_get_prev(HeapNode *_hn) { return (HeapNode *)_hn->prev; }
-
 typedef struct Block_t
 {
     struct Block_t *next;
@@ -373,22 +352,22 @@ typedef struct Queue_t
     void *tail;
 } Queue;
 
-typedef struct NodeTemplate_t
+typedef struct QNode_t
 {
     void *prev;
     void *next;
-} NodeTemplate;
+} QNode;
 
 // list functions
 static inline bool list_isEmpty(void *q) { return ((Queue *)q)->head == NULL; }
 static void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
     tn->next = tq->head;
     tn->prev = NULL;
     if (tq->head != 0) {
-        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tq->head + prev_offset);
+        QNode *temp = (QNode *)((uint8_t *)tq->head + prev_offset);
         temp->prev = node;
         tq->head = node;
     } else {
@@ -399,13 +378,13 @@ static void _list_enqueue(void *queue, void *node, size_t head_offset, size_t pr
 static void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
     if (tn->prev != NULL) {
-        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tn->prev + prev_offset);
+        QNode *temp = (QNode *)((uint8_t *)tn->prev + prev_offset);
         temp->next = tn->next;
     }
     if (tn->next != NULL) {
-        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tn->next + prev_offset);
+        QNode *temp = (QNode *)((uint8_t *)tn->next + prev_offset);
         temp->prev = tn->prev;
     }
     if (node == tq->head)
@@ -419,8 +398,8 @@ static void _list_remove(void *queue, void *node, size_t head_offset, size_t pre
 static void _list_insert_at(void *queue, void *target, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
-    NodeTemplate *ttn = (NodeTemplate *)((uint8_t *)target + prev_offset);
+    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
+    QNode *ttn = (QNode *)((uint8_t *)target + prev_offset);
     if (tq->tail == NULL) {
         tq->tail = tq->head = node;
         return;
@@ -428,7 +407,7 @@ static void _list_insert_at(void *queue, void *target, void *node, size_t head_o
     tn->next = ttn->next;
     tn->prev = target;
     if (tn->next != NULL) {
-        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tn->next + prev_offset);
+        QNode *temp = (QNode *)((uint8_t *)tn->next + prev_offset);
         temp->prev = node;
     } else {
         tq->tail = node;
@@ -439,14 +418,14 @@ static void _list_insert_at(void *queue, void *target, void *node, size_t head_o
 static void _list_insert_sort(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    NodeTemplate *tn = (NodeTemplate *)((uint8_t *)node + prev_offset);
+    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
     if (tq->tail == NULL) {
         tq->tail = tq->head = node;
         return;
     }
 
     if (tq->tail < node) {
-        NodeTemplate *temp = (NodeTemplate *)((uint8_t *)tq->tail + prev_offset);
+        QNode *temp = (QNode *)((uint8_t *)tq->tail + prev_offset);
         temp->next = node;
         tn->next = NULL;
         tn->prev = tq->tail;
@@ -454,9 +433,9 @@ static void _list_insert_sort(void *queue, void *node, size_t head_offset, size_
         return;
     }
 
-    NodeTemplate *current = (NodeTemplate *)((uint8_t *)tq->head + prev_offset);
+    QNode *current = (QNode *)((uint8_t *)tq->head + prev_offset);
     while (current->next != NULL && current->next < node) {
-        current = (NodeTemplate *)((NodeTemplate *)((uint8_t *)current->next + prev_offset))->next;
+        current = (QNode *)((QNode *)((uint8_t *)current->next + prev_offset))->next;
     }
     tn->prev = current->prev;
     tn->next = current->next;
@@ -724,11 +703,6 @@ static inline void section_free_all(Section *s)
     area_free_idx(area, s->idx);
 }
 
-static inline Section *section_get_prev(Section *s) { return s->prev; }
-static inline Section *section_get_next(Section *s) { return s->next; }
-static inline void section_set_prev(Section *s, Section *p) { s->prev = p; }
-static inline void section_set_next(Section *s, Section *n) { s->next = n; }
-
 static inline void section_set_container_type(Section *s, ContainerType pt)
 {
     s->container_type |= ((uint64_t)pt << 48);
@@ -880,17 +854,6 @@ static inline void *pool_aquire_block(Pool *p)
     return NULL;
 }
 
-static inline Pool *pool_get_prev(Pool *p) { return p->prev; }
-static inline Pool *pool_get_next(Pool *p) { return p->next; }
-static inline void pool_set_prev(Pool *p, Pool *pr) { p->prev = pr; }
-static inline void pool_set_next(Pool *p, Pool *n) { p->next = n; }
-
-typedef struct FreeQueue_t
-{
-    HeapNode *head;
-    HeapNode *tail;
-} FreeQueue;
-
 typedef struct Heap_t
 {
     //
@@ -902,7 +865,7 @@ typedef struct Heap_t
     uint32_t num_allocations;
 
     uint8_t *start;
-    FreeQueue free_nodes;
+    Queue free_nodes;
 
     struct Heap_t *prev;
     struct Heap_t *next;
@@ -933,7 +896,7 @@ static inline void heap_place(Heap *h, void *bp, uint32_t asize)
         hb = heap_block_next(hb);
         heap_block_set_header(hb, csize - asize, 0);
         heap_block_set_footer(hb, csize - asize, 0);
-        list_enqueue(&h->free_nodes, (HeapNode *)hb);
+        list_enqueue(&h->free_nodes, (QNode *)hb);
     } else {
         heap_block_set_header(hb, csize, 1);
         heap_block_set_footer(hb, csize, 1);
@@ -942,7 +905,7 @@ static inline void heap_place(Heap *h, void *bp, uint32_t asize)
 
 static inline void *heap_find_fit(Heap *h, uint32_t asize)
 {
-    HeapNode *current = h->free_nodes.head;
+    QNode *current = (QNode *)h->free_nodes.head;
     while (current != NULL) {
         HeapBlock *hb = (HeapBlock *)current;
         int header = heap_block_get_header(hb);
@@ -952,7 +915,7 @@ static inline void *heap_find_fit(Heap *h, uint32_t asize)
             heap_place(h, current, asize);
             return current;
         }
-        current = heap_node_get_next(current);
+        current = (QNode *)current->next;
     }
     return NULL;
 }
@@ -987,7 +950,7 @@ static inline void *heap_coalesce(Heap *h, void *bp)
     size_t prev_alloc = prev_header & 0x1;
     size_t next_alloc = next_header & 0x1;
 
-    HeapNode *hn = (HeapNode *)bp;
+    QNode *hn = (QNode *)bp;
     if (!(prev_alloc && next_alloc)) {
         size_t prev_size = prev_header & ~0x7;
         size_t next_size = next_header & ~0x7;
@@ -997,7 +960,7 @@ static inline void *heap_coalesce(Heap *h, void *bp)
             size += next_size;
             heap_block_set_header(hb, size, 0);
             heap_block_set_footer(hb, size, 0);
-            HeapNode *h_next = (HeapNode *)next_block;
+            QNode *h_next = (QNode *)next_block;
             list_remove(&h->free_nodes, h_next);
             list_enqueue(&h->free_nodes, hn);
         } // prev is fre
@@ -1011,7 +974,7 @@ static inline void *heap_coalesce(Heap *h, void *bp)
             heap_block_set_header(prev_block, size, 0);
             heap_block_set_footer(next_block, size, 0);
             bp = (void *)heap_block_prev(hb);
-            HeapNode *h_next = (HeapNode *)next_block;
+            QNode *h_next = (QNode *)next_block;
             list_remove(&h->free_nodes, h_next);
         }
     } else {
@@ -1023,9 +986,9 @@ static inline void *heap_coalesce(Heap *h, void *bp)
 
 static inline void heap_reset(Heap *h)
 {
-    h->free_nodes = (FreeQueue){NULL, NULL};
+    h->free_nodes = (Queue){NULL, NULL};
     HeapBlock *hb = (HeapBlock *)h->start;
-    list_enqueue(&h->free_nodes, (HeapNode *)h->start);
+    list_enqueue(&h->free_nodes, (QNode *)h->start);
     heap_block_set_header(hb, h->total_memory, 0);
     heap_block_set_footer(hb, h->total_memory, 0);
     heap_block_set_header(heap_block_next(hb), 0, 1);
@@ -1044,7 +1007,7 @@ static void heap_free(Heap *h, void *bp, bool should_coalesce)
     if (should_coalesce) {
         heap_coalesce(h, bp);
     } else {
-        list_enqueue(&h->free_nodes, (HeapNode *)bp);
+        list_enqueue(&h->free_nodes, (QNode *)bp);
     }
     h->used_memory -= size;
     h->num_allocations--;
@@ -1086,11 +1049,6 @@ static void heap_init(Heap *h, int8_t pidx, ExponentType partition)
     heap_extend(h);
 }
 
-inline Heap *heap_get_prev(Heap *h) { return h->prev; }
-inline Heap *heap_get_next(Heap *h) { return h->next; }
-inline void heap_set_prev(Heap *h, Heap *p) { h->prev = p; }
-inline void heap_set_ext(Heap *h, Heap *n) { h->next = n; }
-
 // lockless message queue
 typedef struct message_t
 {
@@ -1103,96 +1061,9 @@ typedef struct message_queue_t
     _Atomic(uintptr_t) tail;
 } message_queue;
 
-#define Z4(x) x(), x(), x(), x()
-#define Z8(x) Z4(x), Z4(x)
-#define Z16(x) Z8(x), Z8(x)
-#define Z32(x) Z16(x), Z16(x)
-#define Z64(x) Z32(x), Z32(x)
-#define Z128(x) Z64(x), Z64(x)
-#define Z256(x) Z128(x), Z128(x)
-#define Z512(x) Z256(x), Z256(x)
-#define Z1024(x) Z512(x), Z512(x)
-
-#define zQueue(x)                                                                                                      \
-    {                                                                                                                  \
-        NULL, NULL, sizeof(uintptr_t) * (x)                                                                            \
-    }
-#define zPoolQueue                                                                                                     \
-    {                                                                                                                  \
-        zQueue(0), zQueue(1), zQueue(2), zQueue(3), zQueue(4), zQueue(5), zQueue(6), zQueue(7), zQueue(8), zQueue(9),  \
-            zQueue(10), zQueue(11), zQueue(12), zQueue(13), zQueue(14), zQueue(15), zQueue(16), zQueue(18),            \
-            zQueue(20), zQueue(22), zQueue(24), zQueue(26), zQueue(28), zQueue(30), zQueue(32), zQueue(36),            \
-            zQueue(40), zQueue(44), zQueue(48), zQueue(52), zQueue(56), zQueue(60), zQueue(64), zQueue(72),            \
-            zQueue(80), zQueue(88), zQueue(96), zQueue(104), zQueue(112), zQueue(120), zQueue(128), zQueue(144),       \
-            zQueue(160), zQueue(176), zQueue(192), zQueue(208), zQueue(224), zQueue(240), zQueue(256), zQueue(288),    \
-            zQueue(320), zQueue(352), zQueue(384), zQueue(416), zQueue(448), zQueue(480), zQueue(512), zQueue(576),    \
-            zQueue(640), zQueue(704), zQueue(768), zQueue(832), zQueue(896), zQueue(960), zQueue(1024), zQueue(1152),  \
-            zQueue(1280), zQueue(1408), zQueue(1536), zQueue(1664), zQueue(1792), zQueue(1920), zQueue(2048),          \
-            zQueue(2304), zQueue(2560), zQueue(2816), zQueue(3072), zQueue(3328), zQueue(3584), zQueue(3840),          \
-            zQueue(4096), zQueue(4608), zQueue(5120), zQueue(5632), zQueue(6144), zQueue(6656), zQueue(7168),          \
-            zQueue(7680), zQueue(8192), zQueue(9216), zQueue(10240), zQueue(11264), zQueue(12288), zQueue(13312),      \
-            zQueue(14336), zQueue(15360), zQueue(16384), zQueue(18432), zQueue(20480), zQueue(22528), zQueue(24576),   \
-            zQueue(26624), zQueue(28672), zQueue(30720), zQueue(32768), zQueue(36864), zQueue(40960), zQueue(45056),   \
-            zQueue(49152), zQueue(53248), zQueue(57344), zQueue(61440), zQueue(65536), zQueue(73728), zQueue(81920),   \
-            zQueue(90112), zQueue(98304), zQueue(106496), zQueue(114688), zQueue(122880), zQueue(131072),              \
-            zQueue(147456), zQueue(163840), zQueue(180224), zQueue(196608), zQueue(212992), zQueue(229376),            \
-            zQueue(245760), zQueue(262144), zQueue(294912), zQueue(327680), zQueue(360448), zQueue(393216),            \
-            zQueue(425984), zQueue(458752), zQueue(491520), zQueue(524288), zQueue(589824)                             \
-    }
-
-#define POOL_INIT() zPoolQueue
-#define zHeapQueue                                                                                                     \
-    {                                                                                                                  \
-        {NULL, NULL}, {NULL, NULL}, { NULL, NULL }                                                                     \
-    }
-
-#define HEAP_INIT() zHeapQueue
-#define zSectionQueue                                                                                                  \
-                                                                                                                       \
-    {                                                                                                                  \
-        NULL, NULL                                                                                                     \
-    }
-
-#define SECTION_INIT() zSectionQueue
-
-#define TH10(tid, TH)                                                                                                  \
-    TH(tid), TH(tid + 1), TH(tid + 2), TH(tid + 3), TH(tid + 4), TH(tid + 5), TH(tid + 6), TH(tid + 7), TH(tid + 8),   \
-        TH(tid + 9)
-#define TH100(tid, x)                                                                                                  \
-    TH10(tid * 100, x), TH10(tid * 100 + 10, x), TH10(tid * 100 + 20, x), TH10(tid * 100 + 30, x),                     \
-        TH10(tid * 100 + 40, x), TH10(tid * 100 + 50, x), TH10(tid * 100 + 60, x), TH10(tid * 100 + 70, x),            \
-        TH10(tid * 100 + 80, x), TH10(tid * 100 + 90, x)
-#define TH1000(x)                                                                                                      \
-    TH100(0, x), TH100(1, x), TH100(2, x), TH100(3, x), TH100(4, x), TH100(5, x), TH100(6, x), TH100(7, x),            \
-        TH100(8, x), TH100(9, x)
-#define TH1024(x)                                                                                                      \
-    {                                                                                                                  \
-        TH1000(x), x(1000), x(1001), x(1002), x(1003), x(1004), x(1005), x(1006), x(1007), x(1008), x(1009), x(1010),  \
-            x(1011), x(1012), x(1013), x(1014), x(1015), x(1016), x(1017), x(1018), x(1019), x(1020), x(1021),         \
-            x(1022), x(1023)                                                                                           \
-    }
-
-#define NEG() -1
-#define ZERO() 0
-#define VALUE(x) x
-#define EMPTY_OWNERS                                                                                                   \
-    {                                                                                                                  \
-        Z1024(NEG)                                                                                                     \
-    }
-#define DEFAULT_OWNERS TH1024(VALUE)
-
-#define EMPTY_MESSAGE()                                                                                                \
-    {                                                                                                                  \
-        ATOMIC_VAR_INIT(0UL)                                                                                           \
-    }
-static cache_align message message_sentinals[MAX_THREADS] = {Z1024(EMPTY_MESSAGE)};
-#define zMessageQueue(tid)                                                                                             \
-    {                                                                                                                  \
-        ATOMIC_VAR_INIT((uintptr_t)&message_sentinals[tid]), ATOMIC_VAR_INIT((uintptr_t)&message_sentinals[tid])       \
-    }
-#define MESSAGE_LAYOUT TH1024(zMessageQueue)
-static cache_align message_queue message_queues[MAX_THREADS] = MESSAGE_LAYOUT;
-static cache_align int64_t partition_owners[MAX_THREADS] = EMPTY_OWNERS;
+static cache_align message message_sentinals[MAX_THREADS];
+static cache_align message_queue message_queues[MAX_THREADS];
+static cache_align int64_t partition_owners[MAX_THREADS];
 
 mutex_t partition_mutex;
 static inline int8_t reserve_any_partition_set()
@@ -1406,10 +1277,9 @@ err:
     return NULL;
 }
 
-cache_align PoolQueue pool_queues[MAX_THREADS][POOL_BIN_COUNT] = {Z1024(POOL_INIT)};
-cache_align Queue heap_queues[MAX_THREADS][3] = {Z1024(HEAP_INIT)};
-cache_align Queue section_queues[MAX_THREADS] = {Z1024(SECTION_INIT)};
-
+static cache_align PoolQueue pool_queues[MAX_THREADS][POOL_BIN_COUNT];
+static cache_align Queue heap_queues[MAX_THREADS][3];
+static cache_align Queue section_queues[MAX_THREADS];
 static inline uint8_t sizeToPool(size_t as)
 {
     static const int bmask = ~0x7f;
@@ -1899,7 +1769,6 @@ static Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_
     return new_area;
 }
 
-// create our 1024 static area containers by macro expansion
 #define PARTITION_01 ((uintptr_t)2 << 40)
 #define PARTITION_2 ((uintptr_t)8 << 40)
 #define PARTITION_3 ((uintptr_t)16 << 40)
@@ -1907,37 +1776,10 @@ static Area *partition_allocator_alloc_area(AreaList *area_queue, uint64_t area_
 #define PARTITION_5 ((uintptr_t)64 << 40)
 #define PARTITION_6 ((uintptr_t)128 << 40)
 
-#define PARTITION_DEFINE(tid)                                                                                          \
-    {                                                                                                                  \
-        {NULL,        NULL, tid, (tid) * (SZ_GB * 6) + PARTITION_01, (tid) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6), \
-         AT_FIXED_32, 0,    NULL},                                                                                     \
-            {NULL,                                                                                                     \
-             NULL,                                                                                                     \
-             tid,                                                                                                      \
-             (tid) * (SZ_GB * 8) + PARTITION_2,                                                                        \
-             (tid) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8),                                                          \
-             AT_FIXED_128,                                                                                             \
-             0,                                                                                                        \
-             NULL},                                                                                                    \
-            {NULL,                                                                                                     \
-             NULL,                                                                                                     \
-             tid,                                                                                                      \
-             (tid) * (SZ_GB * 16) + PARTITION_3,                                                                       \
-             (tid) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16),                                                        \
-             AT_FIXED_256,                                                                                             \
-             0,                                                                                                        \
-             NULL},                                                                                                    \
-            &section_queues[tid], heap_queues[tid], 0, pool_queues[tid], 0, 0, 0, &message_queues[tid]                 \
-    }
-
-#define PARTITION_LAYOUT TH1024(PARTITION_DEFINE)
+static cache_align PartitionAllocator partition_allocators[MAX_THREADS];
 
 static AreaList partition_area_4 = {NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AT_VARIABLE, 0, NULL};
 static AreaList partition_area_5 = {NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AT_VARIABLE, 0, NULL};
-
-static cache_align PartitionAllocator partition_allocators[MAX_THREADS] = PARTITION_LAYOUT;
-
-static _Atomic(int32_t) global_thread_idx = ATOMIC_VAR_INIT(0);
 
 static const int32_t thread_message_imit = 100;
 
@@ -2360,13 +2202,7 @@ static inline void *allocator_try_alloc_from_pool(Allocator *a, size_t s)
     return ptr;
 }
 
-#define ALLOC_DEFINE(tid)                                                                                              \
-    {                                                                                                                  \
-        tid, &partition_allocators[tid], NULL, 0, 0, 0, 0                                                              \
-    }
-#define ALLOC_LAYOUT TH1024(ALLOC_DEFINE)
-static cache_align Allocator allocator_list[MAX_THREADS] = ALLOC_LAYOUT;
-
+static cache_align Allocator allocator_list[MAX_THREADS];
 bool allocator_initilized = false;
 static void allocator_destroy()
 {
@@ -2386,12 +2222,112 @@ static void allocator_destroy()
     // clean memory
 }
 
-static void allocator_init()
+static void allocator_init(size_t max_threads)
 {
     if (thread_instance) {
         return;
     }
+    static bool init = false;
+    if (init)
+        return;
+    init = true;
+
     os_page_size = get_os_page_size();
+
+    for (size_t i = 0; i < max_threads; i++) {
+        PoolQueue *pool_base = pool_queues[i];
+        for (int j = 0; j < 8; j++) {
+            pool_base[j].head = NULL;
+            pool_base[j].tail = NULL;
+            pool_base[j].size = j * 8UL;
+        }
+
+        size_t base_nums[8] = {0b1000000, 0b1001000, 0b1010000, 0b1011000, 0b1100000, 0b1101000, 0b1110000, 0b1111000};
+        for (int j = 0; j < 16; j++) {
+            int base = 8 + j * 8;
+            for (int k = 0; k < 8; k++) {
+                pool_base[base + k].head = NULL;
+                pool_base[base + k].tail = NULL;
+                pool_base[base + k].size = base_nums[k];
+            }
+            for (int k = 0; k < 8; k++) {
+                base_nums[k] = base_nums[k] << 1;
+            }
+        }
+        pool_base[POOL_BIN_COUNT - 2].head = NULL;
+        pool_base[POOL_BIN_COUNT - 2].tail = NULL;
+        pool_base[POOL_BIN_COUNT - 2].size = base_nums[0];
+        pool_base[POOL_BIN_COUNT - 1].head = NULL;
+        pool_base[POOL_BIN_COUNT - 1].tail = NULL;
+        pool_base[POOL_BIN_COUNT - 1].size = base_nums[1];
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        Queue *heap_base = heap_queues[i];
+        heap_base[0] = (Queue){NULL, NULL};
+        heap_base[1] = (Queue){NULL, NULL};
+        heap_base[2] = (Queue){NULL, NULL};
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        Queue *section_base = &section_queues[i];
+        section_base[0] = (Queue){NULL, NULL};
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        message *message_base = &message_sentinals[i];
+        message_base->next = (0UL);
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        message_queue *message_base = &message_queues[i];
+        message_base->head = (0UL);
+        message_base->tail = (0UL);
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        partition_owners[i] = -1;
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        PartitionAllocator *palloc = &partition_allocators[i];
+        palloc->area_01 = (AreaList){NULL,
+                                     NULL,
+                                     (uint32_t)i,
+                                     (i) * (SZ_GB * 6) + PARTITION_01,
+                                     (i) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6),
+                                     AT_FIXED_32,
+                                     0,
+                                     NULL};
+        palloc->area_2 = (AreaList){NULL,
+                                    NULL,
+                                    (uint32_t)i,
+                                    (i) * (SZ_GB * 8) + PARTITION_2,
+                                    (i) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8),
+                                    AT_FIXED_128,
+                                    0,
+                                    NULL};
+        palloc->area_3 = (AreaList){NULL,
+                                    NULL,
+                                    (uint32_t)i,
+                                    (i) * (SZ_GB * 16) + PARTITION_3,
+                                    (i) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16),
+                                    AT_FIXED_256,
+                                    0,
+                                    NULL};
+        palloc->sections = &section_queues[i];
+        palloc->heaps = heap_queues[i];
+        palloc->heap_count = 0;
+        palloc->pools = pool_queues[i];
+        palloc->thread_messages = NULL;
+        palloc->message_count = 0;
+        palloc->thread_free_queue = &message_queues[i];
+    }
+
+    for (size_t i = 0; i < max_threads; i++) {
+        allocator_list[i] = (Allocator){(int32_t)i, &partition_allocators[i], NULL, 0, 0, 0, 0};
+    }
+
     allocator_main_index = reserve_any_partition_set();
     thread_instance = &allocator_list[allocator_main_index];
 }
@@ -2399,18 +2335,18 @@ static void allocator_init()
 #if defined(__cplusplus)
 struct thread_init
 {
-    thread_init() { allocator_init(); }
+    thread_init() { allocator_init(MAX_THREADS); }
     ~thread_init() { allocator_destroy(); }
 };
 static thread_init init;
 
 #elif defined(__GNUC__) || defined(__clang__)
-static void __attribute__((constructor)) library_init(void) { allocator_init(); }
+static void __attribute__((constructor)) library_init(void) { allocator_init(MAX_THREADS); }
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
 Allocator *allocator_get_thread_instance()
 {
-    allocator_init();
+    allocator_init(MAX_THREADS);
     return thread_instance;
 }
 #endif /* Malloc_h */
