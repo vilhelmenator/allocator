@@ -500,7 +500,7 @@ bool fillAPool()
 {
     Allocator *alloc = allocator_get_thread_instance();
     const int num_allocs = 16378;
-    uint64_t *allocs[num_allocs];
+    uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t));
     for (int i = 0; i < num_allocs; i++) {
         allocs[i] = (uint64_t *)allocator_malloc(alloc, 8);
         *allocs[i] = (uint64_t)allocs[i];
@@ -508,6 +508,7 @@ bool fillAPool()
 
     for (int i = 0; i < num_allocs; i++) {
         if (*allocs[i] != (uint64_t)allocs[i]) {
+            free(allocs);
             return false;
         }
         allocator_free(alloc, allocs[i]);
@@ -515,6 +516,7 @@ bool fillAPool()
     // allocate 8 byte parts to fill 128bytes.
     // what is the addres of the last allocation in the pool.
     // is there room for one more?
+    free(allocs);
     return true;
 }
 
@@ -713,11 +715,11 @@ int main()
     b = rdtsc() - a;
     std::cout << "free Cycles : " << b << std::endl << std::endl;
     */
-    char *variables[NUMBER_OF_ITEMS];
+    uint64_t **variables = (uint64_t **)malloc(NUMBER_OF_ITEMS * sizeof(uint64_t **));
     MEASURE_TIME(Allocator, alloc, {
         for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                variables[i] = (char *)allocator_malloc(alloc, OBJECT_SIZE);
+                variables[i] = (uint64_t *)allocator_malloc(alloc, OBJECT_SIZE);
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
                 allocator_free(alloc, variables[i]);
         }
@@ -750,5 +752,6 @@ int main()
     ).count(); std::cout << "Time spent in system malloc: " << duration << "
     milliseconds" << std::endl << std::endl;
     */
+    free(variables);
     return 0;
 }
