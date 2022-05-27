@@ -88,10 +88,16 @@ static int countBits(uint32_t v)
 }
 */
 
-static inline uintptr_t section_align_up(uintptr_t sz)
+static inline uintptr_t ptr_align(uintptr_t pt)
+{
+    static const uintptr_t mask = sizeof(void *) - 1;
+    return (pt + mask) & ~mask;
+}
+
+static inline uintptr_t section_align_up(uintptr_t ptr)
 {
     static const uintptr_t mask = SECTION_SIZE - 1;
-    return (sz + mask) & ~mask;
+    return (ptr + mask) & ~mask;
 }
 
 static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
@@ -766,7 +772,7 @@ typedef struct Pool_t
     int32_t num_available; // num of available blocks.
     int32_t num_committed;
     int32_t num_used;
-
+    uint32_t extend_incr;
     Block *free;
     struct Pool_t *prev;
     struct Pool_t *next;
@@ -782,8 +788,8 @@ typedef struct PoolQueue_t
 
 static inline bool pool_owns_addr(const Pool *p, const void *addr)
 {
-    uintptr_t start = (uintptr_t)&p->blocks[0];
-    uintptr_t end = (uintptr_t)((uint8_t *)start + (p->num_available * p->block_size));
+    const uintptr_t start = (uintptr_t)&p->blocks[0];
+    const uintptr_t end = (uintptr_t)((uint8_t *)start + (p->num_available * p->block_size));
     return (uintptr_t)addr >= start && (uintptr_t)addr <= end;
 }
 
@@ -806,17 +812,16 @@ static inline void pool_free_block(Pool *p, const void *block)
 
 static void pool_extend(Pool *p)
 {
+    // const static size_t hack  = os_page_size/1 << 9UL;
     const uintptr_t start = (uintptr_t)((uint8_t *)&p->blocks[0] + (p->num_committed * p->block_size));
-    uint32_t steps = 1;
+    const uint32_t remaining = (p->num_available - p->num_committed);
+    const uint32_t steps = (uint32_t)MIN(p->extend_incr, remaining);
     Block *block = (Block *)start;
-    if (p->block_size < os_page_size) {
-        const uint32_t remaining = (p->num_available - p->num_committed);
-        steps = (uint32_t)MIN(os_page_size / p->block_size, remaining);
-        for (uint32_t i = 0; i < steps - 1; i++) {
-            Block *next = (Block *)((uint8_t *)block + p->block_size);
-            block->next = next;
-            block = next;
-        }
+
+    for (uint32_t i = 0; i < steps - 1; i++) {
+        Block *next = (Block *)((uint8_t *)block + p->block_size);
+        block->next = next;
+        block = next;
     }
 
     p->num_committed += steps;
@@ -829,13 +834,14 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t blockSize, cons
     const int32_t psize = 1 << size_clss_to_exponent[partition];
     const size_t block_memory = psize - sizeof(Pool);
 
-    uintptr_t section_end = section_align_up((uintptr_t)p);
-    size_t remaining_size = section_end - (uintptr_t)&p->blocks[0];
+    const uintptr_t section_end = section_align_up((uintptr_t)p);
+    const size_t remaining_size = section_end - (uintptr_t)&p->blocks[0];
 
     p->idx = pidx;
     p->block_size = blockSize;
-    p->num_available = (int)(MIN(remaining_size, block_memory) / blockSize);
+    p->num_available = (int32_t)(MIN(remaining_size, block_memory) / blockSize);
     p->num_committed = 0;
+    p->extend_incr = p->block_size < os_page_size ? (uint32_t)(os_page_size / p->block_size) : 1;
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;
@@ -2039,8 +2045,8 @@ static inline Pool *allocator_alloc_pool(Allocator *a, size_t s)
         return NULL;
     }
 
-    unsigned int coll_idx = section_reserve_next(sfree_section);
-    ExponentType exp = section_get_container_exponent(sfree_section);
+    const unsigned int coll_idx = section_reserve_next(sfree_section);
+    const ExponentType exp = section_get_container_exponent(sfree_section);
     Pool *p = (Pool *)section_get_collection(sfree_section, coll_idx, exp);
     pool_init(p, coll_idx, (uint32_t)s, exp);
     return p;
@@ -2141,6 +2147,7 @@ static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
 
 void *allocator_malloc(Allocator *a, size_t s)
 {
+    // s = ptr_align(s);
     if (a->previous_pool != NULL && a->previous_size == s) {
         if (a->previous_pool->free != NULL) {
             return pool_get_free_block(a->previous_pool);
