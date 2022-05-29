@@ -669,7 +669,7 @@ bool testAreaFail()
 
 void test_size_iter(uint32_t alloc_size)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    // Allocator *alloc = allocator_get_thread_instance();
     START_TEST(Allocator, {});
     char **variables = (char **)malloc(NUMBER_OF_ITEMS * sizeof(char *));
 

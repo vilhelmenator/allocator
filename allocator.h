@@ -2375,8 +2375,8 @@ Allocator *allocator_get_thread_instance()
     allocator_init(MAX_THREADS);
     return thread_instance;
 }
-static inline Allocator *get_allocator(void) { return thread_instance; }
-inline void *__attribute__((malloc)) cmalloc(size_t s) { return allocator_malloc(get_allocator(), s); }
+inline Allocator *get_allocator(void) { return thread_instance; }
+void *__attribute__((malloc)) cmalloc(size_t s) { return allocator_malloc(get_allocator(), s); }
 
-inline void cfree(void *p) { return allocator_free(get_allocator(), p); }
+void cfree(void *p) { allocator_free(get_allocator(), p); }
 #endif /* Malloc_h */
