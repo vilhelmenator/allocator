@@ -34,10 +34,6 @@ CLOGGER(_alloc_h_);
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-#define MIN_ALLOC_SIZE sizeof(void *)
-#define MAX_SMALL_SIZE 128 * MIN_ALLOC_SIZE
-#define MAX_RAW_ALLOC_SIZE 256 * MIN_ALLOC_SIZE
-
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
 
 #define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4    // 16k
@@ -65,17 +61,13 @@ CLOGGER(_alloc_h_);
 #define POOL_BIN_COUNT 17 * 8 + 2
 #define HEADER_SIZE 64
 
-#define AREA_SMALL_MAX_MEMORY AREA_SIZE_SMALL - HEADER_SIZE
-#define AREA_LARGE_MAX_MEMORY AREA_SIZE_LARGE - HEADER_SIZE
-#define SECTION_MAX_MEMORY SECTION_SIZE - HEADER_SIZE
-#define PAGE_MAX_MEMORY AREA_SIZE_SMALL * 2 - HEADER_SIZE
-
 #define MAX_SMALL_AREAS 192 // 32Mb over 6Gb
 #define MAX_LARGE_AREAS 64  // 128Mb over 8Gb
 #define MAX_HUGE_AREAS 64   // 256Mb over 16Gb
 
 #define MAX_THREADS 1024
 #define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
+#define ALIGN(x) ((x + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
 
 /*
 static int countBits(uint32_t v)
@@ -87,12 +79,6 @@ static int countBits(uint32_t v)
     return c;
 }
 */
-
-static inline uintptr_t ptr_align(uintptr_t pt)
-{
-    static const uintptr_t mask = sizeof(void *) - 1;
-    return (pt + mask) & ~mask;
-}
 
 static inline uintptr_t section_align_up(uintptr_t ptr)
 {
@@ -108,15 +94,6 @@ static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
         return sm & ~mask;
     } else {
         return (sm / alignment) * alignment;
-    }
-}
-static inline uintptr_t align_down(uintptr_t sz, size_t alignment)
-{
-    uintptr_t mask = alignment - 1;
-    if ((alignment & mask) == 0) {
-        return (sz & ~mask);
-    } else {
-        return ((sz / alignment) * alignment);
     }
 }
 
@@ -138,11 +115,8 @@ typedef enum AreaType_t {
     AT_VARIABLE,  //  for objects, where we want a single allocatino per item in
                   //  a dedicated partition.
 } AreaType;
-//
-// partition counter
-//
+
 static cache_align const uintptr_t partitions_offsets[] = {
-    // TERABYTES
     ((uintptr_t)2 << 40), // allocations smaller than SECTION_MAX_MEMORY
     ((uintptr_t)4 << 40),
     ((uintptr_t)8 << 40),   // SECTION_MAX_MEMORY < x < AREA_MAX_MEMORY
@@ -374,7 +348,7 @@ typedef struct QNode_t
 
 // list functions
 static inline bool list_isEmpty(void *q) { return ((Queue *)q)->head == NULL; }
-static void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
+static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
     QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
@@ -704,12 +678,7 @@ static inline void section_claim_all(Section *s)
     area_claim_idx(area, s->idx);
 }
 
-static inline uint8_t section_reserve_next(Section *s)
-{
-    int8_t idx = bitmask_allocate_bit_lo(&s->active_mask);
-    section_claim_idx(s, idx);
-    return idx;
-}
+static inline uint8_t section_reserve_next(Section *s) { return bitmask_allocate_bit_lo(&s->active_mask); }
 
 static inline void section_reserve_all(Section *s)
 {
@@ -769,7 +738,7 @@ typedef struct Pool_t
 {
     int32_t idx;
     uint32_t block_size;
-    int32_t num_available; // num of available blocks.
+    int32_t num_available;
     int32_t num_committed;
     int32_t num_used;
     uint32_t extend_incr;
@@ -812,10 +781,10 @@ static inline void pool_free_block(Pool *p, const void *block)
 
 static void pool_extend(Pool *p)
 {
-    // const static size_t hack  = os_page_size/1 << 9UL;
     const uintptr_t start = (uintptr_t)((uint8_t *)&p->blocks[0] + (p->num_committed * p->block_size));
     const uint32_t remaining = (p->num_available - p->num_committed);
     const uint32_t steps = (uint32_t)MIN(p->extend_incr, remaining);
+
     Block *block = (Block *)start;
 
     for (uint32_t i = 0; i < steps - 1; i++) {
@@ -833,8 +802,7 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t blockSize, cons
 {
     const int32_t psize = 1 << size_clss_to_exponent[partition];
     const size_t block_memory = psize - sizeof(Pool);
-
-    const uintptr_t section_end = section_align_up((uintptr_t)p);
+    const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
     const size_t remaining_size = section_end - (uintptr_t)&p->blocks[0];
 
     p->idx = pidx;
@@ -860,12 +828,25 @@ static inline Block *pool_get_free_block(Pool *p)
     return res;
 }
 
+static inline Block *pool_get_free_block_compact(Pool *p)
+{
+    p->num_used++;
+    Block *res = p->free;
+    p->free = res->next;
+    return res;
+}
+
 static inline void *pool_aquire_block(Pool *p)
 {
     if (!pool_is_full(p)) {
-        pool_extend(p);
+        if (p->free == NULL) {
+            if (!pool_is_fully_commited(p)) {
+                pool_extend(p);
+            }
+        }
         return pool_get_free_block(p);
     }
+
     return NULL;
 }
 
@@ -1300,11 +1281,12 @@ static inline uint8_t sizeToPool(size_t as)
 {
     static const int bmask = ~0x7f;
     if ((bmask & as) == 0) {
+        // the first 2 rows
         return as >> 3;
     } else {
         const int tz = __builtin_clzll(as);
-        size_t numWidth = 60 - tz;
-        return 8 + ((numWidth - 3) << 3) + ((as >> (numWidth & 0x7)));
+        const size_t row = (58 - tz) << 3;
+        return row + ((as >> (60 - tz)) & 0x7);
     }
 }
 
@@ -1819,6 +1801,9 @@ static void allocator_free(Allocator *a, void *p);
 
 static inline void allocator_set_previous_pool(Allocator *a, Pool *p)
 {
+    if (p == a->previous_pool) {
+        return;
+    }
     a->previous_pool = p;
     a->previous_pool_start = (uintptr_t)&p->blocks[0];
     a->previous_pool_end = (uintptr_t)((uint8_t *)a->previous_pool_start + (p->num_available * p->block_size));
@@ -1845,7 +1830,7 @@ static void allocator_thread_enqueue(message_queue *queue, message *first, messa
 static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue);
 // static void allocator_thread_dequeue(Allocator *a, message_queue *queue);
 
-static void allocator_flush_thread_free_queue(Allocator *a)
+static inline void allocator_flush_thread_free_queue(Allocator *a)
 {
     Queue *q = (Queue *)a->part_alloc->thread_free_queue;
     if ((uintptr_t)q->head != (uintptr_t)q->tail) {
@@ -2049,6 +2034,7 @@ static inline Pool *allocator_alloc_pool(Allocator *a, size_t s)
     const ExponentType exp = section_get_container_exponent(sfree_section);
     Pool *p = (Pool *)section_get_collection(sfree_section, coll_idx, exp);
     pool_init(p, coll_idx, (uint32_t)s, exp);
+    section_claim_idx(sfree_section, coll_idx);
     return p;
 }
 
@@ -2059,11 +2045,13 @@ static inline void *allocator_alloc_from_pool(Allocator *a, size_t s)
 
     if (start != NULL) {
         if (start->free == NULL) {
-            if (!pool_is_fully_commited(start)) {
-                pool_extend(start);
+            if (!pool_is_full(start)) {
                 allocator_set_previous_pool(a, start);
                 a->previous_size = s;
-                return pool_get_free_block(start);
+                if (!pool_is_fully_commited(start)) {
+                    pool_extend(start);
+                }
+                return pool_get_free_block_compact(start);
             }
             list_remove(queue, start);
         } else {
@@ -2073,7 +2061,7 @@ static inline void *allocator_alloc_from_pool(Allocator *a, size_t s)
         }
     }
 
-    start = allocator_alloc_pool(a, s);
+    start = allocator_alloc_pool(a, queue->size);
     if (start == NULL) {
         return NULL;
     }
@@ -2092,23 +2080,22 @@ static inline void _allocator_free(Allocator *a, void *p)
 {
     if (allocator_check_previous_pool(a, p)) {
         pool_free_block(a->previous_pool, p);
-        return;
     } else {
         a->previous_pool = NULL;
-    }
-    switch (partition_from_addr((uintptr_t)p)) {
-    case 0:
-    case 1:
-        allocator_free_from_section(a, p, AREA_SIZE_SMALL);
-        break;
-    case 2:
-        allocator_free_from_section(a, p, AREA_SIZE_LARGE);
-        break;
-    case 3:
-        allocator_free_huge(a, p);
-        break;
-    default:
-        break;
+        switch (partition_from_addr((uintptr_t)p)) {
+        case 0:
+        case 1:
+            allocator_free_from_section(a, p, AREA_SIZE_SMALL);
+            break;
+        case 2:
+            allocator_free_from_section(a, p, AREA_SIZE_LARGE);
+            break;
+        case 3:
+            allocator_free_huge(a, p);
+            break;
+        default:
+            break;
+        }
     }
 }
 static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
@@ -2147,10 +2134,11 @@ static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
 
 void *allocator_malloc(Allocator *a, size_t s)
 {
-    // s = ptr_align(s);
-    if (a->previous_pool != NULL && a->previous_size == s) {
-        if (a->previous_pool->free != NULL) {
-            return pool_get_free_block(a->previous_pool);
+    const size_t as = ALIGN(s);
+    if (a->previous_pool != NULL && a->previous_size == as) {
+        void *block = pool_aquire_block(a->previous_pool);
+        if (block != NULL) {
+            return block;
         } else {
             a->previous_pool = NULL;
         }
@@ -2161,12 +2149,12 @@ void *allocator_malloc(Allocator *a, size_t s)
     allocator_flush_thread_free_queue(a);
 
     if (s <= LARGE_OBJECT_SIZE) {
-        return allocator_alloc_from_pool(a, s);
+        return allocator_alloc_from_pool(a, as);
     } else if (s <= AREA_SIZE_LARGE) {
         // allocate form the large page
-        return allocator_alloc_from_page(a, s);
+        return allocator_alloc_from_page(a, as);
     } else {
-        return allocator_alloc_slab(a, s);
+        return allocator_alloc_slab(a, as);
     }
 }
 
@@ -2250,6 +2238,7 @@ static void allocator_init(size_t max_threads)
     if (thread_instance) {
         return;
     }
+
     static bool init = false;
     if (init)
         return;
@@ -2273,6 +2262,7 @@ static void allocator_init(size_t max_threads)
                 pool_base[base + k].tail = NULL;
                 pool_base[base + k].size = base_nums[k];
             }
+
             for (int k = 0; k < 8; k++) {
                 base_nums[k] = base_nums[k] << 1;
             }
@@ -2287,9 +2277,12 @@ static void allocator_init(size_t max_threads)
 
     for (size_t i = 0; i < max_threads; i++) {
         Queue *heap_base = heap_queues[i];
-        heap_base[0] = (Queue){NULL, NULL};
-        heap_base[1] = (Queue){NULL, NULL};
-        heap_base[2] = (Queue){NULL, NULL};
+        heap_base[0].head = NULL;
+        heap_base[0].tail = NULL;
+        heap_base[1].head = NULL;
+        heap_base[1].tail = NULL;
+        heap_base[2].head = NULL;
+        heap_base[2].tail = NULL;
     }
 
     for (size_t i = 0; i < max_threads; i++) {
@@ -2315,30 +2308,33 @@ static void allocator_init(size_t max_threads)
 
     for (size_t i = 0; i < max_threads; i++) {
         PartitionAllocator *palloc = &partition_allocators[i];
-        palloc->area_01 = (AreaList){NULL,
-                                     NULL,
-                                     (uint32_t)i,
-                                     (i) * (SZ_GB * 6) + PARTITION_01,
-                                     (i) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6),
-                                     AT_FIXED_32,
-                                     0,
-                                     NULL};
-        palloc->area_2 = (AreaList){NULL,
-                                    NULL,
-                                    (uint32_t)i,
-                                    (i) * (SZ_GB * 8) + PARTITION_2,
-                                    (i) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8),
-                                    AT_FIXED_128,
-                                    0,
-                                    NULL};
-        palloc->area_3 = (AreaList){NULL,
-                                    NULL,
-                                    (uint32_t)i,
-                                    (i) * (SZ_GB * 16) + PARTITION_3,
-                                    (i) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16),
-                                    AT_FIXED_256,
-                                    0,
-                                    NULL};
+        palloc->area_01.head = NULL;
+        palloc->area_01.tail = NULL;
+        palloc->area_01.partition_id = (uint32_t)i;
+        palloc->area_01.start_addr = (i) * (SZ_GB * 6) + PARTITION_01;
+        palloc->area_01.end_addr = (i) * (SZ_GB * 6) + PARTITION_01 + (SZ_GB * 6);
+        palloc->area_01.type = AT_FIXED_32;
+        palloc->area_01.area_count = 0;
+        palloc->area_01.previous_area = NULL;
+
+        palloc->area_2.head = NULL;
+        palloc->area_2.tail = NULL;
+        palloc->area_2.partition_id = (uint32_t)i;
+        palloc->area_2.start_addr = (i) * (SZ_GB * 8) + PARTITION_2;
+        palloc->area_2.end_addr = (i) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8);
+        palloc->area_2.type = AT_FIXED_128;
+        palloc->area_2.area_count = 0;
+        palloc->area_2.previous_area = NULL;
+
+        palloc->area_3.head = NULL;
+        palloc->area_3.tail = NULL;
+        palloc->area_3.partition_id = (uint32_t)i;
+        palloc->area_3.start_addr = (i) * (SZ_GB * 16) + PARTITION_3;
+        palloc->area_3.end_addr = (i) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16);
+        palloc->area_3.type = AT_FIXED_256;
+        palloc->area_3.area_count = 0;
+        palloc->area_3.previous_area = NULL;
+
         palloc->sections = &section_queues[i];
         palloc->heaps = heap_queues[i];
         palloc->heap_count = 0;
@@ -2349,7 +2345,13 @@ static void allocator_init(size_t max_threads)
     }
 
     for (size_t i = 0; i < max_threads; i++) {
-        allocator_list[i] = (Allocator){(int32_t)i, &partition_allocators[i], NULL, 0, 0, 0, 0};
+        allocator_list[i]._thread_idx = (int32_t)i;
+        allocator_list[i].part_alloc = &partition_allocators[i];
+        allocator_list[i].thread_free_part_alloc = NULL;
+        allocator_list[i].previous_pool = NULL;
+        allocator_list[i].previous_size = 0;
+        allocator_list[i].previous_pool_start = 0;
+        allocator_list[i].previous_pool_end = 0;
     }
 
     allocator_main_index = reserve_any_partition_set();
@@ -2373,4 +2375,8 @@ Allocator *allocator_get_thread_instance()
     allocator_init(MAX_THREADS);
     return thread_instance;
 }
+static inline Allocator *get_allocator(void) { return thread_instance; }
+inline void *__attribute__((malloc)) cmalloc(size_t s) { return allocator_malloc(get_allocator(), s); }
+
+inline void cfree(void *p) { return allocator_free(get_allocator(), p); }
 #endif /* Malloc_h */

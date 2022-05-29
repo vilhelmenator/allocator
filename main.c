@@ -121,7 +121,7 @@ int tss_set(tss_t key, void *val)
 
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
 const uint64_t NUMBER_OF_ITEMS = 800000L;
-const uint64_t NUMBER_OF_ITERATIONS = 100UL;
+const uint64_t NUMBER_OF_ITERATIONS = 10UL;
 const uint64_t OBJECT_SIZE = (1 << 3UL);
 
 const uint64_t sz_kb = 1024;
@@ -666,92 +666,44 @@ bool testAreaFail()
     allocator_release_local_areas(alloc);
     return false;
 }
-int main()
-{
 
+void test_size_iter(uint32_t alloc_size)
+{
     Allocator *alloc = allocator_get_thread_instance();
     START_TEST(Allocator, {});
-    TEST(Allocator, area_fallback, { EXPECT(testAreaFail()); });
-    // std::cout << sizeof(Area) << std::endl;
-    // std::cout << sizeof(Allocator) << std::endl;
-    // std::cout << sizeof(PartitionAllocator) << std::endl;
-    run_tests();
+    char **variables = (char **)malloc(NUMBER_OF_ITEMS * sizeof(char *));
 
-    // return 0;
-    /*
-    //std::cout << "total mem: " << total_mem << std::endl;
-    char*t = (char*)alloc.malloc(OBJECT_SIZE);
-    alloc.free(t);
-    t = (char*)malloc(OBJECT_SIZE);
-    free(t);
-    t = (char*)mi_malloc(OBJECT_SIZE);
-    mi_free(t);
-
-    auto a = rdtsc();
-    t = (char*)alloc.malloc(OBJECT_SIZE);
-    auto b = rdtsc() - a;
-    std::cout << "alloc.malloc Cycles : " << b << std::endl << std::endl;
-    a = rdtsc();
-    alloc.free(t);
-    b = rdtsc() - a;
-    std::cout << "alloc.free Cycles : " << b << std::endl << std::endl;
-
-
-    a = rdtsc();
-    t = (char*)mi_malloc(OBJECT_SIZE);
-    b = rdtsc() - a;
-    std::cout << "mi_malloc Cycles : " << b << std::endl << std::endl;
-    a = rdtsc();
-    mi_free(t);
-    b = rdtsc() - a;
-    std::cout << "mi_free Cycles : " << b << std::endl << std::endl;
-
-    a = rdtsc();
-    t = (char*)malloc(OBJECT_SIZE);
-    b = rdtsc() - a;
-    std::cout << "malloc Cycles : " << b << std::endl << std::endl;
-    a = rdtsc();
-    free(t);
-    b = rdtsc() - a;
-    std::cout << "free Cycles : " << b << std::endl << std::endl;
-    */
-    uint64_t **variables = (uint64_t **)malloc(NUMBER_OF_ITEMS * sizeof(uint64_t **));
     MEASURE_TIME(Allocator, alloc, {
         for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                variables[i] = (uint64_t *)allocator_malloc(alloc, OBJECT_SIZE);
+                variables[i] = (char *)cmalloc(alloc_size);
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                allocator_free(alloc, variables[i]);
+                cfree(variables[i]);
         }
     });
-    allocator_release_local_areas(alloc);
+    // allocator_release_local_areas(alloc);
     /*
-        MEASURE_TIME(Allocator, malloc, {
-            for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-                for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                    variables[i] = (char *)mi_malloc(OBJECT_SIZE);
 
-                for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                    mi_free(variables[i]);
-            }
-        });
-        */
-    END_TEST(Allocator, {});
-    /*
-    t1 = std::chrono::high_resolution_clock::now();
-    for(auto j=0;j<NUMBER_OF_ITERATIONS; j++)
-    {
-       for(auto i=0; i<NUMBER_OF_ITEMS; i++)
-           variables[i] = (char*)malloc(OBJECT_SIZE);
+    MEASURE_TIME(Allocator, malloc, {
+        for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+                variables[i] = (char *)mi_malloc(alloc_size);
 
-        for(auto i=0; i<NUMBER_OF_ITEMS; i++)
-            free( variables[i] );
-    }
-    t2 = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::milliseconds>( t2 - t1
-    ).count(); std::cout << "Time spent in system malloc: " << duration << "
-    milliseconds" << std::endl << std::endl;
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+                mi_free(variables[i]);
+        }
+    });
+    mi_collect(true);
     */
+    END_TEST(Allocator, {});
     free(variables);
+}
+
+int main()
+{
+    run_tests();
+    for (int i = 0; i < 12; i++) {
+        test_size_iter(1 << i);
+    }
     return 0;
 }
