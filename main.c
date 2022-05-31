@@ -146,9 +146,9 @@ const uint64_t num_sections_part0 = (sz_gb * 2) / (4 * sz_mb);
 const uint64_t num_sections_part1 = (sz_gb * 4) / (4 * sz_mb);
 const uint64_t num_sections_part2 = (sz_gb * 8) / (4 * sz_mb);
 
-const uint64_t max_small_size = 16 * sz_kb;
-const uint64_t max_mid_size = 128 * sz_kb;
-const uint64_t max_large_size = 2 * sz_mb;
+const uint64_t max_small_size = 16 * sz_kb - 1;
+const uint64_t max_mid_size = 128 * sz_kb - 1;
+const uint64_t max_large_size = 2 * sz_mb - 1;
 
 const uint64_t max_small_size_page = 128 * sz_kb;
 const uint64_t max_mid_size_page = 32 * sz_mb;
@@ -667,18 +667,74 @@ bool testAreaFail()
     return false;
 }
 
+static inline uint8_t sizeToPool2(size_t as)
+{
+    static const int bmask = ~0x7f;
+    if ((bmask & as) == 0) {
+        // the first 2 rows
+        return (as >> 3);
+    } else {
+        const uint32_t top_mask = 0xffffffff;
+        const int tz = __builtin_clz(as);
+        const uint64_t bottom_mask = (top_mask >> (tz + 4));
+        const uint64_t incr = (bottom_mask & as) > 0;
+        const size_t row = (26 - tz) * 8;
+        return (row + ((as >> (28 - tz)) & 0x7)) + incr;
+    }
+}
+
+int test_size_to_pool()
+{
+
+    static const int32_t pool_sizes[] = {
+        0,       8,       16,      24,      32,      40,      48,      56,      64,      72,      80,      88,
+        96,      104,     112,     120,     128,     144,     160,     176,     192,     208,     224,     240,
+        256,     288,     320,     352,     384,     416,     448,     480,     512,     576,     640,     704,
+        768,     832,     896,     960,     1024,    1152,    1280,    1408,    1536,    1664,    1792,    1920,
+        2048,    2304,    2560,    2816,    3072,    3328,    3584,    3840,    4096,    4608,    5120,    5632,
+        6144,    6656,    7168,    7680,    8192,    9216,    10240,   11264,   12288,   13312,   14336,   15360,
+        16384,   18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768,   36864,   40960,   45056,
+        49152,   53248,   57344,   61440,   65536,   73728,   81920,   90112,   98304,   106496,  114688,  122880,
+        131072,  147456,  163840,  180224,  196608,  212992,  229376,  245760,  262144,  294912,  327680,  360448,
+        393216,  425984,  458752,  491520,  524288,  589824,  655360,  720896,  786432,  851968,  917504,  983040,
+        1048576, 1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152, 2359296, 2621440, 2883584,
+        3145728, 3407872, 3670016, 3932160, 4194304, 4718592};
+
+    for (int ii = 0; ii <= 4718592; ii++) {
+        int i = ALIGN(ii);
+
+        uint32_t np = sizeToPool2(i);
+        if (np == 0) {
+            if (i > 8) {
+                printf("does not fita %d %d", pool_sizes[np], i);
+                return -1;
+            }
+
+        } else {
+            if (pool_sizes[np] < i) {
+                printf("does not fit %d %d", pool_sizes[np], i);
+                return -1;
+            }
+            if (pool_sizes[np - 1] >= i) {
+                printf("not best fit %d %d", pool_sizes[np - 1], i);
+                return -1;
+            }
+        }
+    }
+    return 1;
+}
 void test_size_iter(uint32_t alloc_size)
 {
-    // Allocator *alloc = allocator_get_thread_instance();
+    Allocator *alloc = allocator_get_thread_instance();
     START_TEST(Allocator, {});
     char **variables = (char **)malloc(NUMBER_OF_ITEMS * sizeof(char *));
 
     MEASURE_TIME(Allocator, alloc, {
         for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                variables[i] = (char *)cmalloc(alloc_size);
+                variables[i] = (char *)allocator_malloc(alloc, alloc_size);
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                cfree(variables[i]);
+                allocator_free(alloc, variables[i]);
         }
     });
     // allocator_release_local_areas(alloc);
@@ -701,7 +757,9 @@ void test_size_iter(uint32_t alloc_size)
 
 int main()
 {
-    run_tests();
+    // int32_t ii = test_size_to_pool();
+
+    // run_tests();
     for (int i = 0; i < 12; i++) {
         test_size_iter(1 << i);
     }
