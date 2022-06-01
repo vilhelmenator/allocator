@@ -64,6 +64,7 @@ int tss_set(tss_t key, void *val)
 #include "../ctest/ctest.h"
 #include "allocator.h"
 //#include <iostream>
+
 /*
 
  mremap on systems that support it.
@@ -723,18 +724,24 @@ int test_size_to_pool()
     }
     return 1;
 }
+
 void test_size_iter(uint32_t alloc_size)
 {
-    Allocator *alloc = allocator_get_thread_instance();
-    START_TEST(Allocator, {});
+
+    START_TEST(allocator, {});
     char **variables = (char **)malloc(NUMBER_OF_ITEMS * sizeof(char *));
 
-    MEASURE_TIME(Allocator, alloc, {
+    MEASURE_TIME(allocator, alloc, {
         for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                variables[i] = (char *)allocator_malloc(alloc, alloc_size);
-            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
-                allocator_free(alloc, variables[i]);
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++) {
+                Allocator *al = allocator_get_thread_instance();
+                variables[i] = (char *)allocator_malloc(al, alloc_size);
+            }
+
+            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++) {
+                Allocator *al = allocator_get_thread_instance();
+                allocator_free(al, variables[i]);
+            }
         }
     });
     // allocator_release_local_areas(alloc);
@@ -751,7 +758,7 @@ void test_size_iter(uint32_t alloc_size)
     });
     mi_collect(true);
     */
-    END_TEST(Allocator, {});
+    END_TEST(allocator, {});
     free(variables);
 }
 

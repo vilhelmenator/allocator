@@ -1812,16 +1812,13 @@ static const int32_t thread_message_imit = 100;
 
 typedef struct Allocator_t
 {
-    int32_t _thread_idx;
+    int64_t _thread_idx;
     PartitionAllocator *part_alloc;
     PartitionAllocator *thread_free_part_alloc;
     Pool *cached_pool;
     uintptr_t cached_pool_start;
     uintptr_t cached_pool_end;
 } Allocator;
-
-uint8_t allocator_main_index = -1;
-Allocator *thread_instance = NULL;
 
 static void allocator_free(Allocator *a, void *p);
 
@@ -2232,7 +2229,7 @@ bool allocator_release_local_areas(Allocator *a)
 {
     a->cached_pool = NULL;
     bool result = false;
-    uint8_t midx = allocator_main_index;
+    uint8_t midx = a->_thread_idx;
     for (int i = 0; i < MAX_THREADS; i++) {
         if (partition_owners[i] == midx) {
             PartitionAllocator *palloc = &partition_allocators[i];
@@ -2261,7 +2258,7 @@ static inline void *allocator_try_alloc_from_pool(Allocator *a, size_t s)
         a->cached_pool = NULL;
         // claim a new partition set
         // try again
-        int8_t new_partition_set_idx = reserve_any_partition_set_for(allocator_main_index);
+        int8_t new_partition_set_idx = reserve_any_partition_set_for(a->_thread_idx);
         if (new_partition_set_idx != -1) {
             allocator_flush_thread_free(a);
             allocator_flush_thread_free_queue(a);
@@ -2276,8 +2273,7 @@ static cache_align Allocator allocator_list[MAX_THREADS];
 bool allocator_initilized = false;
 static void allocator_destroy()
 {
-    if (!thread_instance)
-        return;
+
     static bool done = false;
     if (done)
         return;
@@ -2288,16 +2284,15 @@ static void allocator_destroy()
     tls_delete(alloc_tls_key);
 #endif
 
-    release_partition_set(allocator_main_index);
-    // clean memory
+    // release_partition_set(allocator_main_index);
+    //  clean memory
 }
+
+static __thread Allocator *thread_instance = &allocator_list[0];
+static Allocator *allocator_get_thread_instance(void) { return thread_instance; }
 
 static void allocator_init(size_t max_threads)
 {
-    if (thread_instance) {
-        return;
-    }
-
     static bool init = false;
     if (init)
         return;
@@ -2390,9 +2385,7 @@ static void allocator_init(size_t max_threads)
         allocator_list[i].cached_pool_start = 0;
         allocator_list[i].cached_pool_end = 0;
     }
-
-    allocator_main_index = reserve_any_partition_set();
-    thread_instance = &allocator_list[allocator_main_index];
+    partition_owners[0] = 0;
 }
 
 #if defined(__cplusplus)
@@ -2407,13 +2400,8 @@ static thread_init init;
 static void __attribute__((constructor)) library_init(void) { allocator_init(MAX_THREADS); }
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
-Allocator *allocator_get_thread_instance()
-{
-    allocator_init(MAX_THREADS);
-    return thread_instance;
-}
-Allocator *get_allocator(void) { return thread_instance; }
-void *__attribute__((malloc)) cmalloc(size_t s) { return allocator_malloc(get_allocator(), s); }
 
-void cfree(void *p) { allocator_free(get_allocator(), p); }
+void *__attribute__((malloc)) cmalloc(size_t s) { return allocator_malloc(allocator_get_thread_instance(), s); }
+
+void cfree(void *p) { allocator_free(allocator_get_thread_instance(), p); }
 #endif /* Malloc_h */
