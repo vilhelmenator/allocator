@@ -734,13 +734,11 @@ void test_size_iter(uint32_t alloc_size)
     MEASURE_TIME(allocator, alloc, {
         for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++) {
-                Allocator *al = allocator_get_thread_instance();
-                variables[i] = (char *)allocator_malloc(al, alloc_size);
+                variables[i] = (char *)cmalloc(alloc_size);
             }
 
             for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++) {
-                Allocator *al = allocator_get_thread_instance();
-                allocator_free(al, variables[i]);
+                cfree(variables[i]);
             }
         }
     });

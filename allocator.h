@@ -347,10 +347,9 @@ typedef struct QNode_t
 } QNode;
 
 // list functions
-static inline bool list_isEmpty(void *q) { return ((Queue *)q)->head == NULL; }
-static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
+static inline bool list_isEmpty(Queue *q) { return q->head == NULL; }
+static inline void _list_enqueue(Queue *tq, void *node, size_t prev_offset)
 {
-    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
     QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
     tn->next = tq->head;
     tn->prev = NULL;
@@ -363,9 +362,8 @@ static inline void _list_enqueue(void *queue, void *node, size_t head_offset, si
     }
 }
 
-static void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset)
+static void _list_remove(Queue *tq, void *node, size_t prev_offset)
 {
-    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
     QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
     if (tn->prev != NULL) {
         QNode *temp = (QNode *)((uint8_t *)tn->prev + prev_offset);
@@ -433,8 +431,8 @@ static void _list_insert_sort(void *queue, void *node, size_t head_offset, size_
     current->prev = node;
 }
 */
-#define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
-#define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+#define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*n), prev))
+#define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*n), prev))
 /*
 #define list_insert_at(q, t, n) _list_insert_at(q, t, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_insert_sort(q, t, n)                                                                                      \
@@ -788,21 +786,29 @@ static inline void pool_free_block(Pool *p, const void *block)
     }
 }
 
-static void pool_extend(Pool *p)
+static void *pool_extend(Pool *p)
 {
-    const uintptr_t start = (uintptr_t)((uint8_t *)&p->blocks[0] + (p->num_committed * p->block_size));
-    const uint32_t remaining = (p->num_available - p->num_committed);
-    // const uint32_t steps = MIN( remaining ,p->extend_incr);
-    const uint32_t steps = remaining < (p->extend_incr * 2) ? remaining : p->extend_incr;
+    if (p->extend_incr == 1) {
+        Block *next_free = (Block *)((uint8_t *)&p->blocks[0] + (p->num_committed * p->block_size));
+        p->num_used++;
+        p->num_committed++;
+        return next_free;
+    } else {
+        Block *next_free = (Block *)((uint8_t *)&p->blocks[0] + (p->num_committed * p->block_size));
+        const uint32_t remaining = (p->num_available - p->num_committed);
+        const uint32_t steps = MIN(remaining, p->extend_incr);
+        p->num_committed += steps;
 
-    p->num_committed += steps;
-    p->free = (Block *)start;
-    uint64_t *block = (uint64_t *)start;
-    for (uint32_t i = 1; i < steps; ++i) {
-        *block = ((uintptr_t)block + p->block_size);
-        block = (uint64_t *)*block;
+        uint64_t *block = (uint64_t *)next_free;
+        for (uint32_t i = 1; i < steps; ++i) {
+            *block = ((uintptr_t)block + p->block_size);
+            block = (uint64_t *)*block;
+        }
+        *block = 0;
+        p->num_used++;
+        p->free = next_free->next;
+        return next_free;
     }
-    *block = 0;
 }
 
 static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const uint32_t block_size,
@@ -865,8 +871,7 @@ static inline void *pool_aquire_block(Pool *p)
     }
 
     if (!pool_is_fully_commited(p)) {
-        pool_extend(p);
-        return pool_get_free_block_compact(p);
+        return pool_extend(p);
     }
 
     return NULL;
@@ -1820,7 +1825,7 @@ typedef struct Allocator_t
     uintptr_t cached_pool_end;
 } Allocator;
 
-static void allocator_free(Allocator *a, void *p);
+static inline void allocator_free(Allocator *a, void *p);
 
 static inline void allocator_set_cached_pool(Allocator *a, Pool *p)
 {
@@ -1907,16 +1912,6 @@ static inline void allocator_free_from_section(Allocator *a, void *p, const size
             Pool *pool = (Pool *)section_find_collection(section, p);
             pool_free_block(pool, p);
             allocator_set_cached_pool(a, pool);
-            // if (!pool_is_connected(pool)) {
-            //  reconnect
-            /*
-            PartitionAllocator *_part_alloc = &partition_allocators[section->partition_id];
-            Queue *queue = &_part_alloc->pools[pool->block_idx];
-            if (queue->head != pool && queue->tail != pool) {
-                list_enqueue(queue, pool);
-            }
-             */
-
             if (!section_is_connected(section)) {
                 PartitionAllocator *_part_alloc = &partition_allocators[section->partition_id];
                 Queue *sections = _part_alloc->sections;
@@ -1924,7 +1919,6 @@ static inline void allocator_free_from_section(Allocator *a, void *p, const size
                     list_enqueue(sections, section);
                 }
             }
-            //}
         } else {
             Heap *heap = (Heap *)section_find_collection(section, p);
             uint32_t heapIdx = section_get_container_exponent(section) - 3;
@@ -2086,8 +2080,8 @@ static inline void *allocator_alloc_from_pool(Allocator *a, const size_t s)
         Pool *next = start->next;
         if (start->free == NULL) {
             if (!pool_is_fully_commited(start)) {
-                pool_extend(start);
-                goto return_block;
+                allocator_set_cached_pool(a, start);
+                return pool_extend(start);
             }
             list_remove(queue, start);
         } else {
@@ -2102,7 +2096,6 @@ static inline void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     }
 
     a->part_alloc->pool_count++;
-    // list_enqueue(queue, start);
 return_block:
 
     allocator_set_cached_pool(a, start);
@@ -2167,19 +2160,30 @@ static void allocator_thread_dequeue(Allocator *a, message_queue *queue)
     queue->head = (uintptr_t)curr;
 }
 */
+static __thread int32_t allocator_main_index = 0;
+static cache_align Allocator allocator_list[MAX_THREADS];
+static __thread Allocator *thread_instance = &allocator_list[0];
 
-__attribute__((malloc)) void *allocator_malloc(Allocator *const a, size_t s)
+static inline void *allocator_try_alloc_from_pool(Allocator *a, size_t s)
 {
-    // test to see if the size will fit within the current pool.
-    // does not have to be exactly the same.
-    // this previous pool should rather be called active pool.
-    // when an active pool is set it is removed from the free queue
-    // so, it can be left free spinning without clearing from the queue.
-    // Also to prevent the inner loop from running into empty pools in the queue.
-    static const size_t base_size = sizeof(uintptr_t) - 1;
-    static const size_t base_mask = ~base_size;
+    void *ptr = allocator_alloc_from_pool(a, s);
+    if (ptr == NULL) {
+        a->cached_pool = NULL;
+        // try again
+        int8_t new_partition_set_idx = reserve_any_partition_set_for(allocator_main_index);
+        if (new_partition_set_idx != -1) {
+            allocator_flush_thread_free(a);
+            allocator_flush_thread_free_queue(a);
+            a->part_alloc = &partition_allocators[new_partition_set_idx];
+            ptr = allocator_alloc_from_pool(a, s);
+        }
+    }
+    return ptr;
+}
 
-    const size_t as = (MAX(s, 1) + base_size) & base_mask;
+static inline void *allocator_malloc(Allocator *a, size_t s)
+{
+    const size_t as = ALIGN(s);
     if (a->cached_pool != NULL) {
         if (as == a->cached_pool->block_size) {
             void *block = pool_aquire_block(a->cached_pool);
@@ -2217,7 +2221,7 @@ void *allocator_malloc_page(Allocator *a, size_t s)
     }
 }
 
-void allocator_free(Allocator *a, void *p)
+static inline void allocator_free(Allocator *a, void *p)
 {
     if (p == NULL)
         return;
@@ -2229,7 +2233,7 @@ bool allocator_release_local_areas(Allocator *a)
 {
     a->cached_pool = NULL;
     bool result = false;
-    uint8_t midx = a->_thread_idx;
+    uint8_t midx = allocator_main_index;
     for (int i = 0; i < MAX_THREADS; i++) {
         if (partition_owners[i] == midx) {
             PartitionAllocator *palloc = &partition_allocators[i];
@@ -2251,26 +2255,6 @@ bool allocator_release_local_areas(Allocator *a)
     return result;
 }
 
-static inline void *allocator_try_alloc_from_pool(Allocator *a, size_t s)
-{
-    void *ptr = allocator_alloc_from_pool(a, s);
-    if (ptr == NULL) {
-        a->cached_pool = NULL;
-        // claim a new partition set
-        // try again
-        int8_t new_partition_set_idx = reserve_any_partition_set_for(a->_thread_idx);
-        if (new_partition_set_idx != -1) {
-            allocator_flush_thread_free(a);
-            allocator_flush_thread_free_queue(a);
-            a->part_alloc = &partition_allocators[new_partition_set_idx];
-            ptr = allocator_alloc_from_pool(a, s);
-        }
-    }
-    return ptr;
-}
-
-static cache_align Allocator allocator_list[MAX_THREADS];
-bool allocator_initilized = false;
 static void allocator_destroy()
 {
 
@@ -2284,11 +2268,10 @@ static void allocator_destroy()
     tls_delete(alloc_tls_key);
 #endif
 
-    // release_partition_set(allocator_main_index);
+    if (allocator_main_index != 0)
+        release_partition_set(allocator_main_index);
     //  clean memory
 }
-
-static __thread Allocator *thread_instance = &allocator_list[0];
 static Allocator *allocator_get_thread_instance(void) { return thread_instance; }
 
 static void allocator_init(size_t max_threads)
@@ -2335,7 +2318,8 @@ static void allocator_init(size_t max_threads)
         message_base->tail = (0UL);
     }
 
-    for (size_t i = 0; i < max_threads; i++) {
+    partition_owners[0] = 0;
+    for (size_t i = 1; i < max_threads; i++) {
         partition_owners[i] = -1;
     }
 
@@ -2385,7 +2369,6 @@ static void allocator_init(size_t max_threads)
         allocator_list[i].cached_pool_start = 0;
         allocator_list[i].cached_pool_end = 0;
     }
-    partition_owners[0] = 0;
 }
 
 #if defined(__cplusplus)
@@ -2402,6 +2385,5 @@ static void __attribute__((destructor)) library_destroy(void) { allocator_destro
 #endif
 
 void *__attribute__((malloc)) cmalloc(size_t s) { return allocator_malloc(allocator_get_thread_instance(), s); }
-
 void cfree(void *p) { allocator_free(allocator_get_thread_instance(), p); }
 #endif /* Malloc_h */
