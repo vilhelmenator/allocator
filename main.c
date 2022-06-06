@@ -638,7 +638,7 @@ bool testAreaFail()
     // partition sets. then I can move into the thread free part. Which should
     // be a lot simpler.
     //   then it is just testing and cleaning things up..
-    void *m = alloc_memory_aligned((void *)partitions_offsets[0], 48 * sz_mb, 32 * sz_mb, true, partitions_offsets[1]);
+    void *m = alloc_memory_aligned((void *)partitions_offsets[0], partitions_offsets[1], 48 * sz_mb, 32 * sz_mb);
     //
 
     // two areas should be marked as bad.
@@ -765,7 +765,7 @@ int main()
     // int32_t ii = test_size_to_pool();
 
     // run_tests();
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i);
     }
     return 0;
