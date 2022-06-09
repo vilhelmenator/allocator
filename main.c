@@ -1,68 +1,8 @@
-//
-//  main.cpp
-//  MemPoolTests
-//
-//  Created by Vilhelm Sævarsson on 25/02/2020.
-//  Copyright © 2020 Vilhelm Sævarsson. All rights reserved.
-//
 
-//
-// at start we register our thread local stuff
-//  set callbacks for when threads die
-//  remove when atexit is called.
-//  atexit(&process_done);
-/*
-// Called when the process is done (through `at_exit`)
-static void mi_process_done(void) {
-  // only shutdown if we were initialized
-  if (!_mi_process_is_initialized) return;
-  // ensure we are called once
-  static bool process_done = false;
-  if (process_done) return;
-  process_done = true;
-
-  #if defined(_WIN32) && !defined(MI_SHARED_LIB)
-  FlsSetValue(mi_fls_key, NULL);  // don't call main-thread callback
-  FlsFree(mi_fls_key);            // call thread-done on all threads to prevent dangling callback pointer if statically
-linked with a DLL; Issue #208 #endif mi_collect(true);
-}
-
-*/
-/*
-int tls_create(tss_t *key, tss_dtor_t dtor)
-{
-    if (!key) return thrd_error;
-    *key = TlsAlloc();
-    if (dtor) {
-        if (impl_tss_dtor_register(*key, dtor)) {
-            TlsFree(*key);
-            return thrd_error;
-        }
-    }
-    return (*key != 0xFFFFFFFF) ? thrd_success : thrd_error;
-}
-
-// 7.25.6.2
-void tss_delete(tss_t key)
-{
-    TlsFree(key);
-}
-
-// 7.25.6.3
-void *tss_get(tss_t key)
-{
-    return TlsGetValue(key);
-}
-
-// 7.25.6.4
-int tss_set(tss_t key, void *val)
-{
-    return TlsSetValue(key, val) ? thrd_success : thrd_error;
-}
-*/
 #define CTEST_ENABLED
 #include "../ctest/ctest.h"
 #include "allocator.h"
+//#include "cthread.h"
 //#include <iostream>
 
 /*
@@ -134,6 +74,7 @@ const uint64_t small_pool_size = 128 * sz_kb;
 const uint64_t mid_pool_size = 512 * sz_kb;
 const uint64_t large_pool_size = 4 * sz_mb;
 
+const uint64_t puny_page_size = 4 * sz_mb;    // allocations <= 16k
 const uint64_t small_page_size = 32 * sz_mb;  // allocations <= 128k
 const uint64_t mid_page_size = 128 * sz_mb;   // allocations <= 32Mb
 const uint64_t large_page_size = 256 * sz_mb; // allocations <= 128Mb
@@ -147,10 +88,11 @@ const uint64_t num_sections_part0 = (sz_gb * 2) / (4 * sz_mb);
 const uint64_t num_sections_part1 = (sz_gb * 4) / (4 * sz_mb);
 const uint64_t num_sections_part2 = (sz_gb * 8) / (4 * sz_mb);
 
-const uint64_t max_small_size = 16 * sz_kb - 1;
-const uint64_t max_mid_size = 128 * sz_kb - 1;
-const uint64_t max_large_size = 2 * sz_mb - 1;
+const uint64_t max_small_size = 16 * sz_kb;
+const uint64_t max_mid_size = 128 * sz_kb;
+const uint64_t max_large_size = 2 * sz_mb;
 
+const uint64_t max_puny_size_page = 16 * sz_kb;
 const uint64_t max_small_size_page = 128 * sz_kb;
 const uint64_t max_mid_size_page = 32 * sz_mb;
 const uint64_t max_large_size_page = 128 * sz_mb;
@@ -225,6 +167,7 @@ tests. [ ] memory API. alloc and string functions.
 [ ] integrate with ALLOT
 [ ] test with builder. DONE!
 */
+
 bool test_pools(size_t pool_size, size_t allocation_size)
 {
     Allocator *alloc = allocator_get_thread_instance();
@@ -295,27 +238,27 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     return true;
 }
 
-bool test_pools_small() { return test_pools(small_pool_size, max_small_size); }
-bool test_medium_pools() { return test_pools(mid_pool_size, max_mid_size); }
+bool test_pools_small(void) { return test_pools(small_pool_size, max_small_size); }
+bool test_medium_pools(void) { return test_pools(mid_pool_size, max_mid_size); }
 
-bool test_large_pools() { return test_pools(large_pool_size, max_large_size); }
+bool test_large_pools(void) { return test_pools(large_pool_size, max_large_size); }
 
-bool test_pages(size_t page_size, size_t allocation_size)
+bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
 {
     Allocator *alloc = allocator_get_thread_instance();
     uint64_t base_parts = num_areas_part0 + num_areas_part1;
-    uint64_t extended_parts = num_areas_part0 + num_areas_part1 + num_areas_part2;
-    if (page_size != small_page_size) {
+    uint64_t extended_parts = num_areas_part2;
+    if (page_size > small_page_size) {
         base_parts = num_areas_part2;
-        extended_parts = num_areas_part2 + num_areas_part3;
+        extended_parts = num_areas_part3;
     }
     if (page_size == large_page_size) {
         extended_parts = 0;
     }
     uint64_t max_count_per_page = (page_size - 64) / allocation_size;
-    uint64_t num_small_areas = base_parts;
-    uint64_t num_small_allocations = max_count_per_page * num_small_areas;
-
+    uint64_t max_count_extended_page = (promotion_size - 64) / allocation_size;
+    uint64_t num_small_allocations = max_count_per_page * base_parts;
+    uint64_t num_extended_allocations = max_count_per_page * base_parts + max_count_extended_page * extended_parts;
     uint64_t expected_reserved_mem = os_page_size * num_small_allocations;  // if all pools are touched
     uint64_t actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
@@ -324,8 +267,9 @@ bool test_pages(size_t page_size, size_t allocation_size)
     double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (uint64_t *)allocator_malloc_page(alloc, allocation_size);
-        uintptr_t end = align_up((uintptr_t)variables[i], page_size);
+        uint64_t *new_addr = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+        variables[i] = new_addr;
+        uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             return false;
         }
@@ -338,21 +282,21 @@ bool test_pages(size_t page_size, size_t allocation_size)
         for (uint32_t i = 0; i < num_small_allocations; i++) {
             allocator_free(alloc, variables[i]);
         }
+
         // release all the system resources
         allocator_release_local_areas(alloc);
+
         free(variables);
-        max_count_per_page = (page_size - 64) / allocation_size;
-        num_small_areas = extended_parts;
-        num_small_allocations = max_count_per_page * num_small_areas;
-        expected_reserved_mem = os_page_size * num_small_allocations;  // if all pools are touched
-        actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
+        expected_reserved_mem = os_page_size * num_extended_allocations;  // if all pools are touched
+        actual_reserver_mem = allocation_size * num_extended_allocations; // if all the owned pages would be touched
 
         readable_reserved = (double)expected_reserved_mem / (SZ_GB);
-        uint64_t **variables2 = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
+        uint64_t **variables2 = (uint64_t **)malloc(num_extended_allocations * sizeof(uint64_t));
         // exhaust part 0, 1, and 2
-        for (uint32_t i = 0; i < num_small_allocations; i++) {
-            variables2[i] = (uint64_t *)allocator_malloc_page(alloc, allocation_size);
-            uintptr_t end = align_up((uintptr_t)variables2[i], page_size);
+        for (uint32_t i = 0; i < num_extended_allocations; i++) {
+            uint64_t *new_addr = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+            variables2[i] = new_addr;
+            uintptr_t end = align_up((uintptr_t)variables2[i], area_size_from_addr((uintptr_t)new_addr));
             if ((end - (uintptr_t)variables2[i]) < allocation_size) {
                 return false;
             }
@@ -361,17 +305,17 @@ bool test_pages(size_t page_size, size_t allocation_size)
             }
         }
         // next allocation should be NULL;
-        void *nll = allocator_malloc_page(alloc, allocation_size);
+        void *nll = allocator_malloc_heap(alloc, allocation_size);
         if (nll != NULL) {
             return false;
         }
-        for (uint32_t i = 0; i < num_small_allocations; i++) {
+        for (uint32_t i = 0; i < num_extended_allocations; i++) {
             allocator_free(alloc, variables2[i]);
         }
         free(variables2);
     } else {
         // next allocation should be NULL;
-        void *nll = allocator_malloc_page(alloc, allocation_size);
+        void *nll = allocator_malloc_heap(alloc, allocation_size);
         if (nll != NULL) {
             return false;
         }
@@ -385,13 +329,15 @@ bool test_pages(size_t page_size, size_t allocation_size)
     return true;
 }
 
-bool test_medium_pages() { return test_pages(mid_page_size, max_mid_size_page); }
+bool test_medium_pages(void) { return test_pages(mid_page_size, large_page_size, max_mid_size_page); }
 
-bool test_large_pages() { return test_pages(large_page_size, max_large_size_page); }
+bool test_large_pages(void) { return test_pages(large_page_size, large_page_size, max_large_size_page); }
 
-bool test_small_pages() { return test_pages(small_page_size, max_small_size_page); }
+bool test_small_pages(void) { return test_pages(small_page_size, mid_page_size, max_small_size_page); }
 
-bool test_slabs()
+bool test_puny_pages(void) { return test_pages(puny_page_size, puny_page_size, max_puny_size_page); }
+
+bool test_slabs(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     uint64_t allocation_size = 129 * sz_mb;
@@ -404,7 +350,7 @@ bool test_slabs()
 
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (uint64_t *)allocator_malloc_page(alloc, allocation_size);
+        variables[i] = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
         uintptr_t end = align_up((uintptr_t)variables[i], 256 * sz_mb);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             return false;
@@ -413,7 +359,7 @@ bool test_slabs()
             return false;
         }
     }
-    void *nll = allocator_malloc_page(alloc, allocation_size);
+    void *nll = allocator_malloc_heap(alloc, allocation_size);
     if (nll != NULL) {
         return false;
     }
@@ -424,7 +370,7 @@ bool test_slabs()
     return true;
 }
 
-bool test_areas()
+bool test_areas(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     uint64_t allocation_size = 129 * sz_mb;
@@ -435,7 +381,7 @@ bool test_areas()
     for (uint32_t i = 0; i < num_alloc; i++) {
         variables[i] = (uint64_t *)allocator_malloc(alloc, allocation_size);
     }
-    void *nll = allocator_malloc_page(alloc, allocation_size);
+    void *nll = allocator_malloc_heap(alloc, allocation_size);
     if (nll != NULL) {
         return false;
     }
@@ -482,7 +428,7 @@ bool test_areas()
     return true;
 }
 
-bool test_huge_alloc()
+bool test_huge_alloc(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     void *gb = (uint64_t *)allocator_malloc(alloc, 15 * sz_gb);
@@ -497,11 +443,11 @@ bool test_huge_alloc()
     return true;
 }
 
-bool fillAPool()
+bool fillAPool(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     const int num_allocs = 16378;
-    uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t));
+    uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
     for (int i = 0; i < num_allocs; i++) {
         allocs[i] = (uint64_t *)allocator_malloc(alloc, 8);
         *allocs[i] = (uint64_t)allocs[i];
@@ -514,14 +460,14 @@ bool fillAPool()
         }
         allocator_free(alloc, allocs[i]);
     }
+    free(allocs);
     // allocate 8 byte parts to fill 128bytes.
     // what is the addres of the last allocation in the pool.
     // is there room for one more?
-    free(allocs);
     return true;
 }
 
-bool fillASection()
+bool fillASection(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     const int num_pools = 32;
@@ -547,7 +493,7 @@ bool fillASection()
     return true;
 }
 
-bool fillAnArea()
+bool fillAnArea(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     const int num_sections = 8;
@@ -556,14 +502,18 @@ bool fillAnArea()
     const int total_allocs = num_sections * num_pools * num_allocs;
     uint64_t **allocs = (uint64_t **)malloc(total_allocs * sizeof(uint64_t **));
 
+    int index = 0;
     for (int s = 0; s < num_pools * num_sections; s++) {
         for (int i = 0; i < num_allocs; i++) {
-            int index = i + (num_allocs * s);
+            index = i + (num_allocs * s);
             allocs[index] = (uint64_t *)allocator_malloc(alloc, 8);
             *allocs[index] = (uint64_t)allocs[index];
         }
     }
-
+    /*uint64_t * start = allocs[0];
+    uint64_t * end = allocs[index];
+    uint64_t *diff = end - start;
+     */
     for (int s = 0; s < num_pools * num_sections; s++) {
         for (int i = 0; i < num_allocs; i++) {
             int index = i + (num_allocs * s);
@@ -580,14 +530,14 @@ bool fillAnArea()
     return true;
 }
 
-bool fillAPage()
+bool fillAPage(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     const int num_allocs = 1398094;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
 
     for (int i = 0; i < num_allocs; i++) {
-        uint64_t *addr = (uint64_t *)allocator_malloc_page(alloc, 8);
+        uint64_t *addr = (uint64_t *)allocator_malloc_heap(alloc, 8);
         allocs[i] = addr;
         *allocs[i] = (uint64_t)allocs[i];
     }
@@ -606,7 +556,7 @@ bool fillAPage()
     return true;
 }
 
-void run_tests()
+void run_tests(void)
 {
 
     Allocator *alloc = allocator_get_thread_instance();
@@ -614,6 +564,7 @@ void run_tests()
     TEST(Allocator, pools_small, { EXPECT(test_pools_small()); });
     TEST(Allocator, medium_pools, { EXPECT(test_medium_pools()); });
     TEST(Allocator, large_pools, { EXPECT(test_large_pools()); });
+    TEST(Allocator, puny_pages, { EXPECT(test_puny_pages()); });
     TEST(Allocator, small_pages, { EXPECT(test_small_pages()); });
     TEST(Allocator, medium_pages, { EXPECT(test_medium_pages()); });
     TEST(Allocator, large_pages, { EXPECT(test_large_pages()); });
@@ -629,7 +580,7 @@ void run_tests()
     allocator_release_local_areas(alloc);
 }
 
-bool testAreaFail()
+bool testAreaFail(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     // Why am I stalling this!
@@ -638,7 +589,7 @@ bool testAreaFail()
     // partition sets. then I can move into the thread free part. Which should
     // be a lot simpler.
     //   then it is just testing and cleaning things up..
-    void *m = alloc_memory_aligned((void *)partitions_offsets[0], partitions_offsets[1], 48 * sz_mb, 32 * sz_mb);
+    void *m = alloc_memory_aligned((void *)PARTITION_0, PARTITION_1, 48 * sz_mb, 32 * sz_mb);
     //
 
     // two areas should be marked as bad.
@@ -668,105 +619,61 @@ bool testAreaFail()
     return false;
 }
 
-static inline uint8_t sizeToPool2(size_t as)
-{
-    static const int bmask = ~0x7f;
-    if ((bmask & as) == 0) {
-        // the first 2 rows
-        return (as >> 3);
-    } else {
-        const uint32_t top_mask = 0xffffffff;
-        const int tz = __builtin_clz(as);
-        const uint64_t bottom_mask = (top_mask >> (tz + 4));
-        const uint64_t incr = (bottom_mask & as) > 0;
-        const size_t row = (26 - tz) * 8;
-        return (row + ((as >> (28 - tz)) & 0x7)) + incr;
-    }
-}
-
-int test_size_to_pool()
-{
-
-    static const int32_t pool_sizes[] = {
-        0,       8,       16,      24,      32,      40,      48,      56,      64,      72,      80,      88,
-        96,      104,     112,     120,     128,     144,     160,     176,     192,     208,     224,     240,
-        256,     288,     320,     352,     384,     416,     448,     480,     512,     576,     640,     704,
-        768,     832,     896,     960,     1024,    1152,    1280,    1408,    1536,    1664,    1792,    1920,
-        2048,    2304,    2560,    2816,    3072,    3328,    3584,    3840,    4096,    4608,    5120,    5632,
-        6144,    6656,    7168,    7680,    8192,    9216,    10240,   11264,   12288,   13312,   14336,   15360,
-        16384,   18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768,   36864,   40960,   45056,
-        49152,   53248,   57344,   61440,   65536,   73728,   81920,   90112,   98304,   106496,  114688,  122880,
-        131072,  147456,  163840,  180224,  196608,  212992,  229376,  245760,  262144,  294912,  327680,  360448,
-        393216,  425984,  458752,  491520,  524288,  589824,  655360,  720896,  786432,  851968,  917504,  983040,
-        1048576, 1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152, 2359296, 2621440, 2883584,
-        3145728, 3407872, 3670016, 3932160, 4194304, 4718592};
-
-    for (int ii = 0; ii <= 4718592; ii++) {
-        int i = ALIGN(ii);
-
-        uint32_t np = sizeToPool2(i);
-        if (np == 0) {
-            if (i > 8) {
-                printf("does not fita %d %d", pool_sizes[np], i);
-                return -1;
-            }
-
-        } else {
-            if (pool_sizes[np] < i) {
-                printf("does not fit %d %d", pool_sizes[np], i);
-                return -1;
-            }
-            if (pool_sizes[np - 1] >= i) {
-                printf("not best fit %d %d", pool_sizes[np - 1], i);
-                return -1;
-            }
-        }
-    }
-    return 1;
-}
-
-void test_size_iter(uint32_t alloc_size)
+void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
 {
 
     START_TEST(allocator, {});
-    char **variables = (char **)malloc(NUMBER_OF_ITEMS * sizeof(char *));
+    char **variables = (char **)malloc(num_items * sizeof(char *));
 
     MEASURE_TIME(allocator, alloc, {
-        for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++) {
+        for (uint64_t j = 0; j < num_loops; j++) {
+            for (uint64_t i = 0; i < num_items; i++) {
                 variables[i] = (char *)cmalloc(alloc_size);
             }
+            for (uint64_t i = 0; i < num_items; i++) {
 
-            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++) {
                 cfree(variables[i]);
             }
         }
     });
     // allocator_release_local_areas(alloc);
     /*
-
     MEASURE_TIME(Allocator, malloc, {
-        for (uint64_t j = 0; j < NUMBER_OF_ITERATIONS; j++) {
-            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+        for (uint64_t j = 0; j < num_loops; j++) {
+            for (uint64_t i = 0; i < num_items; i++)
                 variables[i] = (char *)mi_malloc(alloc_size);
 
-            for (uint64_t i = 0; i < NUMBER_OF_ITEMS; i++)
+            for (uint64_t i = 0; i < num_items; i++)
                 mi_free(variables[i]);
         }
     });
-    mi_collect(true);
+    //mi_collect(true);
     */
     END_TEST(allocator, {});
     free(variables);
 }
-
+/*
+int test(void*)
+{
+    char* test = (char *)cmalloc(16);
+    cfree(test);
+    return 1;
+}*/
 int main()
 {
-    // int32_t ii = test_size_to_pool();
+    // thrd_t trd;
+    // thrd_create(&trd, &test, NULL);
 
     // run_tests();
+    // printf("%d %d ", offsetof(__typeof__(Section), prev), offsetof(__typeof__(Heap), prev));
+
     for (int i = 0; i < 14; i++) {
-        test_size_iter(1 << i);
+        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    }
+    size_t item_count = 100;
+    for (int i = 0; i < 6; i++) {
+        // test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
+        item_count *= 10;
     }
     return 0;
 }
