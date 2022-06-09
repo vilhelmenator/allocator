@@ -719,16 +719,40 @@ static inline bool section_is_full(const Section *s)
 
 static inline void *section_find_collection(Section *s, void *p)
 {
-    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&s->collections[0];
-    const uintptr_t exp = size_clss_to_exponent[section_get_type(s)];
-    const int32_t collection_size = 1 << exp;
-    const int32_t idx = (int32_t)((size_t)diff >> exp);
-    return (void *)((uint8_t *)&s->collections[0] + collection_size * idx);
+
+    const SectionType st = section_get_type(s);
+    switch (st) {
+    case ST_POOL_128K: {
+        const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&s->collections[0];
+        const uintptr_t exp = size_clss_to_exponent[ST_POOL_128K];
+        const int32_t collection_size = 1 << exp;
+        const int32_t idx = (int32_t)((size_t)diff >> exp);
+        return (void *)((uint8_t *)&s->collections[0] + collection_size * idx);
+        break;
+    }
+    case ST_POOL_512K: {
+        const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&s->collections[0];
+        const uintptr_t exp = size_clss_to_exponent[ST_POOL_512K];
+        const int32_t collection_size = 1 << exp;
+        const int32_t idx = (int32_t)((size_t)diff >> exp);
+        return (void *)((uint8_t *)&s->collections[0] + collection_size * idx);
+        break;
+    }
+    default:
+        return (void *)&s->collections[0];
+    }
 }
 
-static inline uintptr_t section_get_collection(Section *s, int8_t idx, SectionType exp)
+static inline uintptr_t section_get_collection(Section *s, int8_t idx, SectionType st)
 {
-    return (uintptr_t)((uint8_t *)&s->collections[0] + (1 << size_clss_to_exponent[exp]) * idx);
+    switch (st) {
+    case ST_POOL_128K:
+        return (uintptr_t)((uint8_t *)&s->collections[0] + (1 << size_clss_to_exponent[ST_POOL_128K]) * idx);
+    case ST_POOL_512K:
+        return (uintptr_t)((uint8_t *)&s->collections[0] + (1 << size_clss_to_exponent[ST_POOL_512K]) * idx);
+    default:
+        return (uintptr_t)&s->collections[0];
+    };
 }
 static const cache_align int32_t pool_sizes[] = {
     8,       16,      24,      32,      40,      48,      56,      64,      72,      80,      88,      96,      104,
