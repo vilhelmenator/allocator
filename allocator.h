@@ -68,10 +68,8 @@ CLOGGER(_alloc_h_);
 #define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL)  // 32Mb
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL) // 128Mb
 #define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)  // 256Mb
-#define MASK_FULL 0xFFFFFFFFFFFFFFFF
 
 #define POOL_BIN_COUNT 17 * 8 + 1
-#define HEADER_SIZE 64
 
 #define MAX_SMALL_AREAS 192 // 32Mb over 6Gb
 #define MAX_LARGE_AREAS 64  // 128Mb over 8Gb
@@ -83,6 +81,79 @@ CLOGGER(_alloc_h_);
 #define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
 #define ALIGN(x) ((MAX(x, 1) + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
 
+static inline bool commit_memory(void *base, size_t size)
+{
+#ifdef WINDOWS
+    return VirtualAlloc(base, size, MEM_COMMIT, PAGE_READWRITE) == base;
+#else
+    return (mprotect(base, size, (PROT_READ | PROT_WRITE)) == 0);
+#endif
+}
+
+static inline bool decommit_memory(void *base, size_t size)
+{
+#ifdef WINDOWS
+    return VirtualFree(base, size, MEM_DECOMMIT);
+#else
+    return (mmap(base, size, PROT_NONE, (MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE), -1, 0) == base);
+#endif
+}
+
+static inline bool free_memory(void *ptr, size_t size)
+{
+#ifdef WINDOWS
+    return VirtualFree(ptr, 0, MEM_RELEASE) == 0;
+#else
+    return (munmap(ptr, size) == -1);
+#endif
+}
+
+static inline bool release_memory(void *ptr, size_t size, bool commit)
+{
+    if (commit) {
+        return decommit_memory(ptr, size);
+    } else {
+        return free_memory(ptr, size);
+    }
+}
+
+static inline void *alloc_memory(void *base, size_t size, bool commit)
+{
+#ifdef WINDOWS
+    int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
+    return VirtualAlloc(base, size, flags, PAGE_READWRITE);
+#else
+    int flags = commit ? (PROT_WRITE | PROT_READ) : PROT_NONE;
+    return mmap(base, size, flags, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
+#endif
+}
+
+static inline bool reset_memory(void *base, size_t size)
+{
+#ifdef WINDOWS
+    int flags = MEM_RESET;
+    void *p = VirtualAlloc(base, size, flags, PAGE_READWRITE);
+    if (p == base && base != NULL) {
+        VirtualUnlock(base, size); // VirtualUnlock after MEM_RESET removes the
+                                   // memory from the working set
+    }
+    if (p != base)
+        return false;
+#else
+    int err;
+    size_t advice = MADV_FREE;
+    int oadvice = (int)advice;
+    while ((err = madvise(base, size, oadvice)) != 0 && errno == EAGAIN) {
+        errno = 0;
+    };
+    if (err != 0 && errno == EINVAL && oadvice == MADV_FREE) {
+        err = madvise(base, size, MADV_DONTNEED);
+    }
+    if (err != 0)
+        return false;
+#endif
+    return true;
+}
 /*
 static int countBits(uint32_t v)
 {
@@ -565,9 +636,14 @@ static int8_t area_get_section_count(Area *a)
     }
 }
 
-static inline int8_t area_claim_section(Area *a) { return bitmask_allocate_bit_hi(&a->constr_mask); }
 static inline void area_claim_all(Area *a) { bitmask_reserve_all(&a->constr_mask); }
 static inline void area_claim_idx(Area *a, uint8_t idx) { bitmask_reserve_hi(&a->constr_mask, idx); }
+static inline int8_t area_claim_section(Area *a)
+{
+    int8_t idx = bitmask_allocate_bit_hi(&a->active_mask);
+    area_claim_idx(a, idx);
+    return idx;
+}
 static bool area_is_full(const Area *a)
 {
     if (bitmask_is_full_hi(&a->active_mask)) {
@@ -1054,7 +1130,7 @@ typedef struct message_t
 
 typedef struct message_queue_t
 {
-    _Atomic(uintptr_t) head;
+    uintptr_t head;
     _Atomic(uintptr_t) tail;
 } message_queue;
 
@@ -1109,80 +1185,6 @@ static inline void release_partition_set(const int8_t idx)
         partition_owners[idx] = -1;
         mutex_unlock(&partition_mutex);
     }
-}
-
-static inline bool commit_memory(void *base, size_t size)
-{
-#ifdef WINDOWS
-    return VirtualAlloc(base, size, MEM_COMMIT, PAGE_READWRITE) == base;
-#else
-    return (mprotect(base, size, (PROT_READ | PROT_WRITE)) == 0);
-#endif
-}
-
-static inline bool decommit_memory(void *base, size_t size)
-{
-#ifdef WINDOWS
-    return VirtualFree(base, size, MEM_DECOMMIT);
-#else
-    return (mmap(base, size, PROT_NONE, (MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE), -1, 0) == base);
-#endif
-}
-
-static inline bool free_memory(void *ptr, size_t size)
-{
-#ifdef WINDOWS
-    return VirtualFree(ptr, 0, MEM_RELEASE) == 0;
-#else
-    return (munmap(ptr, size) == -1);
-#endif
-}
-
-static inline bool release_memory(void *ptr, size_t size, bool commit)
-{
-    if (commit) {
-        return decommit_memory(ptr, size);
-    } else {
-        return free_memory(ptr, size);
-    }
-}
-
-static inline void *alloc_memory(void *base, size_t size, bool commit)
-{
-#ifdef WINDOWS
-    int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
-    return VirtualAlloc(base, size, flags, PAGE_READWRITE);
-#else
-    int flags = commit ? (PROT_WRITE | PROT_READ) : PROT_NONE;
-    return mmap(base, size, flags, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
-#endif
-}
-
-static inline bool reset_memory(void *base, size_t size)
-{
-#ifdef WINDOWS
-    int flags = MEM_RESET;
-    void *p = VirtualAlloc(base, size, flags, PAGE_READWRITE);
-    if (p == base && base != NULL) {
-        VirtualUnlock(base, size); // VirtualUnlock after MEM_RESET removes the
-                                   // memory from the working set
-    }
-    if (p != base)
-        return false;
-#else
-    int err;
-    size_t advice = MADV_FREE;
-    int oadvice = (int)advice;
-    while ((err = madvise(base, size, oadvice)) != 0 && errno == EAGAIN) {
-        errno = 0;
-    };
-    if (err != 0 && errno == EINVAL && oadvice == MADV_FREE) {
-        err = madvise(base, size, MADV_DONTNEED);
-    }
-    if (err != 0)
-        return false;
-#endif
-    return true;
 }
 
 static bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
@@ -1443,35 +1445,13 @@ static bool partition_allocator_try_release_containers(PartitionAllocator *pa, A
     return false;
 }
 
-static void partition_allocator_free_area(PartitionAllocator *pa, Area *a, const AreaType t)
+static void partition_allocator_free_area(PartitionAllocator *pa, Area *a, AreaList *list)
 {
-    switch (t) {
-    case AT_FIXED_32: {
-        pa->area_01.area_count--;
-        area_list_remove(&pa->area_01, a);
-        if ((a == pa->area_01.previous_area) || (pa->area_01.area_count == 0)) {
-            pa->area_01.previous_area = NULL;
-        }
-
-        break;
+    list->area_count--;
+    area_list_remove(list, a);
+    if ((a == list->previous_area) || (list->area_count == 0)) {
+        list->previous_area = NULL;
     }
-    case AT_FIXED_128: {
-        pa->area_2.area_count--;
-        area_list_remove(&pa->area_2, a);
-        if ((a == pa->area_2.previous_area) || (pa->area_2.area_count == 0)) {
-            pa->area_2.previous_area = NULL;
-        }
-        break;
-    }
-    default: {
-        pa->area_3.area_count--;
-        area_list_remove(&pa->area_3, a);
-        if ((a == pa->area_3.previous_area) || (pa->area_3.area_count == 0)) {
-            pa->area_3.previous_area = NULL;
-        }
-        break;
-    }
-    };
     free_memory(a, area_get_size(a));
 }
 
@@ -1479,13 +1459,13 @@ static void partition_allocator_try_free_area(PartitionAllocator *pa, Area *area
 {
     const size_t size = area_get_size(area);
     if (size == AREA_SIZE_SMALL) {
-        partition_allocator_free_area(pa, area, AT_FIXED_32);
+        partition_allocator_free_area(pa, area, &pa->area_01);
     } else if (size == AREA_SIZE_LARGE) {
-        partition_allocator_free_area(pa, area, AT_FIXED_128);
+        partition_allocator_free_area(pa, area, &pa->area_2);
     } else if (size == AREA_SIZE_HUGE) {
-        partition_allocator_free_area(pa, area, AT_FIXED_256);
+        partition_allocator_free_area(pa, area, &pa->area_3);
     } else {
-        partition_allocator_free_area(pa, area, AT_VARIABLE);
+        partition_allocator_free_area(pa, area, &pa->area_3);
     }
 }
 
@@ -1507,16 +1487,16 @@ static bool partition_allocator_release_areas_from_queue(PartitionAllocator *pa,
     // detach all pools/pages/sections.
     while (start != NULL) {
         Area *next = area_get_next(start);
-        was_released |= partition_allocator_try_release_containers(pa, start);
+        was_released |= !partition_allocator_try_release_containers(pa, start);
         start = next;
     }
     start = queue->head;
     while (start != NULL) {
         Area *next = area_get_next(start);
-        was_released |= partition_allocator_try_release_area(pa, start);
+        was_released |= !partition_allocator_try_release_area(pa, start);
         start = next;
     }
-    return was_released;
+    return !was_released;
 }
 
 static bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, AreaList *queue)
@@ -1527,29 +1507,28 @@ static bool partition_allocator_release_single_area_from_queue(PartitionAllocato
     // detach all pools/pages/sections.
     while (start != NULL) {
         Area *next = area_get_next(start);
-        was_released |= partition_allocator_try_release_containers(pa, start);
-        if (was_released) {
-            was_released |= partition_allocator_try_release_area(pa, start);
+        if (partition_allocator_try_release_containers(pa, start)) {
+            was_released |= !partition_allocator_try_release_area(pa, start);
             break;
         }
         start = next;
     }
-    return was_released;
+    return !was_released;
 }
 
 static bool partition_allocator_release_local_areas(PartitionAllocator *pa)
 {
     bool was_released = false;
     if (pa->area_01.area_count) {
-        was_released |= partition_allocator_release_areas_from_queue(pa, &pa->area_01);
+        was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area_01);
     }
     if (pa->area_2.area_count) {
-        was_released |= partition_allocator_release_areas_from_queue(pa, &pa->area_2);
+        was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area_2);
     }
     if (pa->area_3.area_count) {
-        was_released |= partition_allocator_release_areas_from_queue(pa, &pa->area_3);
+        was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area_3);
     }
-    return was_released;
+    return !was_released;
 }
 
 /*
@@ -1611,17 +1590,17 @@ static AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, A
     switch (t) {
     case AT_FIXED_32: {
         *area_size = AREA_SIZE_SMALL;
-        *alignement = *area_size;
+        *alignement = AREA_SIZE_SMALL;
         return &pa->area_01;
     }
     case AT_FIXED_128: {
         *area_size = AREA_SIZE_LARGE;
-        *alignement = *area_size;
+        *alignement = AREA_SIZE_LARGE;
         return &pa->area_2;
     }
     case AT_FIXED_256: {
         *area_size = AREA_SIZE_HUGE;
-        *alignement = *area_size;
+        *alignement = AREA_SIZE_HUGE;
         return &pa->area_3;
     }
     default: {
@@ -1638,13 +1617,13 @@ static AreaList *partition_allocator_promote_area(PartitionAllocator *pa, AreaTy
     switch (*t) {
     case AT_FIXED_32: {
         *area_size = AREA_SIZE_LARGE;
-        *alignement = *area_size;
+        *alignement = AREA_SIZE_LARGE;
         *t = AT_FIXED_128;
         return &pa->area_2;
     }
     case AT_FIXED_128: {
         *area_size = AREA_SIZE_HUGE;
-        *alignement = *area_size;
+        *alignement = AREA_SIZE_HUGE;
         *t = AT_FIXED_256;
         return &pa->area_3;
     }
@@ -1691,41 +1670,33 @@ static inline uint32_t partition_allocator_claim_section(Area *area) { return ar
 static Area *partition_allocator_get_area(PartitionAllocator *pa, const size_t size, const uint32_t small_area_limit)
 {
     Area *curr_area = NULL;
-    if (size <= small_area_limit) {
-        curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_32);
-        if (curr_area == NULL) {
-            bool was_released = partition_allocator_release_single_area_from_queue(pa, &pa->area_01);
-            was_released |= partition_allocator_release_single_area_from_queue(pa, &pa->area_2);
-            if (was_released) {
-                // try again.
-                curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_32);
-            }
+    AreaType at = AT_FIXED_32;
+    AreaList *base_set = &pa->area_01;
+    AreaList *promotion_set = &pa->area_2;
+    if (size > small_area_limit) {
+        if (size <= AREA_SIZE_SMALL) {
+            at = AT_FIXED_128;
+            base_set = &pa->area_2;
+            promotion_set = &pa->area_3;
+        } else if (size <= AREA_SIZE_LARGE) {
+            at = AT_FIXED_256;
+            base_set = &pa->area_3;
+            promotion_set = NULL;
+        } else {
+            at = AT_VARIABLE;
+            base_set = &pa->area_3;
+            promotion_set = NULL;
         }
-    } else if (size <= AREA_SIZE_SMALL) {
-        curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_128);
-        if (curr_area == NULL) {
-            bool was_released = partition_allocator_release_single_area_from_queue(pa, &pa->area_2);
-            was_released |= partition_allocator_release_single_area_from_queue(pa, &pa->area_3);
-            if (was_released) {
-                // try again.
-                curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_128);
-            }
+    }
+    curr_area = partition_allocator_get_free_area(pa, size, at);
+    if (curr_area == NULL) {
+        bool was_released = partition_allocator_release_single_area_from_queue(pa, base_set);
+        if (promotion_set != NULL) {
+            was_released |= partition_allocator_release_single_area_from_queue(pa, promotion_set);
         }
-    } else if (size <= AREA_SIZE_LARGE) {
-        curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_256);
-        if (curr_area == NULL) {
-            if (partition_allocator_release_single_area_from_queue(pa, &pa->area_3)) {
-                // try again.
-                curr_area = partition_allocator_get_free_area(pa, size, AT_FIXED_256);
-            }
-        }
-    } else {
-        curr_area = partition_allocator_get_free_area(pa, size, AT_VARIABLE);
-        if (curr_area == NULL) {
-            if (partition_allocator_release_single_area_from_queue(pa, &pa->area_3)) {
-                // try again.
-                curr_area = partition_allocator_get_free_area(pa, size, AT_VARIABLE);
-            }
+        if (was_released) {
+            // try again.
+            curr_area = partition_allocator_get_free_area(pa, size, at);
         }
     }
 
@@ -1742,8 +1713,8 @@ static Section *partition_allocator_alloc_pool_section(PartitionAllocator *pa, c
     const int32_t section_idx = partition_allocator_claim_section(new_area);
     area_set_container_type(new_area, CT_SECTION);
     Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
-    section->constr_mask.whole = 0;
-    section->active_mask.whole = 0;
+    section->constr_mask._w32[0] = 0;
+    section->active_mask._w32[0] = 0;
     section->idx = section_idx;
     section->partition_id = new_area->partition_id;
     return section;
@@ -2077,19 +2048,8 @@ static inline void _allocator_free(Allocator *a, void *p)
         pool_free_block(a->cached_pool, p);
     } else {
         a->cached_pool = NULL;
-        switch (partition_from_addr((uintptr_t)p)) {
-        case 0:
-        case 1:
-            allocator_free_from_container(a, p, AREA_SIZE_SMALL);
-            break;
-        case 2:
-            allocator_free_from_container(a, p, AREA_SIZE_LARGE);
-            break;
-        case 3:
-            allocator_free_from_container(a, p, AREA_SIZE_HUGE);
-            break;
-        default:
-            break;
+        if (partition_from_addr((uintptr_t)p) >= 0) {
+            allocator_free_from_container(a, p, area_size_from_addr((uintptr_t)p));
         }
     }
 }
@@ -2097,7 +2057,6 @@ static void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 {
     message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
     message *curr = (message *)(uintptr_t)queue->head;
-
     // loop between start and end addres
     while (curr != back) {
         message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
@@ -2166,7 +2125,7 @@ static inline void *allocator_malloc(Allocator *a, size_t s)
     allocator_flush_thread_free_queue(a);
 
     if (s <= LARGE_OBJECT_SIZE) {
-        return allocator_alloc_from_pool(a, as);
+        return allocator_try_alloc_from_pool(a, as);
     } else if (s <= AREA_SIZE_LARGE) {
         // allocate form the large page
         return allocator_alloc_from_heap(a, as);
@@ -2225,16 +2184,15 @@ bool allocator_release_local_areas(Allocator *a)
             if (midx != i && was_released) {
                 release_partition_set(i);
             }
-            result |= was_released;
+            result |= !was_released;
         }
     }
-
-    return result;
+    a->part_alloc = &partition_allocators[midx];
+    return !result;
 }
 
 static void allocator_destroy()
 {
-
     static bool done = false;
     if (done)
         return;
@@ -2293,8 +2251,8 @@ static void allocator_init(size_t max_threads)
 
     for (size_t i = 0; i < max_threads; i++) {
         message_queue *message_base = &message_queues[i];
-        message_base->head = (0UL);
-        message_base->tail = (0UL);
+        message_base->head = (uintptr_t)&message_sentinals[i];
+        message_base->tail = (uintptr_t)&message_sentinals[i];
     }
 
     partition_owners[0] = 0;
