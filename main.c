@@ -207,10 +207,12 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         allocator_free(alloc, variables[i]);
     }
-
-    // release all the system resources
-    allocator_release_local_areas(alloc);
     free(variables);
+    // release all the system resources
+    if (!allocator_release_local_areas(alloc)) {
+        return false;
+    }
+
     num_small_sections = num_sections_part0 + num_sections_part1 + num_sections_part2;
     num_pools = num_small_sections * pools_per_section;
     num_small_allocations = num_pools * max_count_per_pool;
@@ -239,14 +241,16 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     if (npid == pid) {
         result = false;
     }
+    allocator_free(alloc, nll);
 end:
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         allocator_free(alloc, variables[i]);
     }
     free(variables);
     // release all the system resources
-    allocator_release_local_areas(alloc);
-    return result;
+
+    return allocator_release_local_areas(alloc);
+    ;
 }
 
 bool test_pools_small(void) { return test_pools(small_pool_size, max_small_size); }
@@ -301,11 +305,13 @@ bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
     for (uint32_t i = 0; i < num_allocations; i++) {
         allocator_free(alloc, variables[i]);
     }
+    free(variables);
 
     // release all the system resources
-    allocator_release_local_areas(alloc);
+    if (!allocator_release_local_areas(alloc)) {
+        return false;
+    }
 
-    free(variables);
     if (extended_parts == 0) {
         return result;
     }
@@ -342,8 +348,8 @@ end:
     }
     free(variables);
     // release all the system resources
-    allocator_release_local_areas(alloc);
-    return result;
+
+    return allocator_release_local_areas(alloc);
 }
 
 bool test_medium_pages(void) { return test_pages(mid_page_size, large_page_size, max_mid_size_page); }
@@ -681,8 +687,8 @@ int main()
     // thrd_t trd;
     // thrd_create(&trd, &test, NULL);
 
-    run_tests();
-    // printf("%d %d ", offsetof(__typeof__(Section), prev), offsetof(__typeof__(Heap), prev));
+    // run_tests();
+    //  printf("%d %d ", offsetof(__typeof__(Section), prev), offsetof(__typeof__(Heap), prev));
 
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
