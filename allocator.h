@@ -65,15 +65,15 @@ CLOGGER(_alloc_h_);
 
 #define SECTION_SIZE (1ULL << 22ULL)
 
-#define AREA_SIZE_SMALL (SECTION_SIZE * 8ULL)  // 32Mb
-#define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL) // 128Mb
-#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)  // 256Mb
+#define BASE_AREA_SIZE (SECTION_SIZE * 8ULL) // 32Mb
+#define AREA_SIZE_SMALL BASE_AREA_SIZE
+#define AREA_SIZE_MEDIUM (SECTION_SIZE * 16ULL) // 64Mb
+#define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)  // 128Mb
+#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)   // 256Mb
 
 #define POOL_BIN_COUNT 17 * 8 + 1
 
-#define MAX_SMALL_AREAS 192 // 32Mb over 6Gb
-#define MAX_LARGE_AREAS 64  // 128Mb over 8Gb
-#define MAX_HUGE_AREAS 64   // 256Mb over 16Gb
+#define MAX_ARES 64
 
 #define MAX_THREADS 1024
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -184,20 +184,20 @@ static cache_align const uintptr_t size_clss_to_exponent[] = {
 };
 
 typedef enum AreaType_t {
+    AT_VARIABLE = 0,
     AT_FIXED_32 = 1,  //  containes small allocations
-    AT_FIXED_128 = 2, //  reserved for a particular partition, collecting object
+    AT_FIXED_64 = 2,  //  containes small allocations
+    AT_FIXED_128 = 4, //  reserved for a particular partition, collecting object
                       //  between 4 - 32 megs.
-    AT_FIXED_256 = 4, //  reserved for a particular partition, collecting object
+    AT_FIXED_256 = 8  //  reserved for a particular partition, collecting object
                       //  between 32 - 128 megs.
-    AT_VARIABLE = 8,  //  for objects, where we want a single allocatino per item in
-                      //  a dedicated partition.
 } AreaType;
 
 typedef enum ContainerType_e { CT_SECTION = 16, CT_HEAP = 32, CT_SLAB = 64 } ContainerType;
 
 typedef enum SectionType_e { ST_HEAP_4M = 0, ST_POOL_128K = 1, ST_POOL_512K = 2, ST_POOL_4M = 3 } SectionType;
 
-typedef enum HeapType_e { HT_4M = 22, HT_32M = 25, HT_128M = 27, HT_256M = 28 } HeapType;
+typedef enum HeapType_e { HT_4M = 22, HT_32M = 25, HT_64M = 26, HT_128M = 27, HT_256M = 28 } HeapType;
 
 static cache_align const uintptr_t partitions_offsets[] = {
     ((uintptr_t)2 << 40), // allocations smaller than SECTION_MAX_MEMORY
@@ -213,8 +213,9 @@ static inline uint64_t area_size_from_partition_id(uint8_t pid)
 {
     switch (pid) {
     case 0:
-    case 1:
         return AREA_SIZE_SMALL;
+    case 1:
+        return AREA_SIZE_MEDIUM;
     case 2:
         return AREA_SIZE_LARGE;
     case 3:
@@ -241,8 +242,8 @@ static inline uint32_t partition_id_from_addr_and_partition(uintptr_t p, int8_t 
 {
     static const uintptr_t partitions_size[] = {
         // GIGABYTES
-        ((uintptr_t)6 << 30), // the first two partitions are merged
-        ((uintptr_t)6 << 30), //
+        ((uintptr_t)2 << 30), // the first two partitions are merged
+        ((uintptr_t)4 << 30), //
         ((uintptr_t)8 << 30),  ((uintptr_t)16 << 30),  ((uintptr_t)32 << 30),
         ((uintptr_t)64 << 30), ((uintptr_t)128 << 30),
     };
@@ -407,8 +408,12 @@ static inline int32_t get_pool_size_class(size_t s)
 
 static inline int32_t get_heap_size_class(size_t s)
 {
-    if (s <= MEDIUM_OBJECT_SIZE) {      // 16k - 4Mb
-        return HT_32M;                  // 32
+    if (s <= SMALL_OBJECT_SIZE) {         // 8 - 16k
+        return HT_4M;                     // 4
+    } else if (s <= MEDIUM_OBJECT_SIZE) { // 16k - 128k
+        return HT_32M;
+    } else if (s <= LARGE_OBJECT_SIZE) { // 4Mb - 32Mb
+        return HT_64M;
     } else if (s <= HUGE_OBJECT_SIZE) { // 4Mb - 32Mb
         return HT_128M;                 // 128
     } else {                            // for large than 32Mb objects.
@@ -521,90 +526,48 @@ static void _list_insert_sort(void *queue, void *node, size_t head_offset, size_
     _list_insert_sort(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 */
 static const uintptr_t _Area_small_area_mask = 0xff;
+static const uintptr_t _Area_medium_area_mask = 0xffff;
 static const uintptr_t _Area_large_area_mask = 0xffffffff;
 static const uintptr_t _Area_ptr_mask = 0x0000ffffffffffff;
 static const uintptr_t _Area_inv_ptr_mask = 0xffff000000000000;
 
 typedef struct Area_t
 {
-    uint64_t partition_id;
-    Bitmask constr_mask; // containers that have been constructed.
-    Bitmask active_mask; // containers that can be destructed.
-
-    // these members are shared with the first section in the memory block. so,
-    // the first high 16 bits are reserved by the section.
-    size_t size;
-    struct Area_t *prev;
-    struct Area_t *next;
+    uint64_t partition_id; // id, container type, area_type, num
+    Bitmask constr_mask;   // containers that have been constructed.
+    Bitmask active_mask;   // containers that cant be destructed.
 } Area;
 
 typedef struct AreaList_t
 {
-    Area *head;
-    Area *tail;
     uint64_t partition_id;
     uintptr_t start_addr;
     uintptr_t end_addr;
     AreaType type;
-    size_t area_count;
+    uint64_t area_mask;
     Area *previous_area;
 } AreaList;
 
 static inline uint32_t area_get_id(const Area *a) { return (uint32_t)(a->partition_id & 0xffffffff); }
-
 static inline AreaType area_get_type(const Area *a) { return (AreaType)((a->partition_id >> 32) & 0xf); }
 static inline ContainerType area_get_container_type(const Area *a)
 {
     return (ContainerType)((a->partition_id >> 32) & 0xf0);
 }
+
+static inline size_t area_get_range(const Area *a) { return (AreaType)((a->partition_id >> 48)); }
+static inline size_t area_get_size(const Area *a) { return area_get_type(a) * BASE_AREA_SIZE * area_get_range(a); }
+
 static inline void area_set_container_type(Area *a, ContainerType ct)
 {
-    uint64_t val = (((uint64_t)ct) << 32);
-    a->partition_id = (a->partition_id & 0xfffffffff) | val;
+    a->partition_id = (a->partition_id & 0xffff00fffffffff) | (((uint64_t)ct) << 32);
 }
 
-static inline Area *area_get_prev(Area *a) { return (Area *)((uintptr_t)a->prev & _Area_ptr_mask); }
-
-static inline Area *area_get_next(Area *a) { return (Area *)((uintptr_t)a->next & _Area_ptr_mask); }
-
-static inline void area_set_prev(Area *a, Area *p)
+static inline void area_init(Area *a, size_t pid, AreaType at, size_t range)
 {
-    a->prev = (Area *)(((_Area_inv_ptr_mask & (uintptr_t)a->prev) | (uintptr_t)p));
-}
-static inline void area_set_next(Area *a, Area *n)
-{
-    a->next = (Area *)(((_Area_inv_ptr_mask & (uintptr_t)a->next) | (uintptr_t)n));
-}
-
-static inline void area_list_remove(AreaList *q, Area *a)
-{
-    if (area_get_prev(a) != NULL)
-        area_set_next(area_get_prev(a), area_get_next(a));
-    if (area_get_next(a) != NULL)
-        area_set_prev(area_get_next(a), area_get_prev(a));
-    if (a == q->head)
-        q->head = area_get_next(a);
-    if (a == q->tail)
-        q->tail = area_get_prev(a);
-    area_set_next(a, NULL);
-    area_set_prev(a, NULL);
-}
-
-static inline void area_list_insert_at(AreaList *q, Area *t, Area *a)
-{
-    if (q->tail == NULL) {
-        q->tail = q->head = a;
-        return;
-    }
-
-    area_set_next(a, area_get_next(t));
-    area_set_prev(a, t);
-    if (area_get_next(t) != NULL) {
-        area_set_prev(area_get_next(t), a);
-    } else {
-        q->tail = a;
-    }
-    area_set_next(t, a);
+    a->active_mask.whole = 0;
+    a->constr_mask.whole = 0;
+    a->partition_id = pid | ((uint64_t)at << 32) | (range << 48);
 }
 
 static inline bool area_is_empty(const Area *a) { return bitmask_is_empty_hi(&a->active_mask); }
@@ -629,6 +592,8 @@ static int8_t area_get_section_count(Area *a)
     const AreaType at = area_get_type(a);
     if (at == AT_FIXED_32) {
         return 8;
+    } else if (at == AT_FIXED_64) {
+        return 16;
     } else if (at == AT_FIXED_128) {
         return 32;
     } else {
@@ -651,17 +616,17 @@ static bool area_is_full(const Area *a)
     }
     if (area_get_type(a) == AT_FIXED_32) {
         return ((a->active_mask.whole >> 32) & _Area_small_area_mask) == _Area_small_area_mask;
+    } else if (area_get_type(a) == AT_FIXED_64) {
+        return ((a->active_mask.whole >> 32) & _Area_medium_area_mask) == _Area_medium_area_mask;
     } else {
         return ((a->active_mask.whole >> 32) & _Area_large_area_mask) == _Area_large_area_mask;
     }
 }
 
-static inline size_t area_get_size(const Area *a) { return a->size; }
-static inline void area_set_size(Area *a, size_t size) { a->size = size; }
 static inline Area *area_from_addr(uintptr_t p)
 {
-    static const uint64_t masks[] = {~(AREA_SIZE_SMALL - 1), ~(AREA_SIZE_SMALL - 1), ~(AREA_SIZE_LARGE - 1),
-                                     ~(AREA_SIZE_HUGE - 1),  0xffffffffffffffff,     0xffffffffffffffff,
+    static const uint64_t masks[] = {~(AREA_SIZE_SMALL - 1), ~(AREA_SIZE_MEDIUM - 1), ~(AREA_SIZE_LARGE - 1),
+                                     ~(AREA_SIZE_HUGE - 1),  0xffffffffffffffff,      0xffffffffffffffff,
                                      0xffffffffffffffff};
 
     const int8_t pidx = partition_from_addr(p);
@@ -679,13 +644,8 @@ typedef struct Section_t
                          // section/ high
     Bitmask active_mask;
 
-    // An area and section can overlap, and the prev next pointer of an area
-    // will always be under the 32tb range. top 16 bits area always zero.
-    size_t asize;              // lower 32 bits per section/ high bits are for area
-    size_t container_type;     // top 16 bits.
-    size_t container_exponent; // top 16 bits.
-
-    int32_t idx; // index in parent area.
+    SectionType container_type; // top 16 bits.
+    int32_t idx;                // index in parent area.
 
     // links to sections.
     struct Section_t *prev;
@@ -695,14 +655,8 @@ typedef struct Section_t
 } Section;
 
 static inline bool section_is_connected(const Section *s) { return s->prev != NULL || s->next != NULL; }
-static inline SectionType section_get_type(const Section *s)
-{
-    return (SectionType)((uint16_t)(s->container_type >> 48));
-}
-static inline SectionType section_get_container_exponent(const Section *s)
-{
-    return (SectionType)((uint16_t)(s->container_type >> 48));
-}
+static inline SectionType section_get_type(const Section *s) { return s->container_type; }
+
 static uint8_t section_get_collection_count(const Section *s)
 {
     switch (section_get_type(s)) {
@@ -717,7 +671,7 @@ static uint8_t section_get_collection_count(const Section *s)
     }
     }
 }
-static inline void section_free_idx_pool(Section *s, uint8_t i)
+static inline void section_free_idx(Section *s, uint8_t i)
 {
     bitmask_free_idx_lo(&s->active_mask, i);
     const bool section_empty = bitmask_is_empty_lo(&s->active_mask);
@@ -768,14 +722,8 @@ static inline void section_free_all(Section *s)
     area_free_idx(area, s->idx);
 }
 
-static inline void section_set_type(Section *s, SectionType pt)
-{
-    s->container_type = (s->container_type & 0x0000ffffffffffff) | ((uint64_t)pt << 48);
-}
-static inline void section_set_container_exponent(Section *s, uint16_t prt)
-{
-    s->container_type = (s->container_type & 0x0000ffffffffffff) | ((uint64_t)prt << 48);
-}
+static inline void section_set_type(Section *s, SectionType pt) { s->container_type = pt; }
+
 static inline bool section_is_empty(const Section *s) { return bitmask_is_empty_lo(&s->active_mask); }
 static inline bool section_is_full(const Section *s)
 {
@@ -868,7 +816,8 @@ static inline void pool_free_block(Pool *p, void *block)
 
     if (--p->num_used == 0) {
         Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-        section_free_idx_pool(section, p->idx);
+        section_free_idx(section, p->idx);
+
         /*
         int32_t psize = (1 << size_clss_to_exponent[section_get_type(section)]);
         const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
@@ -878,8 +827,8 @@ static inline void pool_free_block(Pool *p, void *block)
         const uintptr_t start_addr = (uintptr_t)&p->blocks[0];
         const uintptr_t first_page = (start_addr + (os_page_size - 1)) & ~(os_page_size - 1);
         const size_t mem_size = the_end - first_page;
-        reset_memory((void *)first_page, mem_size);
-        */
+        reset_memory((void*)first_page, mem_size);
+         */
         p->free = (Block *)&p->blocks[0];
         p->free->next = NULL;
         return;
@@ -1013,8 +962,14 @@ static inline void *heap_get_block(Heap *h, uint32_t s)
 
     h->used_memory += s;
     if (h->num_allocations++ == 0) {
-        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-        section_reserve_all(section);
+        if (h->total_memory < SECTION_SIZE) {
+            Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+            section_reserve_idx(section, h->idx);
+        } else {
+            size_t area_size = area_size_from_addr((uintptr_t)h);
+            Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
+            area_reserve_all(area);
+        }
     }
     return ptr;
 }
@@ -1093,8 +1048,14 @@ static void heap_free(Heap *h, void *bp, bool should_coalesce)
     }
     h->used_memory -= size;
     if (--h->num_allocations == 0) {
-        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-        section_free_all(section);
+        if (h->total_memory < SECTION_SIZE) {
+            Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+            section_free_idx(section, h->idx);
+        } else {
+            size_t area_size = area_size_from_addr((uintptr_t)h);
+            Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
+            area_free_all(area);
+        }
         heap_reset(h);
     }
 }
@@ -1272,7 +1233,7 @@ err:
 }
 
 static cache_align Queue pool_queues[MAX_THREADS][POOL_BIN_COUNT];
-static cache_align Queue heap_queues[MAX_THREADS][4];
+static cache_align Queue heap_queues[MAX_THREADS][5];
 static cache_align Queue section_queues[MAX_THREADS];
 static inline uint8_t size_to_pool(const size_t as)
 {
@@ -1290,25 +1251,37 @@ static inline uint8_t size_to_pool(const size_t as)
     }
 }
 
+static int32_t find_first_nzeros(uintptr_t x, int64_t n)
+{
+    x = ~x;
+    int64_t s;
+    while (n > 1) {
+        s = n >> 1;
+        x = x & (x << s);
+        n = n - s;
+    }
+    return 63 - (x == 0 ? 64 : __builtin_clzll(x));
+}
+
 static inline uint8_t size_to_heap(const size_t as)
 {
     if (as <= SMALL_OBJECT_SIZE) {
         return 0;
     } else if (as <= MEDIUM_OBJECT_SIZE) {
-        return 1; // 32mb pages
-    } else if (as <= AREA_SIZE_SMALL) {
+        return 1; // 128Mb pages
+    } else if (as <= LARGE_OBJECT_SIZE) {
         return 2; // 128Mb pages
+    } else if (as <= HUGE_OBJECT_SIZE) {
+        return 3; // 128Mb pages
     } else {
-        return 3; // 256Mb pages
+        return 4; // 256Mb pages
     }
 }
 
 typedef void (*free_func)(void *);
 typedef struct PartitionAllocator_t
 {
-    AreaList area_01;
-    AreaList area_2;
-    AreaList area_3;
+    AreaList area[4];
 
     // sections local to this thread with free pages or pools
     Queue *sections;
@@ -1353,55 +1326,24 @@ static void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
 
 static Area *partition_allocator_get_next_area(AreaList *area_queue, uint64_t size, uint64_t alignment)
 {
-
-    uintptr_t aligned_addr = area_queue->start_addr;
-    ;
-    Area *insert = NULL;
-    uintptr_t asize = (((uintptr_t)size + (alignment - 1)) & ~(alignment - 1));
-    uint64_t delta = (uint64_t)((uint8_t *)area_queue->end_addr - area_queue->start_addr);
-    if (area_queue->head != NULL) {
-        uint64_t tail_end = (uint64_t)((uint8_t *)area_queue->tail + area_get_size(area_queue->tail));
-        delta = (uint64_t)((uint8_t *)area_queue->end_addr - tail_end);
-        if (delta < size && (area_queue->tail != area_queue->head)) {
-            Area *current = area_queue->head;
-            while (current != area_queue->tail) {
-                Area *next = area_get_next(current);
-                size_t c_size = area_get_size(current);
-                size_t c_end = c_size + (size_t)(uint8_t *)current;
-                delta = (uint64_t)((uint8_t *)next - c_end);
-                if (delta >= asize) {
-                    insert = current;
-                    break;
-                }
-                current = next;
-            }
-        } else if (delta >= size) {
-            insert = area_queue->tail;
-        }
-
-        if (insert == NULL) {
-            delta = (uint64_t)((uint8_t *)area_queue->head - area_queue->start_addr);
-        } else {
-            size_t si = area_get_size(insert);
-            size_t offset = (uintptr_t)((uint8_t *)insert + si);
-            aligned_addr = (((uintptr_t)offset + (alignment - 1)) & ~(alignment - 1));
-        }
+    size_t type_size = area_queue->type * BASE_AREA_SIZE;
+    size_t range = size / type_size;
+    range += (size % type_size) ? 1 : 0;
+    size = type_size * range;
+    uint32_t idx = find_first_nzeros(area_queue->area_mask, range);
+    if (idx == -1) {
+        return NULL; // no room.
     }
-    if (delta < size) {
-        return NULL;
-    }
+    uint64_t new_mask = (1UL << range) - 1UL;
+    area_queue->area_mask |= (new_mask << idx);
+    idx = 63 - idx;
+    uintptr_t aligned_addr = area_queue->start_addr + (type_size * idx);
 
     Area *new_area = (Area *)alloc_memory_aligned((void *)aligned_addr, area_queue->end_addr, size, alignment);
     if (new_area == NULL) {
         return NULL;
     }
-    new_area->active_mask.whole = 0;
-    new_area->constr_mask.whole = 0;
-    new_area->partition_id = area_queue->partition_id | ((uint64_t)area_queue->type << 32);
-    area_set_next(new_area, NULL);
-    area_set_prev(new_area, NULL);
-    area_list_insert_at(area_queue, insert, new_area);
-    // list_enqueue(*area_queue, new_area);
+    area_init(new_area, area_queue->partition_id, area_queue->type, range);
     return new_area;
 }
 
@@ -1453,86 +1395,112 @@ static bool partition_allocator_try_release_containers(PartitionAllocator *pa, A
     return false;
 }
 
-static void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, AreaList *list)
+static void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, AreaList *list, size_t idx)
 {
-    list->area_count--;
-    area_list_remove(list, a);
-    if ((a == list->previous_area) || (list->area_count == 0)) {
+    size_t range = area_get_range(a);
+    uint64_t new_mask = ((1UL << range) - 1UL) << (64UL - idx - range);
+    list->area_mask = list->area_mask & ~new_mask;
+    if ((a == list->previous_area) || (list->area_mask == 0)) {
         list->previous_area = NULL;
     }
     free_memory(a, area_get_size(a));
 }
 
-static void partition_allocator_free_area(PartitionAllocator *pa, Area *area)
+static AreaList *partition_allocator_get_area_list(PartitionAllocator *pa, Area *area)
 {
-    const size_t size = area_get_size(area);
-    if (size == AREA_SIZE_SMALL) {
-        partition_allocator_free_area_from_list(pa, area, &pa->area_01);
-    } else if (size == AREA_SIZE_LARGE) {
-        partition_allocator_free_area_from_list(pa, area, &pa->area_2);
+    const AreaType at = area_get_type(area);
+    if (at == AT_FIXED_32) {
+        return &pa->area[0];
+    } else if (at == AT_FIXED_64) {
+        return &pa->area[1];
+    } else if (at == AT_FIXED_128) {
+        return &pa->area[2];
     } else {
-        partition_allocator_free_area_from_list(pa, area, &pa->area_3);
+        return &pa->area[3];
     }
 }
 
-static bool partition_allocator_try_free_area(PartitionAllocator *pa, Area *area)
+static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, AreaList *queue)
+{
+    const ptrdiff_t diff = (uint8_t *)area - (uint8_t *)queue->start_addr;
+    return (uint32_t)(((size_t)diff) / (area_get_type(area) * BASE_AREA_SIZE));
+}
+
+static void partition_allocator_free_area(PartitionAllocator *pa, Area *area)
+{
+    AreaList *queue = partition_allocator_get_area_list(pa, area);
+    int32_t idx = partition_allocator_get_area_idx_from_queue(pa, area, queue);
+    partition_allocator_free_area_from_list(pa, area, queue, idx);
+}
+
+static bool partition_allocator_try_free_area(PartitionAllocator *pa, Area *area, AreaList *list)
 {
     if (area_is_free(area)) {
 
-        partition_allocator_free_area(pa, area);
+        int32_t idx = partition_allocator_get_area_idx_from_queue(pa, area, list);
+        partition_allocator_free_area_from_list(pa, area, list, idx);
         return true;
     }
     return false;
 }
 
+static int32_t area_list_get_next_area_idx(AreaList *queue, uint32_t cidx)
+{
+    uint64_t msk_cpy = queue->area_mask << cidx;
+    if (msk_cpy == 0 || (cidx > 63)) {
+        return -1;
+    }
+    return __builtin_clzll(msk_cpy) + cidx;
+}
+
+static Area *area_list_get_area(AreaList *queue, uint32_t cidx)
+{
+    uintptr_t area_addr = queue->start_addr + (queue->type * BASE_AREA_SIZE) * cidx;
+    return (Area *)area_addr;
+}
+
 static bool partition_allocator_release_areas_from_queue(PartitionAllocator *pa, AreaList *queue)
 {
     bool was_released = false;
-    Area *start = queue->head;
+    int32_t area_idx = area_list_get_next_area_idx(queue, 0);
     // find free section.
     // detach all pools/pages/sections.
-    while (start != NULL) {
-        Area *next = area_get_next(start);
+    while (area_idx != -1) {
+        Area *start = area_list_get_area(queue, area_idx);
         was_released |= !partition_allocator_try_release_containers(pa, start);
-        start = next;
+        area_idx = area_list_get_next_area_idx(queue, area_idx + 1);
     }
-    start = queue->head;
-    while (start != NULL) {
-        Area *next = area_get_next(start);
-        was_released |= !partition_allocator_try_free_area(pa, start);
-        start = next;
+    area_idx = area_list_get_next_area_idx(queue, 0);
+    while (area_idx != -1) {
+        Area *start = area_list_get_area(queue, area_idx);
+        was_released |= !partition_allocator_try_free_area(pa, start, queue);
+        area_idx = area_list_get_next_area_idx(queue, area_idx + 1);
     }
     return !was_released;
 }
 
 static bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, AreaList *queue)
 {
-    bool was_released = false;
-    Area *start = queue->head;
+    int32_t area_idx = area_list_get_next_area_idx(queue, 0);
     // find free section.
     // detach all pools/pages/sections.
-    while (start != NULL) {
-        Area *next = area_get_next(start);
+    while (area_idx != -1) {
+        Area *start = area_list_get_area(queue, area_idx);
         if (partition_allocator_try_release_containers(pa, start)) {
-            was_released |= !partition_allocator_try_free_area(pa, start);
-            break;
+            return partition_allocator_try_free_area(pa, start, queue);
         }
-        start = next;
+        area_idx = area_list_get_next_area_idx(queue, area_idx + 1);
     }
-    return !was_released;
+    return false;
 }
 
 static bool partition_allocator_release_local_areas(PartitionAllocator *pa)
 {
     bool was_released = false;
-    if (pa->area_01.area_count) {
-        was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area_01);
-    }
-    if (pa->area_2.area_count) {
-        was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area_2);
-    }
-    if (pa->area_3.area_count) {
-        was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area_3);
+    for (size_t i = 0; i < 4; i++) {
+        if (pa->area[i].area_mask != 0) {
+            was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area[i]);
+        }
     }
     return !was_released;
 }
@@ -1561,35 +1529,21 @@ static Area *partition_allocator_get_free_area_from_queue(AreaList *current_queu
             new_area = previous_area;
         }
     } else {
-        if (current_queue->head != NULL) {
-            Area *start = current_queue->head;
-            while (start != NULL) {
-                Area *next = area_get_next(start);
+        if (current_queue->area_mask != 0) {
+            int32_t area_idx = area_list_get_next_area_idx(current_queue, 0);
+            while (area_idx != -1) {
+                Area *start = area_list_get_area(current_queue, area_idx);
                 if (!area_is_full(start)) {
                     new_area = start;
                     break;
                 }
-                start = next;
+                area_idx = area_list_get_next_area_idx(current_queue, area_idx + 1);
             }
         }
     }
     return new_area;
 }
 
-static inline uint32_t partition_allocator_get_max_area_count(AreaType t)
-{
-    switch (t) {
-    case AT_FIXED_32: {
-        return MAX_SMALL_AREAS;
-    }
-    case AT_FIXED_128: {
-        return MAX_LARGE_AREAS;
-    }
-    default: {
-        return MAX_HUGE_AREAS;
-    }
-    };
-}
 static AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType t, const size_t s,
                                                        size_t *area_size, size_t *alignement)
 {
@@ -1597,22 +1551,27 @@ static AreaList *partition_allocator_get_current_queue(PartitionAllocator *pa, A
     case AT_FIXED_32: {
         *area_size = AREA_SIZE_SMALL;
         *alignement = AREA_SIZE_SMALL;
-        return &pa->area_01;
+        return &pa->area[0];
+    }
+    case AT_FIXED_64: {
+        *area_size = AREA_SIZE_MEDIUM;
+        *alignement = AREA_SIZE_MEDIUM;
+        return &pa->area[1];
     }
     case AT_FIXED_128: {
         *area_size = AREA_SIZE_LARGE;
         *alignement = AREA_SIZE_LARGE;
-        return &pa->area_2;
+        return &pa->area[2];
     }
     case AT_FIXED_256: {
         *area_size = AREA_SIZE_HUGE;
         *alignement = AREA_SIZE_HUGE;
-        return &pa->area_3;
+        return &pa->area[3];
     }
     default: {
         *area_size = s;
         *alignement = AREA_SIZE_HUGE;
-        return &pa->area_3;
+        return &pa->area[3];
     }
     };
 }
@@ -1622,16 +1581,22 @@ static AreaList *partition_allocator_promote_area(PartitionAllocator *pa, AreaTy
 {
     switch (*t) {
     case AT_FIXED_32: {
+        *area_size = AREA_SIZE_MEDIUM;
+        *alignement = AREA_SIZE_MEDIUM;
+        *t = AT_FIXED_64;
+        return &pa->area[1];
+    }
+    case AT_FIXED_64: {
         *area_size = AREA_SIZE_LARGE;
         *alignement = AREA_SIZE_LARGE;
         *t = AT_FIXED_128;
-        return &pa->area_2;
+        return &pa->area[2];
     }
     case AT_FIXED_128: {
         *area_size = AREA_SIZE_HUGE;
         *alignement = AREA_SIZE_HUGE;
         *t = AT_FIXED_256;
-        return &pa->area_3;
+        return &pa->area[3];
     }
     default: {
         return NULL;
@@ -1644,78 +1609,66 @@ static Area *partition_allocator_get_free_area(PartitionAllocator *pa, const siz
     size_t area_size = AREA_SIZE_SMALL;
     size_t alignment = area_size;
     AreaList *current_queue = partition_allocator_get_current_queue(pa, t, s, &area_size, &alignment);
-
-    // the areas are empty
     Area *new_area = partition_allocator_get_free_area_from_queue(current_queue);
-    // try promoting first.
-    if (new_area == NULL && (partition_allocator_get_max_area_count(t) == current_queue->area_count)) {
+    while (new_area == NULL && (0xffffffffffffffff == current_queue->area_mask)) {
+        // try releasing an area first.
+        bool was_released = partition_allocator_release_single_area_from_queue(pa, current_queue);
+        if (was_released) {
+            new_area = partition_allocator_get_free_area_from_queue(current_queue);
+            if (new_area) {
+                break;
+            }
+        }
+        // try promotion
         current_queue = partition_allocator_promote_area(pa, &t, &area_size, &alignment);
         if (current_queue == NULL) {
             return NULL;
         }
         new_area = partition_allocator_get_free_area_from_queue(current_queue);
-        if (new_area == NULL && (partition_allocator_get_max_area_count(t) == current_queue->area_count)) {
-            return NULL;
-        }
     }
 
     if (new_area == NULL) {
         if (area_size < os_page_size) {
             area_size = os_page_size;
         }
-        new_area = partition_allocator_alloc_area(current_queue, area_size, alignment);
+        new_area = partition_allocator_alloc_area(current_queue, s, alignment);
         if (new_area == NULL) {
             return NULL;
         }
-        area_set_size(new_area, area_size);
     }
 
     return new_area;
 }
 static inline uint32_t partition_allocator_claim_section(Area *area) { return area_claim_section(area); }
-static Area *partition_allocator_get_area(PartitionAllocator *pa, const size_t size, const uint32_t small_area_limit)
+static AreaType get_area_type_for_heap(const size_t size)
 {
-    Area *curr_area = NULL;
     AreaType at = AT_FIXED_32;
-    AreaList *base_set = &pa->area_01;
-    AreaList *promotion_set = &pa->area_2;
-    if (size > small_area_limit) {
-        if (size <= AREA_SIZE_SMALL) {
+    if (size > MEDIUM_OBJECT_SIZE) {
+        if (size <= LARGE_OBJECT_SIZE) {
+            at = AT_FIXED_64;
+        } else if (size <= HUGE_OBJECT_SIZE) {
             at = AT_FIXED_128;
-            base_set = &pa->area_2;
-            promotion_set = &pa->area_3;
-        } else if (size <= AREA_SIZE_LARGE) {
-            at = AT_FIXED_256;
-            base_set = &pa->area_3;
-            promotion_set = NULL;
         } else {
-            at = AT_VARIABLE;
-            base_set = &pa->area_3;
-            promotion_set = NULL;
+            at = AT_FIXED_256;
         }
     }
-    curr_area = partition_allocator_get_free_area(pa, size, at);
-    if (curr_area == NULL) {
-        bool was_released = partition_allocator_release_single_area_from_queue(pa, base_set);
-        if (promotion_set != NULL) {
-            was_released |= partition_allocator_release_single_area_from_queue(pa, promotion_set);
-        }
-        if (was_released) {
-            // try again.
-            curr_area = partition_allocator_get_free_area(pa, size, at);
-        }
-    }
-
-    return curr_area;
+    return at;
 }
 
-static Section *partition_allocator_alloc_pool_section(PartitionAllocator *pa, const size_t size)
+static Section *partition_allocator_alloc_section(PartitionAllocator *pa, const size_t size)
 {
-    Area *new_area = partition_allocator_get_area(pa, size, LARGE_OBJECT_SIZE);
+    Area *new_area = partition_allocator_get_free_area(pa, size, AT_FIXED_32);
     if (new_area == NULL) {
         return NULL;
     }
+    size_t area_size = area_get_type(new_area) * BASE_AREA_SIZE;
+    if (area_size > AREA_SIZE_LARGE) {
+        if (area_is_free(new_area)) {
 
+            partition_allocator_free_area(pa, new_area);
+        }
+        return NULL;
+    }
     const int32_t section_idx = partition_allocator_claim_section(new_area);
     area_set_container_type(new_area, CT_SECTION);
     Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
@@ -1726,29 +1679,20 @@ static Section *partition_allocator_alloc_pool_section(PartitionAllocator *pa, c
     return section;
 }
 
-static Area *partition_allocator_alloc_area(AreaList *area_queue, const uint64_t area_size, const uint64_t alignment)
+static Area *partition_allocator_alloc_area(AreaList *area_queue, const uint64_t size, const uint64_t alignment)
 {
-    Area *new_area = partition_allocator_get_next_area(area_queue, area_size, alignment);
+    Area *new_area = partition_allocator_get_next_area(area_queue, size, alignment);
     if (new_area == NULL) {
         return NULL;
     }
     area_queue->previous_area = new_area;
-    area_queue->area_count++;
     return new_area;
 }
 
-#define PARTITION_0 ((uintptr_t)2 << 40)
-#define PARTITION_1 ((uintptr_t)4 << 40)
-#define PARTITION_2 ((uintptr_t)8 << 40)
-#define PARTITION_3 ((uintptr_t)16 << 40)
-#define PARTITION_4 ((uintptr_t)32 << 40)
-#define PARTITION_5 ((uintptr_t)64 << 40)
-#define PARTITION_6 ((uintptr_t)128 << 40)
-
 static cache_align PartitionAllocator partition_allocators[MAX_THREADS];
 
-static AreaList partition_area_4 = {NULL, NULL, 0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AT_VARIABLE, 0, NULL};
-static AreaList partition_area_5 = {NULL, NULL, 0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AT_VARIABLE, 0, NULL};
+static AreaList partition_area_4 = {0, ((uintptr_t)32 << 40), ((uintptr_t)64 << 40), AT_VARIABLE, 0, NULL};
+static AreaList partition_area_5 = {0, ((uintptr_t)64 << 40), ((uintptr_t)128 << 40), AT_VARIABLE, 0, NULL};
 
 static const int32_t thread_message_imit = 100;
 
@@ -1845,13 +1789,6 @@ static inline void allocator_free_from_section(Allocator *a, void *p, Section *s
         Pool *pool = (Pool *)section_find_collection(section, p);
         pool_free_block(pool, p);
         allocator_set_cached_pool(a, pool);
-        if (!section_is_connected(section)) {
-            PartitionAllocator *_part_alloc = &partition_allocators[part_id];
-            Queue *sections = _part_alloc->sections;
-            if (sections->head != section && sections->tail != section) {
-                list_enqueue(sections, section);
-            }
-        }
     } else {
         Heap *heap = (Heap *)section_find_collection(section, p);
         uint32_t heapIdx = area_get_type((Area *)section) >> 1;
@@ -1864,6 +1801,13 @@ static inline void allocator_free_from_section(Allocator *a, void *p, Section *s
             if (queue->head != heap && queue->tail != heap) {
                 list_enqueue(queue, heap);
             }
+        }
+    }
+    if (!section_is_connected(section)) {
+        PartitionAllocator *_part_alloc = &partition_allocators[part_id];
+        Queue *sections = _part_alloc->sections;
+        if (sections->head != section && sections->tail != section) {
+            list_enqueue(sections, section);
         }
     }
 }
@@ -1905,15 +1849,14 @@ static inline void allocator_free_from_container(Allocator *a, void *p, const si
     }
 }
 
-static Section *allocator_get_free_pool_section(Allocator *a, const size_t s)
+static Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st)
 {
-    const int32_t exponent = get_pool_size_class(s);
     Section *free_section = (Section *)a->part_alloc->sections->head;
 
     // find free section.
     while (free_section != NULL) {
         Section *next = free_section->next;
-        if (section_get_container_exponent(free_section) == exponent) {
+        if (section_get_type(free_section) == st) {
             if (!section_is_full(free_section)) {
                 break;
             } else {
@@ -1924,12 +1867,11 @@ static Section *allocator_get_free_pool_section(Allocator *a, const size_t s)
     }
 
     if (free_section == NULL) {
-        Section *new_section = partition_allocator_alloc_pool_section(a->part_alloc, s);
+        Section *new_section = partition_allocator_alloc_section(a->part_alloc, s);
         if (new_section == NULL) {
             return NULL;
         }
-        section_set_container_exponent(new_section, exponent);
-        section_set_type(new_section, exponent);
+        section_set_type(new_section, st);
 
         new_section->next = NULL;
         new_section->prev = NULL;
@@ -1942,7 +1884,7 @@ static Section *allocator_get_free_pool_section(Allocator *a, const size_t s)
 
 static void *allocator_alloc_from_heap(Allocator *a, const size_t s)
 {
-    const uint32_t heap_sizes[] = {1 << HT_4M, 1 << HT_32M, 1 << HT_128M, 1 << HT_256M};
+    const uint32_t heap_sizes[] = {1 << HT_4M, 1 << HT_32M, 1 << HT_64M, 1 << HT_128M, 1 << HT_256M};
     const uint32_t heap_size_cls = size_to_heap(s);
     Queue *queue = &a->part_alloc->heaps[heap_size_cls];
     Heap *start = (Heap *)queue->head;
@@ -1956,40 +1898,40 @@ static void *allocator_alloc_from_heap(Allocator *a, const size_t s)
         start = next;
     }
 
-    Area *new_area = partition_allocator_get_area(a->part_alloc, s, MEDIUM_OBJECT_SIZE);
+    if (heap_size_cls == 0) {
+        Section *new_section = allocator_get_free_section(a, s, ST_HEAP_4M);
+        if (new_section != NULL) {
+            const unsigned int coll_idx = section_reserve_next(new_section);
+            int32_t psize = (1 << size_clss_to_exponent[ST_HEAP_4M]);
+            start = (Heap *)section_get_collection(new_section, coll_idx, psize);
+            heap_init(start, coll_idx, heap_sizes[0]);
+            section_claim_idx(new_section, coll_idx);
+            list_enqueue(queue, start);
+            return heap_get_block(start, (uint32_t)s);
+        }
+    }
+
+    AreaType at = get_area_type_for_heap(s);
+    Area *new_area = partition_allocator_get_free_area(a->part_alloc, s, at);
     if (new_area == NULL) {
         return NULL;
     }
+
     uint64_t area_size = area_get_size(new_area);
-    if (heap_size_cls == 0) {
-        area_set_container_type(new_area, CT_SECTION);
-        Section *new_section = (Section *)((uint8_t *)new_area);
-        new_section->idx = 0;
-
-        new_section->partition_id = new_area->partition_id;
-        section_set_type(new_section, ST_HEAP_4M);
-
-        new_section->next = NULL;
-        new_section->prev = NULL;
-
-        section_claim_all(new_section);
-        start = (Heap *)section_get_collection(new_section, 0, 0);
-        heap_init(start, 0, heap_sizes[0]);
-    } else {
-        area_set_container_type(new_area, CT_HEAP);
-        area_reserve_all(new_area);
-        start = (Heap *)((uintptr_t)new_area + sizeof(Area));
-        heap_init(start, 0, area_size);
-    }
+    area_set_container_type(new_area, CT_HEAP);
+    area_reserve_all(new_area);
+    start = (Heap *)((uintptr_t)new_area + sizeof(Area));
+    heap_init(start, 0, area_size);
 
     a->part_alloc->heap_count++;
     list_enqueue(queue, start);
     return heap_get_block(start, (uint32_t)s);
 }
+
 static void *allocator_alloc_slab(Allocator *a, const size_t s)
 {
     const size_t totalSize = sizeof(Area) + s;
-    Area *area = partition_allocator_get_area(a->part_alloc, totalSize, MEDIUM_OBJECT_SIZE);
+    Area *area = partition_allocator_get_free_area(a->part_alloc, totalSize, AT_FIXED_256);
     if (area == NULL) {
         return NULL;
     }
@@ -2000,7 +1942,7 @@ static void *allocator_alloc_slab(Allocator *a, const size_t s)
 
 static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s)
 {
-    Section *sfree_section = allocator_get_free_pool_section(a, s);
+    Section *sfree_section = allocator_get_free_section(a, s, get_pool_size_class(s));
     if (sfree_section == NULL) {
         return NULL;
     }
@@ -2245,6 +2187,8 @@ static void allocator_init(size_t max_threads)
         heap_base[2].tail = NULL;
         heap_base[3].head = NULL;
         heap_base[3].tail = NULL;
+        heap_base[4].head = NULL;
+        heap_base[4].tail = NULL;
     }
 
     for (size_t i = 0; i < max_threads; i++) {
@@ -2268,35 +2212,22 @@ static void allocator_init(size_t max_threads)
     for (size_t i = 1; i < max_threads; i++) {
         partition_owners[i] = -1;
     }
-
     for (size_t i = 0; i < max_threads; i++) {
         PartitionAllocator *palloc = &partition_allocators[i];
-        palloc->area_01.head = NULL;
-        palloc->area_01.tail = NULL;
-        palloc->area_01.partition_id = (uint32_t)i;
-        palloc->area_01.start_addr = (i) * (SZ_GB * 6) + PARTITION_0;
-        palloc->area_01.end_addr = (i) * (SZ_GB * 6) + PARTITION_0 + (SZ_GB * 6);
-        palloc->area_01.type = AT_FIXED_32;
-        palloc->area_01.area_count = 0;
-        palloc->area_01.previous_area = NULL;
-
-        palloc->area_2.head = NULL;
-        palloc->area_2.tail = NULL;
-        palloc->area_2.partition_id = (uint32_t)i;
-        palloc->area_2.start_addr = (i) * (SZ_GB * 8) + PARTITION_2;
-        palloc->area_2.end_addr = (i) * (SZ_GB * 8) + PARTITION_2 + (SZ_GB * 8);
-        palloc->area_2.type = AT_FIXED_128;
-        palloc->area_2.area_count = 0;
-        palloc->area_2.previous_area = NULL;
-
-        palloc->area_3.head = NULL;
-        palloc->area_3.tail = NULL;
-        palloc->area_3.partition_id = (uint32_t)i;
-        palloc->area_3.start_addr = (i) * (SZ_GB * 16) + PARTITION_3;
-        palloc->area_3.end_addr = (i) * (SZ_GB * 16) + PARTITION_3 + (SZ_GB * 16);
-        palloc->area_3.type = AT_FIXED_256;
-        palloc->area_3.area_count = 0;
-        palloc->area_3.previous_area = NULL;
+        size_t size = (SZ_GB * 2);
+        size_t offset = ((size_t)2 << 40);
+        uint32_t area_type = AT_FIXED_32;
+        for (size_t j = 0; j < 4; j++) {
+            palloc->area[j].partition_id = (uint32_t)i;
+            palloc->area[j].start_addr = (i)*size + offset;
+            palloc->area[j].end_addr = palloc->area[j].start_addr + size;
+            palloc->area[j].type = area_type;
+            palloc->area[j].area_mask = 0;
+            palloc->area[j].previous_area = NULL;
+            size *= 2;
+            offset *= 2;
+            area_type *= 2;
+        }
 
         palloc->sections = &section_queues[i];
         palloc->heaps = heap_queues[i];

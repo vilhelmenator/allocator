@@ -33,7 +33,7 @@
  until the destructor is done. : allot::destruct( obj ) -> any nested calls to
  destruct would cause a deferred free operation. : pass in a pointer to a
  struct. pass in a struct to describe the navigation path of a pointer tree. :
- traverse the network of pointers and pass them to their correct pools or pages.
+ traverse the network of pointers and pass them to their correct pools or heaps.
         : destruct( ptr, schema ) -> no nested destruct calls.
         : construct( ptr, schema ) ->
  */
@@ -41,14 +41,14 @@
 //
 //
 // 49152*8 + 65536*8 = 344064 + 458752 = 802816 max 12.8gigs or 3.8gigs of
-// pages. test exhausting all the pools on main thread. then on the last thread
+// heaps. test exhausting all the pools on main thread. then on the last thread
 // and various random threads. do the same for each size class.
 //
-// another test to test page allocations. small and large.
-// allocate all the pages.
+// another test to test heap allocations. small and large.
+// allocate all the heaps.
 // test on various thread ids
 //
-// partition 1. 4 meg pages.
+// partition 1. 4 meg heaps.
 // 192 areas 32 megs. each has 8 sections. each section has 32 pools.
 // sections = 192 * 8;  // 1536
 // pools = sections*32; // 49152, 12288, 1536
@@ -57,7 +57,7 @@
 // pools = sections*32  // 65536, 16384, 2048
 //
 // pools can bleed into second partition
-// pages can bleed into third partition.
+// heaps can bleed into third partition.
 //
 
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
@@ -74,13 +74,14 @@ const uint64_t small_pool_size = 128 * sz_kb;
 const uint64_t mid_pool_size = 512 * sz_kb;
 const uint64_t large_pool_size = 4 * sz_mb;
 
-const uint64_t puny_page_size = 4 * sz_mb;    // allocations <= 16k
-const uint64_t small_page_size = 32 * sz_mb;  // allocations <= 128k
-const uint64_t mid_page_size = 128 * sz_mb;   // allocations <= 32Mb
-const uint64_t large_page_size = 256 * sz_mb; // allocations <= 128Mb
+const uint64_t puny_heap_size = 4 * sz_mb;    // allocations <= 16k
+const uint64_t small_heap_size = 32 * sz_mb;  // allocations <= 128k
+const uint64_t mid_heap_size = 64 * sz_mb;    // allocations <= 32Mb
+const uint64_t large_heap_size = 128 * sz_mb; // allocations <= 32Mb
+const uint64_t huge_heap_size = 256 * sz_mb;  // allocations <= 128Mb
 
 const uint64_t num_areas_part0 = (sz_gb * 2) / (32 * sz_mb);
-const uint64_t num_areas_part1 = (sz_gb * 4) / (32 * sz_mb);
+const uint64_t num_areas_part1 = (sz_gb * 4) / (64 * sz_mb);
 const uint64_t num_areas_part2 = (sz_gb * 8) / (128 * sz_mb);
 const uint64_t num_areas_part3 = (sz_gb * 16) / (256 * sz_mb);
 
@@ -92,10 +93,11 @@ const uint64_t max_small_size = 16 * sz_kb;
 const uint64_t max_mid_size = 128 * sz_kb;
 const uint64_t max_large_size = 2 * sz_mb;
 
-const uint64_t max_puny_size_page = 16 * sz_kb;
-const uint64_t max_small_size_page = 128 * sz_kb;
-const uint64_t max_mid_size_page = 32 * sz_mb;
-const uint64_t max_large_size_page = 128 * sz_mb;
+const uint64_t max_puny_size_heap = 16 * sz_kb;
+const uint64_t max_small_size_heap = 128 * sz_kb;
+const uint64_t max_mid_size_heap = 2 * sz_mb;
+const uint64_t max_large_size_heap = 32 * sz_mb;
+const uint64_t max_huge_size_heap = 128 * sz_mb;
 
 // const int64_t total_mem = NUMBER_OF_ITEMS*OBJECT_SIZE;
 // how many 16k objects to exhaust all areas for small items.
@@ -119,7 +121,7 @@ Pools.
  [x] test exhausting promotions.
 [x] each ptr returned can't be less than the size from next sectin multiple.
 Pages.
- [x] test small pages.
+ [x] test small heaps.
 [x] Allocate 2 - 32 megs.
  - exhaust all areas.
 [x] Allocate 32 - 256 megs.
@@ -136,8 +138,8 @@ spot.
 [ ] thread-free
 
  perf.
- [ ] test small page coalesce rules.
- [ ] test pools vs pages for small sizes
+ [ ] test small heap coalesce rules.
+ [ ] test pools vs heaps for small sizes
 
 
  2.
@@ -158,7 +160,7 @@ spot.
    - distribute memory among threads so that each thread is freeing memory into
 other threads and its own.
    - distribute memory among threads so that each thread is only freeing memory
-into other threads. 4. [ ] improve page allocations. ordererd lists. double free
+into other threads. 4. [ ] improve heap allocations. ordererd lists. double free
 tests. [ ] memory API. alloc and string functions.
 
 5.
@@ -168,8 +170,22 @@ tests. [ ] memory API. alloc and string functions.
 [ ] test with builder. DONE!
 */
 
-bool test_pools(size_t pool_size, size_t allocation_size)
+bool test_pools(size_t allocation_size)
 {
+    int32_t scls = get_heap_size_class(allocation_size);
+    size_t pool_size = 0;
+    switch (scls) {
+    case ST_POOL_128K:
+        pool_size = small_pool_size;
+        break;
+    case ST_POOL_512K:
+        pool_size = mid_pool_size;
+        break;
+    default:
+        pool_size = large_pool_size;
+        break;
+    };
+
     bool result = true;
     Allocator *alloc = allocator_get_thread_instance();
     uint64_t pools_per_section = section_size / pool_size;
@@ -188,7 +204,7 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         void *all = allocator_malloc(alloc, allocation_size);
-        pid = partition_id_from_addr((uintptr_t)all);
+        pid = partition_from_addr((uintptr_t)all);
         if (all == NULL) {
             result = false;
             goto end;
@@ -224,7 +240,7 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         variables[i] = (uint64_t *)allocator_malloc(alloc, allocation_size);
-        pid = partition_id_from_addr((uintptr_t)variables[i]);
+        pid = partition_from_addr((uintptr_t)variables[i]);
         uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             result = false;
@@ -237,7 +253,7 @@ bool test_pools(size_t pool_size, size_t allocation_size)
     }
     // next allocation should be from a different partition id
     void *nll = allocator_malloc(alloc, allocation_size);
-    int8_t npid = partition_id_from_addr((uintptr_t)nll);
+    int8_t npid = partition_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
@@ -253,37 +269,66 @@ end:
     ;
 }
 
-bool test_pools_small(void) { return test_pools(small_pool_size, max_small_size); }
-bool test_medium_pools(void) { return test_pools(mid_pool_size, max_mid_size); }
+bool test_pools_small(void) { return test_pools(max_small_size); }
+bool test_medium_pools(void) { return test_pools(max_mid_size); }
 
-bool test_large_pools(void) { return test_pools(large_pool_size, max_large_size); }
+bool test_large_pools(void) { return test_pools(max_large_size); }
 
-bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
+bool test_heaps(size_t allocation_size)
 {
+    int32_t scls = get_heap_size_class(allocation_size);
     bool result = true;
     Allocator *alloc = allocator_get_thread_instance();
-    uint64_t base_parts = num_areas_part0 + num_areas_part1;
-    uint64_t extended_parts = num_areas_part2;
-    if (page_size > small_page_size) {
-        base_parts = num_areas_part2;
-        extended_parts = num_areas_part3;
+    uint64_t num_allocations = 0;
+    uint64_t num_extended_allocations = 0;
+    uint64_t max_count_per_heap_1 = ((1 << HT_32M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
+    uint64_t max_count_per_heap_2 = ((1 << HT_64M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
+    uint64_t max_count_per_heap_3 = ((1 << HT_128M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
+    uint64_t max_count_per_heap_4 = ((1 << HT_256M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
+    switch (scls) {
+    case HT_4M: {
+        uint64_t base_parts = num_areas_part0 * 8 + num_areas_part1 * 16;
+        uint64_t max_count_per_heap = ((1 << HT_4M) - sizeof(Section) - sizeof(Heap)) / allocation_size;
+        num_allocations = max_count_per_heap * base_parts;
+        uint64_t max_count_extended_heap = max_count_per_heap * num_areas_part2 * 32;
+        num_extended_allocations = num_allocations + max_count_extended_heap;
+        break;
     }
-    if (page_size == large_page_size) {
-        extended_parts = 0;
+
+    case HT_32M: {
+        num_allocations = max_count_per_heap_1 * num_areas_part0 + max_count_per_heap_2 * num_areas_part1;
+        uint64_t extended_parts = max_count_per_heap_3 * num_areas_part2;
+        num_extended_allocations = num_allocations + extended_parts;
+        break;
     }
-    uint64_t max_count_per_page = (page_size - 64) / allocation_size;
-    uint64_t max_count_extended_page = (promotion_size - 64) / allocation_size;
-    uint64_t num_allocations = max_count_per_page * base_parts;
-    uint64_t num_extended_allocations = max_count_per_page * base_parts + max_count_extended_page * extended_parts;
+    case HT_64M: {
+        num_allocations = max_count_per_heap_2 * num_areas_part1;
+        uint64_t extended_parts = max_count_per_heap_3 * num_areas_part2;
+        num_extended_allocations = num_allocations + extended_parts;
+        break;
+    }
+    case HT_128M: {
+        num_allocations = max_count_per_heap_3 * num_areas_part2;
+        uint64_t extended_parts = max_count_per_heap_4 * num_areas_part3;
+        num_extended_allocations = num_allocations + extended_parts;
+        break;
+    }
+    default: {
+        num_allocations = max_count_per_heap_4 * num_areas_part3;
+        num_extended_allocations = 0;
+        break;
+    }
+    }
     uint64_t expected_reserved_mem = os_page_size * num_allocations;  // if all pools are touched
-    uint64_t actual_reserver_mem = allocation_size * num_allocations; // if all the owned pages would be touched
+    uint64_t actual_reserver_mem = allocation_size * num_allocations; // if all the owned heaps would be touched
+    double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
 
     uint64_t **variables = (uint64_t **)malloc(num_allocations * sizeof(uint64_t));
-
-    double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
+    int8_t pid = 0;
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_allocations; i++) {
         uint64_t *new_addr = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+        pid = partition_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
@@ -295,12 +340,14 @@ bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
             goto end;
         }
     }
-    if (extended_parts == 0) {
+    if (num_extended_allocations == 0) {
         // next allocation should be NULL;
         void *nll = allocator_malloc_heap(alloc, allocation_size);
-        if (nll != NULL) {
+        int8_t npid = partition_from_addr((uintptr_t)nll);
+        if (npid == pid) {
             result = false;
         }
+        allocator_free(alloc, nll);
     }
     for (uint32_t i = 0; i < num_allocations; i++) {
         allocator_free(alloc, variables[i]);
@@ -312,12 +359,12 @@ bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
         return false;
     }
 
-    if (extended_parts == 0) {
+    if (num_extended_allocations == 0) {
         return result;
     }
 
     expected_reserved_mem = os_page_size * num_extended_allocations;  // if all pools are touched
-    actual_reserver_mem = allocation_size * num_extended_allocations; // if all the owned pages would be touched
+    actual_reserver_mem = allocation_size * num_extended_allocations; // if all the owned heaps would be touched
 
     readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     num_allocations = num_extended_allocations;
@@ -325,6 +372,7 @@ bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_allocations; i++) {
         uint64_t *new_addr = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+        pid = partition_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
@@ -338,36 +386,41 @@ bool test_pages(size_t page_size, size_t promotion_size, size_t allocation_size)
     }
     // next allocation should be NULL;
     void *nll = allocator_malloc_heap(alloc, allocation_size);
-    if (nll != NULL) {
+    int8_t npid = partition_from_addr((uintptr_t)nll);
+    if (npid == pid) {
         result = false;
     }
-
+    allocator_free(alloc, nll);
 end:
     for (uint32_t i = 0; i < num_allocations; i++) {
         allocator_free(alloc, variables[i]);
     }
     free(variables);
     // release all the system resources
-
-    return allocator_release_local_areas(alloc);
+    if (!allocator_release_local_areas(alloc)) {
+        result = false;
+    }
+    return result;
 }
 
-bool test_medium_pages(void) { return test_pages(mid_page_size, large_page_size, max_mid_size_page); }
+bool test_huge_heaps(void) { return test_heaps(max_huge_size_heap); }
 
-bool test_large_pages(void) { return test_pages(large_page_size, large_page_size, max_large_size_page); }
+bool test_large_heaps(void) { return test_heaps(max_large_size_heap); }
 
-bool test_small_pages(void) { return test_pages(small_page_size, mid_page_size, max_small_size_page); }
+bool test_medium_heaps(void) { return test_heaps(max_mid_size_heap); }
 
-bool test_puny_pages(void) { return test_pages(puny_page_size, puny_page_size, max_puny_size_page); }
+bool test_small_heaps(void) { return test_heaps(max_small_size_heap); }
+
+bool test_puny_heaps(void) { return test_heaps(max_puny_size_heap); }
 
 bool test_slabs(void)
 {
     Allocator *alloc = allocator_get_thread_instance();
     uint64_t allocation_size = 129 * sz_mb;
     uint64_t base_parts = num_areas_part3;
-    uint64_t max_count_per_page = 1;
+    uint64_t max_count_per_heap = 1;
     uint64_t num_small_areas = base_parts;
-    uint64_t num_small_allocations = max_count_per_page * num_small_areas;
+    uint64_t num_small_allocations = max_count_per_heap * num_small_areas;
 
     uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
 
@@ -461,6 +514,7 @@ bool test_huge_alloc(void)
     allocator_free(alloc, gb);
     gb = (uint64_t *)allocator_malloc(alloc, 16 * sz_gb);
     if (gb != NULL) {
+        allocator_free(alloc, gb);
         return false;
     }
     return true;
@@ -587,13 +641,13 @@ void run_tests(void)
     TEST(Allocator, pools_small, { EXPECT(test_pools_small()); });
     TEST(Allocator, medium_pools, { EXPECT(test_medium_pools()); });
     TEST(Allocator, large_pools, { EXPECT(test_large_pools()); });
-    TEST(Allocator, puny_pages, { EXPECT(test_puny_pages()); });
-    TEST(Allocator, small_pages, { EXPECT(test_small_pages()); });
-    TEST(Allocator, medium_pages, { EXPECT(test_medium_pages()); });
-    TEST(Allocator, large_pages, { EXPECT(test_large_pages()); });
+    TEST(Allocator, puny_heaps, { EXPECT(test_puny_heaps()); });
+    TEST(Allocator, small_heaps, { EXPECT(test_small_heaps()); });
+    TEST(Allocator, medium_heaps, { EXPECT(test_medium_heaps()); });
+    TEST(Allocator, large_heaps, { EXPECT(test_large_heaps()); });
+    TEST(Allocator, huge_heaps, { EXPECT(test_huge_heaps()); });
     TEST(Allocator, slabs, { EXPECT(test_slabs()); });
     TEST(Allocator, huge_alloc, { EXPECT(test_huge_alloc()); });
-
     TEST(Allocator, areas, { EXPECT(test_areas()); });
     TEST(Allocator, fillAPool, { EXPECT(fillAPool()); });
     TEST(Allocator, fillASection, { EXPECT(fillASection()); });
@@ -612,7 +666,7 @@ bool testAreaFail(void)
     // partition sets. then I can move into the thread free part. Which should
     // be a lot simpler.
     //   then it is just testing and cleaning things up..
-    void *m = alloc_memory_aligned((void *)PARTITION_0, PARTITION_1, 48 * sz_mb, 32 * sz_mb);
+    void *m = alloc_memory_aligned((void *)partitions_offsets[0], partitions_offsets[1], 48 * sz_mb, 32 * sz_mb);
     //
 
     // two areas should be marked as bad.
@@ -688,7 +742,6 @@ int main()
     // thrd_create(&trd, &test, NULL);
 
     // run_tests();
-    //  printf("%d %d ", offsetof(__typeof__(Section), prev), offsetof(__typeof__(Heap), prev));
 
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
