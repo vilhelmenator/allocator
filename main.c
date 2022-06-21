@@ -99,6 +99,16 @@ const uint64_t max_mid_size_heap = 2 * sz_mb;
 const uint64_t max_large_size_heap = 32 * sz_mb;
 const uint64_t max_huge_size_heap = 128 * sz_mb;
 
+static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
+{
+    uintptr_t mask = alignment - 1;
+    uintptr_t sm = (sz + mask);
+    if ((alignment & mask) == 0) {
+        return sm & ~mask;
+    } else {
+        return (sm / alignment) * alignment;
+    }
+}
 // const int64_t total_mem = NUMBER_OF_ITEMS*OBJECT_SIZE;
 // how many 16k objects to exhaust all areas for small items.
 // how many large items to exhaust all areas for large items.
@@ -194,7 +204,7 @@ bool test_pools(size_t allocation_size)
     uint64_t num_pools = num_small_sections * pools_per_section;
     uint64_t num_small_allocations = num_pools * max_count_per_pool;
 
-    uint64_t expected_reserved_mem = os_page_size * num_small_allocations;  // if all pools are touched
+    uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
     uint64_t actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
     uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
@@ -232,8 +242,8 @@ bool test_pools(size_t allocation_size)
     num_small_sections = num_sections_part0 + num_sections_part1 + num_sections_part2;
     num_pools = num_small_sections * pools_per_section;
     num_small_allocations = num_pools * max_count_per_pool;
-    expected_reserved_mem = os_page_size * num_small_allocations;  // if all pools are touched
-    actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
+    expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
+    actual_reserver_mem = allocation_size * num_small_allocations;        // if all the owned pages would be touched
 
     readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
@@ -319,8 +329,8 @@ bool test_heaps(size_t allocation_size)
         break;
     }
     }
-    uint64_t expected_reserved_mem = os_page_size * num_allocations;  // if all pools are touched
-    uint64_t actual_reserver_mem = allocation_size * num_allocations; // if all the owned heaps would be touched
+    uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_allocations; // if all pools are touched
+    uint64_t actual_reserver_mem = allocation_size * num_allocations;        // if all the owned heaps would be touched
     double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
 
     uint64_t **variables = (uint64_t **)malloc(num_allocations * sizeof(uint64_t));
@@ -363,8 +373,8 @@ bool test_heaps(size_t allocation_size)
         return result;
     }
 
-    expected_reserved_mem = os_page_size * num_extended_allocations;  // if all pools are touched
-    actual_reserver_mem = allocation_size * num_extended_allocations; // if all the owned heaps would be touched
+    expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_extended_allocations; // if all pools are touched
+    actual_reserver_mem = allocation_size * num_extended_allocations;        // if all the owned heaps would be touched
 
     readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     num_allocations = num_extended_allocations;
@@ -587,10 +597,7 @@ bool fillAnArea(void)
             *allocs[index] = (uint64_t)allocs[index];
         }
     }
-    /*uint64_t * start = allocs[0];
-    uint64_t * end = allocs[index];
-    uint64_t *diff = end - start;
-     */
+
     for (int s = 0; s < num_pools * num_sections; s++) {
         for (int i = 0; i < num_allocs; i++) {
             int index = i + (num_allocs * s);
@@ -729,26 +736,27 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
     END_TEST(allocator, {});
     free(variables);
 }
-/*
-int test(void*)
+
+int test(void *p)
 {
-    char* test = (char *)cmalloc(16);
+    char *test = (char *)cmalloc(16);
     cfree(test);
     return 1;
-}*/
+}
+
 int main()
 {
     // thrd_t trd;
     // thrd_create(&trd, &test, NULL);
 
-    // run_tests();
+    run_tests();
 
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     }
     size_t item_count = 100;
     for (int i = 0; i < 6; i++) {
-        // test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
+        test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
         item_count *= 10;
     }
     return 0;
