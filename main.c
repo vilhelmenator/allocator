@@ -92,6 +92,7 @@ const uint64_t num_sections_part2 = (sz_gb * 8) / (4 * sz_mb);
 const uint64_t max_small_size = 16 * sz_kb;
 const uint64_t max_mid_size = 128 * sz_kb;
 const uint64_t max_large_size = 2 * sz_mb;
+const uint64_t max_huge_size = 32 * sz_mb;
 
 const uint64_t max_puny_size_heap = 16 * sz_kb;
 const uint64_t max_small_size_heap = 128 * sz_kb;
@@ -182,22 +183,17 @@ tests. [ ] memory API. alloc and string functions.
 
 bool test_pools(size_t allocation_size)
 {
-    int32_t scls = get_heap_size_class(allocation_size);
     size_t pool_size = 0;
-    switch (scls) {
-    case ST_POOL_128K:
+    if (allocation_size <= max_small_size) {
         pool_size = small_pool_size;
-        break;
-    case ST_POOL_512K:
+    } else if (allocation_size <= max_mid_size) {
         pool_size = mid_pool_size;
-        break;
-    default:
+    } else {
         pool_size = large_pool_size;
-        break;
-    };
+    }
 
     bool result = true;
-    Allocator *alloc = allocator_get_thread_instance();
+
     uint64_t pools_per_section = section_size / pool_size;
     uint64_t max_count_per_pool = (pool_size - 64) / allocation_size;
     uint64_t num_small_sections = num_sections_part0 + num_sections_part1;
@@ -213,7 +209,7 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0 and 1
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        void *all = allocator_malloc(alloc, allocation_size);
+        void *all = cmalloc(allocation_size);
         pid = partition_from_addr((uintptr_t)all);
         if (all == NULL) {
             result = false;
@@ -231,11 +227,11 @@ bool test_pools(size_t allocation_size)
         }
     }
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        allocator_free(alloc, variables[i]);
+        cfree(variables[i]);
     }
     free(variables);
     // release all the system resources
-    if (!allocator_release_local_areas(alloc)) {
+    if (!callocator_release()) {
         return false;
     }
 
@@ -249,7 +245,7 @@ bool test_pools(size_t allocation_size)
     variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (uint64_t *)allocator_malloc(alloc, allocation_size);
+        variables[i] = (uint64_t *)cmalloc(allocation_size);
         pid = partition_from_addr((uintptr_t)variables[i]);
         uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
@@ -262,20 +258,20 @@ bool test_pools(size_t allocation_size)
         }
     }
     // next allocation should be from a different partition id
-    void *nll = allocator_malloc(alloc, allocation_size);
+    void *nll = cmalloc(allocation_size);
     int8_t npid = partition_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
-    allocator_free(alloc, nll);
+    cfree(nll);
 end:
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        allocator_free(alloc, variables[i]);
+        cfree(variables[i]);
     }
     free(variables);
     // release all the system resources
 
-    return allocator_release_local_areas(alloc);
+    return callocator_release();
     ;
 }
 
@@ -286,48 +282,34 @@ bool test_large_pools(void) { return test_pools(max_large_size); }
 
 bool test_heaps(size_t allocation_size)
 {
-    int32_t scls = get_heap_size_class(allocation_size);
     bool result = true;
-    Allocator *alloc = allocator_get_thread_instance();
     uint64_t num_allocations = 0;
     uint64_t num_extended_allocations = 0;
     uint64_t max_count_per_heap_1 = ((1 << HT_32M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
     uint64_t max_count_per_heap_2 = ((1 << HT_64M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
     uint64_t max_count_per_heap_3 = ((1 << HT_128M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
     uint64_t max_count_per_heap_4 = ((1 << HT_256M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
-    switch (scls) {
-    case HT_4M: {
+    if (allocation_size <= max_small_size) { // 8 - 16k
         uint64_t base_parts = num_areas_part0 * 8 + num_areas_part1 * 16;
         uint64_t max_count_per_heap = ((1 << HT_4M) - sizeof(Section) - sizeof(Heap)) / allocation_size;
         num_allocations = max_count_per_heap * base_parts;
         uint64_t max_count_extended_heap = max_count_per_heap * num_areas_part2 * 32;
         num_extended_allocations = num_allocations + max_count_extended_heap;
-        break;
-    }
-
-    case HT_32M: {
+    } else if (allocation_size <= max_mid_size) { // 16k - 128k
         num_allocations = max_count_per_heap_1 * num_areas_part0 + max_count_per_heap_2 * num_areas_part1;
         uint64_t extended_parts = max_count_per_heap_3 * num_areas_part2;
         num_extended_allocations = num_allocations + extended_parts;
-        break;
-    }
-    case HT_64M: {
+    } else if (allocation_size <= max_large_size) { // 4Mb - 32Mb
         num_allocations = max_count_per_heap_2 * num_areas_part1;
         uint64_t extended_parts = max_count_per_heap_3 * num_areas_part2;
         num_extended_allocations = num_allocations + extended_parts;
-        break;
-    }
-    case HT_128M: {
+    } else if (allocation_size <= max_huge_size) { // 4Mb - 32Mb
         num_allocations = max_count_per_heap_3 * num_areas_part2;
         uint64_t extended_parts = max_count_per_heap_4 * num_areas_part3;
         num_extended_allocations = num_allocations + extended_parts;
-        break;
-    }
-    default: {
+    } else { // for large than 32Mb objects.
         num_allocations = max_count_per_heap_4 * num_areas_part3;
         num_extended_allocations = 0;
-        break;
-    }
     }
     uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_allocations; // if all pools are touched
     uint64_t actual_reserver_mem = allocation_size * num_allocations;        // if all the owned heaps would be touched
@@ -337,7 +319,7 @@ bool test_heaps(size_t allocation_size)
     int8_t pid = 0;
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_allocations; i++) {
-        uint64_t *new_addr = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+        uint64_t *new_addr = (uint64_t *)cmalloc_from_heap(allocation_size);
         pid = partition_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
@@ -352,20 +334,20 @@ bool test_heaps(size_t allocation_size)
     }
     if (num_extended_allocations == 0) {
         // next allocation should be NULL;
-        void *nll = allocator_malloc_heap(alloc, allocation_size);
+        void *nll = cmalloc_from_heap(allocation_size);
         int8_t npid = partition_from_addr((uintptr_t)nll);
         if (npid == pid) {
             result = false;
         }
-        allocator_free(alloc, nll);
+        cfree(nll);
     }
     for (uint32_t i = 0; i < num_allocations; i++) {
-        allocator_free(alloc, variables[i]);
+        cfree(variables[i]);
     }
     free(variables);
 
     // release all the system resources
-    if (!allocator_release_local_areas(alloc)) {
+    if (!callocator_release()) {
         return false;
     }
 
@@ -381,7 +363,7 @@ bool test_heaps(size_t allocation_size)
     variables = (uint64_t **)malloc(num_allocations * sizeof(uint64_t));
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_allocations; i++) {
-        uint64_t *new_addr = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+        uint64_t *new_addr = (uint64_t *)cmalloc_from_heap(allocation_size);
         pid = partition_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
@@ -395,19 +377,19 @@ bool test_heaps(size_t allocation_size)
         }
     }
     // next allocation should be NULL;
-    void *nll = allocator_malloc_heap(alloc, allocation_size);
+    void *nll = cmalloc_from_heap(allocation_size);
     int8_t npid = partition_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
-    allocator_free(alloc, nll);
+    cfree(nll);
 end:
     for (uint32_t i = 0; i < num_allocations; i++) {
-        allocator_free(alloc, variables[i]);
+        cfree(variables[i]);
     }
     free(variables);
     // release all the system resources
-    if (!allocator_release_local_areas(alloc)) {
+    if (!callocator_release()) {
         result = false;
     }
     return result;
@@ -425,7 +407,7 @@ bool test_puny_heaps(void) { return test_heaps(max_puny_size_heap); }
 
 bool test_slabs(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    bool state = true;
     uint64_t allocation_size = 129 * sz_mb;
     uint64_t base_parts = num_areas_part3;
     uint64_t max_count_per_heap = 1;
@@ -436,95 +418,112 @@ bool test_slabs(void)
 
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (uint64_t *)allocator_malloc_heap(alloc, allocation_size);
+        variables[i] = (uint64_t *)cmalloc_from_heap(allocation_size);
         uintptr_t end = align_up((uintptr_t)variables[i], 256 * sz_mb);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
-            return false;
+            state = false;
+            goto end;
         }
         if (variables[i] == NULL) {
-            return false;
+            state = false;
+            goto end;
         }
     }
-    void *nll = allocator_malloc_heap(alloc, allocation_size);
+    void *nll = cmalloc_from_heap(allocation_size);
     if (nll != NULL) {
-        return false;
+        state = false;
     }
+end:
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        allocator_free(alloc, variables[i]);
+        cfree(variables[i]);
     }
     free(variables);
-    return true;
+    return state;
 }
 
 bool test_areas(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    bool state = true;
     uint64_t allocation_size = 129 * sz_mb;
     uint64_t base_parts = num_areas_part3;
     uint64_t num_alloc = base_parts;
 
     uint64_t **variables = (uint64_t **)malloc(num_alloc * sizeof(uint64_t));
     for (uint32_t i = 0; i < num_alloc; i++) {
-        variables[i] = (uint64_t *)allocator_malloc(alloc, allocation_size);
+        variables[i] = (uint64_t *)cmalloc(allocation_size);
     }
-    void *nll = allocator_malloc_heap(alloc, allocation_size);
+    void *nll = cmalloc_from_heap(allocation_size);
     if (nll != NULL) {
-        return false;
+        cfree(nll);
+        state = false;
+        goto end;
     }
 
     uintptr_t end_addr = (uintptr_t)variables[num_alloc - 2];
     uintptr_t next_addr = (uintptr_t)variables[num_alloc - 3];
-    allocator_free(alloc, variables[num_alloc - 2]);
-    allocator_free(alloc, variables[num_alloc - 3]);
-    uintptr_t new_addr = (uintptr_t)allocator_malloc(alloc, allocation_size);
+    cfree(variables[num_alloc - 2]);
+    cfree(variables[num_alloc - 3]);
+    uintptr_t new_addr = (uintptr_t)cmalloc(allocation_size);
     variables[num_alloc - 3] = (uint64_t *)new_addr;
     if (new_addr != next_addr && new_addr != end_addr) {
-        return false;
+        state = false;
+        goto end;
     }
-    new_addr = (uintptr_t)allocator_malloc(alloc, allocation_size);
-    if (new_addr != end_addr) {
-        return false;
-    }
+    new_addr = (uintptr_t)cmalloc(allocation_size);
     variables[num_alloc - 2] = (uint64_t *)new_addr;
+    if (new_addr != end_addr) {
+        state = false;
+        goto end;
+    }
 
     next_addr = (uintptr_t)variables[num_alloc - 5];
     // remove four and try to allocate 780 megs;
-    allocator_free(alloc, variables[num_alloc - 2]);
-    allocator_free(alloc, variables[num_alloc - 3]);
-    allocator_free(alloc, variables[num_alloc - 4]);
-    allocator_free(alloc, variables[num_alloc - 5]);
-    new_addr = (uintptr_t)allocator_malloc(alloc, 780 * sz_mb);
+    cfree(variables[num_alloc - 2]);
+    cfree(variables[num_alloc - 3]);
+    cfree(variables[num_alloc - 4]);
+    cfree(variables[num_alloc - 5]);
+    new_addr = (uintptr_t)cmalloc(780 * sz_mb);
     if (new_addr != next_addr) {
-        return false;
+        num_alloc -= 5;
+        cfree((void *)new_addr);
+        cfree(variables[num_alloc - 1]);
+        state = false;
+        goto end;
     }
-    allocator_free(alloc, (void *)new_addr);
-    variables[num_alloc - 2] = (uint64_t *)allocator_malloc(alloc, allocation_size);
-    variables[num_alloc - 3] = (uint64_t *)allocator_malloc(alloc, allocation_size);
-    variables[num_alloc - 4] = (uint64_t *)allocator_malloc(alloc, allocation_size);
-    variables[num_alloc - 5] = (uint64_t *)allocator_malloc(alloc, allocation_size);
-    allocator_free(alloc, variables[num_alloc - 2]);
-    if (allocator_malloc(alloc, 256 * sz_mb) != NULL) {
-        return false;
+    int32_t pid = partition_from_addr((uintptr_t)new_addr);
+    cfree((void *)new_addr);
+    variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
+    variables[num_alloc - 3] = (uint64_t *)cmalloc(allocation_size);
+    variables[num_alloc - 4] = (uint64_t *)cmalloc(allocation_size);
+    variables[num_alloc - 5] = (uint64_t *)cmalloc(allocation_size);
+    cfree(variables[num_alloc - 2]);
+    nll = cmalloc(256 * sz_mb);
+    if (partition_from_addr((uintptr_t)nll) != pid) {
+        cfree(nll);
+        cfree(variables[num_alloc - 1]);
+        num_alloc -= 2;
+        state = false;
+        goto end;
     }
-    variables[num_alloc - 2] = (uint64_t *)allocator_malloc(alloc, allocation_size);
+    variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
+end:
     for (uint32_t i = 0; i < num_alloc; i++) {
-        allocator_free(alloc, variables[i]);
+        cfree(variables[i]);
     }
     free(variables);
-    return true;
+    return state;
 }
 
 bool test_huge_alloc(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
-    void *gb = (uint64_t *)allocator_malloc(alloc, 15 * sz_gb);
+    void *gb = (uint64_t *)cmalloc(15 * sz_gb);
     if (gb == NULL) {
         return false;
     }
-    allocator_free(alloc, gb);
-    gb = (uint64_t *)allocator_malloc(alloc, 16 * sz_gb);
+    cfree(gb);
+    gb = (uint64_t *)cmalloc(16 * sz_gb);
     if (gb != NULL) {
-        allocator_free(alloc, gb);
+        cfree(gb);
         return false;
     }
     return true;
@@ -532,37 +531,34 @@ bool test_huge_alloc(void)
 
 bool fillAPool(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    bool state = true;
     const int num_allocs = 16378;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
     for (int i = 0; i < num_allocs; i++) {
-        allocs[i] = (uint64_t *)allocator_malloc(alloc, 8);
+        allocs[i] = (uint64_t *)cmalloc(8);
         *allocs[i] = (uint64_t)allocs[i];
     }
 
     for (int i = 0; i < num_allocs; i++) {
         if (*allocs[i] != (uint64_t)allocs[i]) {
-            free(allocs);
-            return false;
+            state = false;
         }
-        allocator_free(alloc, allocs[i]);
+        cfree(allocs[i]);
     }
     free(allocs);
-    // allocate 8 byte parts to fill 128bytes.
-    // what is the addres of the last allocation in the pool.
-    // is there room for one more?
-    return true;
+
+    return state;
 }
 
 bool fillASection(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    bool state = true;
     const int num_pools = 32;
     const int num_allocs = 16378;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * num_pools * sizeof(uint64_t **));
     for (int s = 0; s < num_pools; s++) {
         for (int i = 0; i < num_allocs; i++) {
-            allocs[i + (num_allocs * s)] = (uint64_t *)allocator_malloc(alloc, 8);
+            allocs[i + (num_allocs * s)] = (uint64_t *)cmalloc(8);
             *allocs[i + (num_allocs * s)] = (uint64_t)allocs[i + (num_allocs * s)];
         }
     }
@@ -570,19 +566,19 @@ bool fillASection(void)
     for (int s = 0; s < num_pools; s++) {
         for (int i = 0; i < num_allocs; i++) {
             if (*allocs[i + (num_allocs * s)] != (uint64_t)allocs[i + (num_allocs * s)]) {
-                return false;
+                state = false;
             }
-            allocator_free(alloc, allocs[i + (num_allocs * s)]);
+            cfree(allocs[i + (num_allocs * s)]);
         }
     }
     free(allocs);
     // fill all 8 pools of one section.
-    return true;
+    return state;
 }
 
 bool fillAnArea(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    bool state = true;
     const int num_sections = 8;
     const int num_pools = 32;
     const int num_allocs = 16378;
@@ -593,7 +589,7 @@ bool fillAnArea(void)
     for (int s = 0; s < num_pools * num_sections; s++) {
         for (int i = 0; i < num_allocs; i++) {
             index = i + (num_allocs * s);
-            allocs[index] = (uint64_t *)allocator_malloc(alloc, 8);
+            allocs[index] = (uint64_t *)cmalloc(8);
             *allocs[index] = (uint64_t)allocs[index];
         }
     }
@@ -602,26 +598,26 @@ bool fillAnArea(void)
         for (int i = 0; i < num_allocs; i++) {
             int index = i + (num_allocs * s);
             if (*allocs[index] != (uint64_t)allocs[index]) {
-                return false;
+                state = false;
             }
-            allocator_free(alloc, allocs[index]);
+            cfree(allocs[index]);
         }
     }
 
     free(allocs);
 
     // fill all 8 pools of one section.
-    return true;
+    return state;
 }
 
 bool fillAPage(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
+    bool state = true;
     const int num_allocs = 1398094;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
 
     for (int i = 0; i < num_allocs; i++) {
-        uint64_t *addr = (uint64_t *)allocator_malloc_heap(alloc, 8);
+        uint64_t *addr = (uint64_t *)cmalloc_from_heap(8);
         allocs[i] = addr;
         *allocs[i] = (uint64_t)allocs[i];
     }
@@ -629,21 +625,20 @@ bool fillAPage(void)
     for (int i = 0; i < num_allocs; i++) {
 
         if (*allocs[i] != (uint64_t)allocs[i]) {
-            return false;
+            state = false;
         }
-        allocator_free(alloc, allocs[i]);
+        cfree(allocs[i]);
     }
 
     free(allocs);
 
-    // fill all 8 pools of one section.
-    return true;
+    // fill all 8 pools of one sections
+    return state;
 }
 
 void run_tests(void)
 {
 
-    Allocator *alloc = allocator_get_thread_instance();
     START_TEST(Allocator, {});
     TEST(Allocator, pools_small, { EXPECT(test_pools_small()); });
     TEST(Allocator, medium_pools, { EXPECT(test_medium_pools()); });
@@ -661,26 +656,25 @@ void run_tests(void)
     TEST(Allocator, fillAnArea, { EXPECT(fillAnArea()); });
     TEST(Allocator, fillAPage, { EXPECT(fillAPage()); });
     END_TEST(Allocator, {});
-    allocator_release_local_areas(alloc);
+    callocator_release();
 }
 
 bool testAreaFail(void)
 {
-    Allocator *alloc = allocator_get_thread_instance();
     // Why am I stalling this!
     // this is sort of the last fallback step and allows you allocate all the
     // ranges with a single thread. if allocations fail, it can move into other
     // partition sets. then I can move into the thread free part. Which should
     // be a lot simpler.
     //   then it is just testing and cleaning things up..
-    void *m = alloc_memory_aligned((void *)partitions_offsets[0], partitions_offsets[1], 48 * sz_mb, 32 * sz_mb);
+    void *m = cmalloc_area(48 * sz_mb, AT_FIXED_32);
     //
 
     // two areas should be marked as bad.
     // see if those areas are marked as bad.
     // how should we mark those areas as bad.
     // if the size of an area is -1, then it is bad.
-    void *bb = allocator_malloc(alloc, 24);
+    void *bb = cmalloc(24);
     //
     // next allocate most of the first partition. forcing the next allocation to
     // be from another partition set. if that is reserved already. then promote
@@ -694,12 +688,12 @@ bool testAreaFail(void)
     //  ensure that the areas that are invalid are all marked as invalid.
     //  ensure that the partition-set is allocated only if it is available.
     //
-    allocator_free(alloc, bb);
-    free_memory(m, 48 * sz_mb);
-    allocator_release_local_areas(alloc);
-    bb = allocator_malloc(alloc, 24);
-    allocator_free(alloc, bb);
-    allocator_release_local_areas(alloc);
+    cfree(bb);
+    cfree(m);
+    callocator_release();
+    bb = cmalloc(24);
+    cfree(bb);
+    callocator_release();
     return false;
 }
 
@@ -749,14 +743,17 @@ int main()
     // thrd_t trd;
     // thrd_create(&trd, &test, NULL);
 
-    run_tests();
-
+    // run_tests();
+    // void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
+    // cfree(m);
+    // m = cmalloc_os(123);
+    // cfree(m);
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     }
     size_t item_count = 100;
     for (int i = 0; i < 6; i++) {
-        test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
+        // test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
         item_count *= 10;
     }
     return 0;
