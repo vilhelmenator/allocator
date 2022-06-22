@@ -191,7 +191,7 @@ bool reset_memory(void *base, size_t size)
     return true;
 }
 
-static bool protect_memory(void *addr, size_t size, bool protect)
+bool protect_memory(void *addr, size_t size, bool protect)
 {
 #ifdef _WIN32
     DWORD prev_value = 0;
@@ -1322,7 +1322,6 @@ static cache_align Queue section_queues[MAX_THREADS];
 static cache_align PartitionAllocator partition_allocators[MAX_THREADS];
 static cache_align int64_t partition_owners[MAX_THREADS];
 static cache_align Allocator allocator_list[MAX_THREADS];
-
 static spinlock partition_lock = {0};
 int8_t reserve_any_partition_set(void)
 {
@@ -1840,7 +1839,6 @@ void allocator_free(Allocator *a, void *p)
 {
     if (p == NULL)
         return;
-    allocator_flush_thread_free_queue(a);
     _allocator_free(a, p);
 }
 
