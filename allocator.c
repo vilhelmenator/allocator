@@ -9,10 +9,6 @@
 #include "allocator.h"
 #include "../cthread/cthread.h"
 
-#if defined(_MSC_VER)
-#define WINDOWS
-#endif
-
 #ifdef WINDOWS
 #include <intrin.h>
 #include <memoryapi.h>
@@ -21,32 +17,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
-
-#define WSIZE 4
-#define DSIZE 8
-
-#define CACHE_LINE 64
-#ifdef WINDOWS
-#define cache_align __declspec(align(CACHE_LINE))
-#else
-#define cache_align __attribute__((aligned(CACHE_LINE)))
-#endif
-
-#define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4 // 16k
-#define MEDIUM_OBJECT_SIZE SMALL_OBJECT_SIZE * 8   // 128kb
-#define LARGE_OBJECT_SIZE MEDIUM_OBJECT_SIZE * 16  // 2Mb
-#define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
-
-#define POOL_BIN_COUNT 17 * 8 + 1
-#define HEAP_TYPE_COUNT 5
-
-#define MAX_ARES 64
-
-#define MAX_THREADS 1024
-#define MAX(x, y) ((x) > (y) ? (x) : (y))
-#define MIN(x, y) ((x) < (y) ? (x) : (y))
-#define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
-#define ALIGN(x) ((MAX(x, 1) + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
 
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 
@@ -618,23 +588,24 @@ static inline bool section_is_full(const Section *s)
 
 static inline void *section_find_collection(Section *s, void *p)
 {
+    void *collection = (uint8_t *)s + sizeof(Section);
     switch (s->type) {
     case ST_POOL_4M: {
-        return (void *)&s->collections[0];
+        return collection;
     }
     default: {
-        const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)&s->collections[0];
+        const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)collection;
         const uintptr_t exp = size_clss_to_exponent[s->type];
         const int32_t collection_size = 1 << exp;
         const int32_t idx = (int32_t)((size_t)diff >> exp);
-        return (void *)((uint8_t *)&s->collections[0] + collection_size * idx);
+        return (void *)((uint8_t *)collection + collection_size * idx);
     }
     };
 }
 
 static inline uintptr_t section_get_collection(Section *s, int8_t idx, const int32_t psize)
 {
-    return (uintptr_t)((uint8_t *)&s->collections[0] + psize * idx);
+    return (uintptr_t)((uint8_t *)s + sizeof(Section) + psize * idx);
 }
 
 //
@@ -686,7 +657,7 @@ void pool_free_block(Pool *p, void *block)
         const size_t mem_size = the_end - first_page;
         reset_memory((void*)first_page, mem_size);
          */
-        p->free = (Block *)&p->blocks[0];
+        p->free = (Block *)((uint8_t *)p + sizeof(Pool));
         p->free->next = NULL;
         return;
     }
@@ -698,15 +669,16 @@ void pool_free_block(Pool *p, void *block)
 static inline void *pool_extend(Pool *p)
 {
     p->num_used++;
-    return ((uint8_t *)&p->blocks[0] + (p->num_committed++ * p->block_size));
+    return ((uint8_t *)p + sizeof(Pool) + (p->num_committed++ * p->block_size));
 }
 
 static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const uint32_t block_size,
                       const int32_t psize)
 {
+    void *blocks = (uint8_t *)p + sizeof(Pool);
     const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
     const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
-    const size_t remaining_size = section_end - (uintptr_t)&p->blocks[0];
+    const size_t remaining_size = section_end - (uintptr_t)blocks;
     p->idx = pidx;
     p->block_idx = block_idx;
     p->block_size = block_size;
@@ -715,7 +687,7 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;
-    p->free = (Block *)&p->blocks[0];
+    p->free = (Block *)blocks;
     p->free->next = NULL;
 }
 
@@ -747,7 +719,7 @@ void *pool_aquire_block(Pool *p)
 // @HEAP
 //
 
-uint8_t size_to_heap(const size_t as)
+static inline uint8_t size_to_heap(const size_t as)
 {
     if (as <= SMALL_OBJECT_SIZE) {
         return 0;
@@ -762,11 +734,15 @@ uint8_t size_to_heap(const size_t as)
     }
 }
 
+#define WSIZE 4
+#define DSIZE 8
+#define HEADER_OVERHEAD 4
+#define HEADER_FOOTER_OVERHEAD 8
 static inline uint32_t heap_block_get_header(HeapBlock *hb) { return *(uint32_t *)((uint8_t *)&hb->data - WSIZE); }
 
-static inline void heap_block_set_header(HeapBlock *hb, uint32_t s, uint32_t v)
+static inline void heap_block_set_header(HeapBlock *hb, uint32_t s, uint32_t v, uint32_t pa)
 {
-    *(uint32_t *)((uint8_t *)&hb->data - WSIZE) = (s | v);
+    *(uint32_t *)((uint8_t *)&hb->data - WSIZE) = (s | v | pa << 1);
 }
 
 static inline void heap_block_set_footer(HeapBlock *hb, uint32_t s, uint32_t v)
@@ -787,11 +763,10 @@ static inline HeapBlock *heap_block_prev(HeapBlock *hb)
     return (HeapBlock *)((uint8_t *)&hb->data - (size));
 }
 
-#define HEAP_NODE_OVERHEAD 8
 bool heap_is_connected(const Heap *h) { return h->prev != NULL || h->next != NULL; }
 bool heap_has_room(const Heap *h, const size_t s)
 {
-    if ((h->used_memory + s + HEAP_NODE_OVERHEAD) > h->total_memory) {
+    if ((h->used_memory + s + HEADER_FOOTER_OVERHEAD) > h->total_memory) {
         return false;
     }
     if (s <= h->max_block && s >= h->min_block) {
@@ -803,17 +778,17 @@ bool heap_has_room(const Heap *h, const size_t s)
 void heap_place(Heap *h, void *bp, uint32_t asize)
 {
     HeapBlock *hb = (HeapBlock *)bp;
-    int32_t csize = heap_block_get_header(hb) & ~0x7;
-    if ((csize - asize) >= (DSIZE + HEAP_NODE_OVERHEAD)) {
-        heap_block_set_header(hb, asize, 1);
-        heap_block_set_footer(hb, asize, 1);
+    int header = heap_block_get_header(hb);
+    int32_t csize = header & ~0x7;
+    const uint32_t prev_alloc = (header & 0x3) >> 1;
+    if ((csize - asize) >= (DSIZE + HEADER_FOOTER_OVERHEAD)) {
+        heap_block_set_header(hb, asize, 1, prev_alloc);
         hb = heap_block_next(hb);
-        heap_block_set_header(hb, csize - asize, 0);
+        heap_block_set_header(hb, csize - asize, 0, 1);
         heap_block_set_footer(hb, csize - asize, 0);
         list_enqueue(&h->free_nodes, (QNode *)hb);
     } else {
-        heap_block_set_header(hb, csize, 1);
-        heap_block_set_footer(hb, csize, 1);
+        heap_block_set_header(hb, csize, 1, prev_alloc);
     }
 }
 
@@ -837,13 +812,18 @@ void *heap_find_fit(Heap *h, uint32_t asize)
 void *heap_get_block(Heap *h, uint32_t s)
 {
     if (s <= DSIZE * 2) {
-        s = DSIZE * 2 + HEAP_NODE_OVERHEAD;
+        s = DSIZE * 2;
     } else {
-        s = DSIZE * ((s + HEAP_NODE_OVERHEAD + DSIZE - 1) / DSIZE);
+        if ((s & 0x7) == 0) {
+            s = DSIZE * ((s + HEADER_FOOTER_OVERHEAD + DSIZE - 1) >> 3);
+        } else {
+            s = WSIZE * ((s + HEADER_OVERHEAD + WSIZE - 1) >> 2);
+        }
     }
     void *ptr = heap_find_fit(h, s);
 
     h->used_memory += s;
+    h->max_block -= s;
     if (h->num_allocations++ == 0) {
         if (h->total_memory < SECTION_SIZE) {
             Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
@@ -857,61 +837,75 @@ void *heap_get_block(Heap *h, uint32_t s)
     return ptr;
 }
 
+static inline void heap_update_max(Heap *h, int32_t size)
+{
+    if (size > h->max_block) {
+        h->max_block = size;
+    }
+}
+
 void *heap_coalesce(Heap *h, void *bp)
 {
     HeapBlock *hb = (HeapBlock *)bp;
-    int32_t size = heap_block_get_header(hb) & ~0x7;
-    HeapBlock *prev_block = heap_block_prev(hb);
+    int header = heap_block_get_header(hb);
+    int32_t size = header & ~0x7;
+    const uint32_t prev_alloc = (header & 0x3) >> 1;
     HeapBlock *next_block = heap_block_next(hb);
-    int prev_header = heap_block_get_header(prev_block);
     int next_header = heap_block_get_header(next_block);
-
-    const size_t prev_alloc = prev_header & 0x1;
     const size_t next_alloc = next_header & 0x1;
 
     QNode *hn = (QNode *)bp;
     if (!(prev_alloc && next_alloc)) {
-        const size_t prev_size = prev_header & ~0x7;
+
         const size_t next_size = next_header & ~0x7;
 
         // next is free
         if (prev_alloc && !next_alloc) {
             size += next_size;
-            heap_block_set_header(hb, size, 0);
+            heap_block_set_header(hb, size, 0, 1);
             heap_block_set_footer(hb, size, 0);
             QNode *h_next = (QNode *)next_block;
             list_remove(&h->free_nodes, h_next);
             list_enqueue(&h->free_nodes, hn);
         } // prev is fre
-        else if (!prev_alloc && next_alloc) {
-            size += prev_size;
-            heap_block_set_footer(hb, size, 0);
-            heap_block_set_header(prev_block, size, 0);
-            bp = (void *)heap_block_prev(hb);
-        } else { // both next and prev are free
-            size += prev_size + next_size;
-            heap_block_set_header(prev_block, size, 0);
-            heap_block_set_footer(next_block, size, 0);
-            bp = (void *)heap_block_prev(hb);
-            QNode *h_next = (QNode *)next_block;
-            list_remove(&h->free_nodes, h_next);
+        else {
+            HeapBlock *prev_block = heap_block_prev(hb);
+            int prev_header = heap_block_get_header(prev_block);
+            const size_t prev_size = prev_header & ~0x7;
+            const uint32_t pprev_alloc = (prev_header & 0x3) >> 1;
+            if (!prev_alloc && next_alloc) {
+                size += prev_size;
+                heap_block_set_footer(hb, size, 0);
+                heap_block_set_header(prev_block, size, 0, pprev_alloc);
+                bp = (void *)heap_block_prev(hb);
+            } else { // both next and prev are free
+                size += prev_size + next_size;
+                heap_block_set_header(prev_block, size, 0, pprev_alloc);
+                heap_block_set_footer(next_block, size, 0);
+                bp = (void *)heap_block_prev(hb);
+                QNode *h_next = (QNode *)next_block;
+                list_remove(&h->free_nodes, h_next);
+            }
         }
     } else {
         list_enqueue(&h->free_nodes, hn);
     }
+    heap_update_max(h, size);
 
     return bp;
 }
 
 void heap_reset(Heap *h)
 {
+    uint8_t *blocks = (uint8_t *)h + sizeof(Heap);
     h->free_nodes.head = NULL;
     h->free_nodes.tail = NULL;
-    HeapBlock *hb = (HeapBlock *)h->start;
-    list_enqueue(&h->free_nodes, (QNode *)h->start);
-    heap_block_set_header(hb, h->total_memory, 0);
+    HeapBlock *hb = (HeapBlock *)(blocks + DSIZE * 2);
+    list_enqueue(&h->free_nodes, (QNode *)hb);
+    heap_block_set_header(hb, h->total_memory, 0, 1);
     heap_block_set_footer(hb, h->total_memory, 0);
-    heap_block_set_header(heap_block_next(hb), 0, 1);
+    heap_block_set_header(heap_block_next(hb), 0, 1, 0);
+    h->max_block = h->total_memory;
 }
 
 static void heap_free(Heap *h, void *bp, bool should_coalesce)
@@ -920,18 +914,23 @@ static void heap_free(Heap *h, void *bp, bool should_coalesce)
         return;
 
     HeapBlock *hb = (HeapBlock *)bp;
-    const uint32_t size = heap_block_get_header(hb) & ~0x7;
-    heap_block_set_header(hb, size, 0);
+    int header = heap_block_get_header(hb);
+    const uint32_t size = header & ~0x7;
+    const uint32_t prev_alloc = (header & 0x3) >> 1;
+    heap_block_set_header(hb, size, 0, prev_alloc);
     heap_block_set_footer(hb, size, 0);
 
     if (should_coalesce) {
         heap_coalesce(h, bp);
     } else {
         list_enqueue(&h->free_nodes, (QNode *)bp);
+        heap_update_max(h, size);
     }
     h->used_memory -= size;
+
     if (--h->num_allocations == 0) {
         if (h->total_memory < SECTION_SIZE) {
+            // if we have been placed inside of a section.
             Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
             section_free_idx(section, h->idx);
         } else {
@@ -945,29 +944,31 @@ static void heap_free(Heap *h, void *bp, bool should_coalesce)
 
 void heap_extend(Heap *h)
 {
-    *h->start = 0;
-    *(h->start + WSIZE) = DSIZE | 1;   /* Prologue header */
-    *(h->start + DSIZE) = (DSIZE | 1); /* Prologue footer */
-    *(h->start + WSIZE + DSIZE) = 1;   /* Epilogue header */
-    h->start = h->start + DSIZE * 2;
+    uint32_t *blocks = (uint32_t *)((uint8_t *)h + sizeof(Heap));
+    blocks[0] = 0;
+    blocks[1] = DSIZE | 1;
+    ;
+    blocks[2] = DSIZE | 1;
+    ;
+    blocks[3] = 1;
 
     heap_reset(h);
 }
 
 static void heap_init(Heap *h, int8_t pidx, const size_t psize)
 {
+    void *blocks = (uint8_t *)h + sizeof(Heap);
     const uintptr_t section_end = ((uintptr_t)h + (psize - 1)) & ~(psize - 1);
-    const size_t remaining_size = section_end - (uintptr_t)&h->blocks[0];
+    const size_t remaining_size = section_end - (uintptr_t)blocks;
 
     const size_t block_memory = psize - sizeof(Heap) - sizeof(Section);
     const size_t header_footer_offset = sizeof(uintptr_t) * 2;
     h->idx = pidx;
     h->used_memory = 0;
-    h->total_memory = (uint32_t)((MIN(remaining_size, block_memory)) - header_footer_offset - HEAP_NODE_OVERHEAD);
+    h->total_memory = (uint32_t)((MIN(remaining_size, block_memory)) - header_footer_offset - HEADER_FOOTER_OVERHEAD);
     h->max_block = h->total_memory;
     h->min_block = sizeof(uintptr_t);
     h->num_allocations = 0;
-    h->start = &h->blocks[0];
     h->next = NULL;
     h->prev = NULL;
     heap_extend(h);
@@ -1377,7 +1378,7 @@ static void allocator_set_cached_pool(Allocator *a, Pool *p)
         return;
     }
     a->cached_pool = p;
-    a->cached_pool_start = (uintptr_t)&p->blocks[0];
+    a->cached_pool_start = (uintptr_t)((uint8_t *)p + sizeof(Pool));
     a->cached_pool_end = (uintptr_t)((uint8_t *)a->cached_pool_start + (p->num_available * p->block_size));
 }
 
@@ -1443,7 +1444,7 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
         pool_free_block(pool, p);
         allocator_set_cached_pool(a, pool);
     } else {
-        Heap *heap = (Heap *)&section->collections[0];
+        Heap *heap = (Heap *)((uint8_t *)section + sizeof(Section));
         uint32_t heapIdx = area_get_type((Area *)section);
         heap_free(heap, p, false);
         // if the free pools list is empty.
@@ -2166,6 +2167,8 @@ void *crealloc(void *p, size_t s)
     //
     // get the previous size of the allocation.
     // copy that into the new buffer, min(oldsize, newsize)
+    //
+    // if fast path is not available, or the memory is less than 4k. Not aligned.
     //
     return NULL;
 }

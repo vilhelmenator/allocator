@@ -33,6 +33,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(_MSC_VER)
+#define WINDOWS
+#endif
+
+#define CACHE_LINE 64
+#ifdef WINDOWS
+#define cache_align __declspec(align(CACHE_LINE))
+#else
+#define cache_align __attribute__((aligned(CACHE_LINE)))
+#endif
+
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
 #define SZ_GB (SZ_MB * SZ_KB)
@@ -46,6 +57,22 @@
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)  // 128Mb
 #define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)   // 256Mb
 #define NUM_AREA_PARTITIONS 4
+
+#define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4 // 16k
+#define MEDIUM_OBJECT_SIZE SMALL_OBJECT_SIZE * 8   // 128kb
+#define LARGE_OBJECT_SIZE MEDIUM_OBJECT_SIZE * 16  // 2Mb
+#define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
+
+#define POOL_BIN_COUNT 17 * 8 + 1
+#define HEAP_TYPE_COUNT 5
+
+#define MAX_ARES 64
+
+#define MAX_THREADS 1024
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+#define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
+#define ALIGN(x) ((MAX(x, 1) + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
 
 typedef enum AreaType_t {
     AT_FIXED_32 = 0,  //  small allocations, mostly pools.
@@ -64,8 +91,10 @@ static const uintptr_t partitions_offsets[] = {
     ((uintptr_t)64 << 40),  // Huge allocations
     ((uintptr_t)128 << 40), // end
 };
+
 static const uintptr_t area_type_to_size[] = {AREA_SIZE_SMALL, AREA_SIZE_MEDIUM, AREA_SIZE_LARGE, AREA_SIZE_HUGE,
                                               UINT64_MAX};
+
 static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_type_to_size[pid]; }
 
 static inline int8_t partition_from_addr(uintptr_t p)
@@ -122,7 +151,6 @@ typedef struct Section_t
     struct Section_t *prev;
     struct Section_t *next;
 
-    uint8_t collections[1];
 } Section;
 
 typedef struct Pool_t
@@ -136,7 +164,6 @@ typedef struct Pool_t
     Block *free;
     struct Pool_t *prev;
     struct Pool_t *next;
-    uint8_t blocks[1];
 } Pool;
 
 typedef struct Heap_t
@@ -148,13 +175,10 @@ typedef struct Heap_t
     uint32_t max_block;    // what is the maximum size block available;
     uint32_t num_allocations;
 
-    uint8_t *start;
     Queue free_nodes;
 
     struct Heap_t *prev;
     struct Heap_t *next;
-
-    uint8_t blocks[1];
 } Heap;
 
 // DONE
