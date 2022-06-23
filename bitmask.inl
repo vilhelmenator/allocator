@@ -16,18 +16,8 @@ static inline void bitmask_reserve_lo(Bitmask *bm, uint8_t bit) { bm->_w32[0] |=
 static inline void bitmask_free_all(Bitmask *bm) { bm->whole = 0; }
 static inline void bitmask_free_idx_hi(Bitmask *bm, uint8_t bit) { bm->_w32[1] &= ~((uint32_t)1 << bit); }
 static inline void bitmask_free_idx_lo(Bitmask *bm, uint8_t bit) { bm->_w32[0] &= ~((uint32_t)1 << bit); }
-
-static inline int8_t bitmask_first_free_hi(Bitmask *bm)
-{
-    const uint32_t m = ~bm->_w32[1];
-    return __builtin_ctz(m);
-}
-
-static inline int8_t bitmask_first_free_lo(Bitmask *bm)
-{
-    const uint32_t m = ~bm->_w32[0];
-    return __builtin_ctz(m);
-}
+static inline int8_t bitmask_first_free_hi(Bitmask *bm) { return __builtin_ctz(~bm->_w32[1]); }
+static inline int8_t bitmask_first_free_lo(Bitmask *bm) { return __builtin_ctz(~bm->_w32[0]); }
 
 static inline int8_t bitmask_allocate_bit_hi(Bitmask *bm)
 {

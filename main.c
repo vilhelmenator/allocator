@@ -1,7 +1,7 @@
 
 #define CTEST_ENABLED
 #include "../ctest/ctest.h"
-#include "allocator.h"
+#include "callocator.inl"
 //#include "cthread.h"
 //#include <iostream>
 
