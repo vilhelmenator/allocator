@@ -22,7 +22,7 @@ static inline uint8_t size_to_pool(const size_t as)
         // the first 2 rows
         return (as >> 3) - 1;
     } else {
-        const uint32_t top_mask = 0xffffffff;
+        const uint32_t top_mask = UINT32_MAX;
         const int tz = __builtin_clz((uint32_t)as);
         const uint64_t bottom_mask = (top_mask >> (tz + 4));
         const uint64_t incr = (bottom_mask & as) > 0;
@@ -41,18 +41,6 @@ void pool_free_block(Pool *p, void *block)
         Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
         section_free_idx(section, p->idx);
 
-        /*
-        void* blocks = (uint8_t*)p + sizeof(Pool);
-        int32_t psize = (1 << size_clss_to_exponent[section->type]);
-        const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
-        const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
-        const size_t remaining_size = section_end - (uintptr_t)blocks;
-        const size_t the_end = MIN(remaining_size, block_memory);
-        const uintptr_t start_addr = (uintptr_t)blocks;
-        const uintptr_t first_page = (start_addr + (os_page_size - 1)) & ~(os_page_size - 1);
-        const size_t mem_size = the_end - first_page;
-        reset_memory((void*)first_page, mem_size);
-        */
         p->free = (Block *)((uint8_t *)p + sizeof(Pool));
         p->free->next = NULL;
         return;

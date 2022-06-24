@@ -2,8 +2,66 @@
 #include "heap.inl"
 #include "pool.inl"
 
+static PartitionAllocator **partition_allocators = NULL;
+
 typedef void (*free_func)(void *);
 static Area *partition_allocator_alloc_area(Partition *area_queue, uint64_t area_size, uint64_t alignment);
+static PartitionAllocator *partition_allocator_init(size_t idx)
+{
+    // partition owners
+    // message sentinels
+    uintptr_t thr_mem = (uintptr_t)alloc_memory((void *)partitions_offsets[5], os_page_size, true);
+    // the allocator is at 4k alignment
+    Allocator *alloc = (Allocator *)thr_mem;
+    alloc->idx = (int32_t)idx;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Allocator));
+    // next come the partition allocator structs.
+    Queue *pool_queue = (Queue *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * POOL_BIN_COUNT);
+    Queue *heap_queue = (Queue *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * HEAP_TYPE_COUNT);
+    Queue *section_queue = (Queue *)thr_mem;
+    thr_mem += CACHE_LINE;
+    message_queue *mqueue = (message_queue *)thr_mem;
+    mqueue->head = (uintptr_t)thr_mem;
+    mqueue->tail = (uintptr_t)thr_mem;
+    thr_mem += CACHE_LINE;
+
+    PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
+    size_t size = (SZ_GB * 2);
+    size_t offset = ((size_t)2 << 40);
+    uint32_t area_type = 0;
+    for (size_t j = 0; j < 4; j++) {
+        palloc->area[j].partition_id = (uint32_t)idx;
+        palloc->area[j].start_addr = (idx)*size + offset;
+        palloc->area[j].end_addr = palloc->area[j].start_addr + size;
+        palloc->area[j].type = area_type;
+        palloc->area[j].area_mask = 0;
+        palloc->area[j].previous_area = NULL;
+        size *= 2;
+        offset *= 2;
+        area_type++;
+    }
+    palloc->idx = idx;
+    palloc->sections = section_queue;
+    palloc->heaps = heap_queue;
+    palloc->pools = pool_queue;
+    palloc->thread_messages = NULL;
+    palloc->message_count = 0;
+    palloc->thread_free_queue = mqueue;
+
+    return palloc;
+}
+
+static PartitionAllocator *partition_allocator_aquire(size_t idx)
+{
+    if (partition_allocators[idx] == NULL) {
+        PartitionAllocator *part_alloc = partition_allocator_init(idx);
+        partition_allocators[idx] = part_alloc;
+    }
+    return partition_allocators[idx];
+}
+
 static message *partition_allocator_get_last_message(PartitionAllocator *pa)
 {
     message *msg = pa->thread_messages;

@@ -92,6 +92,7 @@ err:
     spinlock_unlock(&alloc_lock);
     return ptr;
 }
+
 static int32_t find_first_nzeros(uintptr_t x, int64_t n)
 {
     x = ~x;
@@ -104,13 +105,18 @@ static int32_t find_first_nzeros(uintptr_t x, int64_t n)
     return 63 - (x == 0 ? 64 : __builtin_clzll(x));
 }
 
-static const uintptr_t _Area_small_area_mask = 0xff;
-static const uintptr_t _Area_medium_area_mask = 0xffff;
-static const uintptr_t _Area_large_area_mask = 0xffffffff;
+static const uintptr_t _Area_small_area_mask = UINT8_MAX;
+static const uintptr_t _Area_medium_area_mask = UINT16_MAX;
+static const uintptr_t _Area_large_area_mask = UINT32_MAX;
 
-static cache_align const uintptr_t area_type_to_exponent[] = {25, 26, 27, 28};
+static cache_align const uintptr_t area_type_to_exponent[] = {
+    25, // 2^25 == 32MB
+    26, // 2^26 == 64MB
+    27, // 2^27 == 128MB
+    28  // 2^28 == 256MB
+};
 
-static inline uint32_t area_get_id(const Area *a) { return (uint32_t)(a->partition_mask & 0xffffffff); }
+static inline uint32_t area_get_id(const Area *a) { return (uint32_t)(a->partition_mask & UINT32_MAX); }
 static inline AreaType area_get_type(const Area *a) { return (AreaType)((a->partition_mask >> 32) & 0xf); }
 static inline ContainerType area_get_container_type(const Area *a)
 {
@@ -189,9 +195,13 @@ static bool area_is_full(const Area *a)
 
 static inline Area *area_from_addr(uintptr_t p)
 {
-    static const uint64_t masks[] = {~(AREA_SIZE_SMALL - 1), ~(AREA_SIZE_MEDIUM - 1), ~(AREA_SIZE_LARGE - 1),
-                                     ~(AREA_SIZE_HUGE - 1),  0xffffffffffffffff,      0xffffffffffffffff,
-                                     0xffffffffffffffff};
+    static const uint64_t masks[] = {~(AREA_SIZE_SMALL - 1),
+                                     ~(AREA_SIZE_MEDIUM - 1),
+                                     ~(AREA_SIZE_LARGE - 1),
+                                     ~(AREA_SIZE_HUGE - 1),
+                                     UINT64_MAX,
+                                     UINT64_MAX,
+                                     UINT64_MAX};
 
     const int8_t pidx = partition_from_addr(p);
     if (pidx < 0) {

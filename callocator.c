@@ -52,107 +52,42 @@ Allocator *get_thread_instance(void)
 static Allocator *reserve_allocator()
 {
     int32_t idx = reserve_any_partition_set();
-    Allocator *new_alloc = &allocator_list[idx];
-    new_alloc->part_alloc = &partition_allocators[idx];
+    Allocator *new_alloc = allocator_aquire(idx);
+    new_alloc->part_alloc = partition_allocators[idx];
     list_enqueue(&new_alloc->partition_allocators, new_alloc->part_alloc);
     return new_alloc;
 }
 
+static void allocator_destroy()
+{
+    tls_set(_thread_key, NULL);
+    tls_delete(_thread_key);
+}
+
 static void allocator_init()
 {
-    size_t max_threads = MAX_THREADS;
     static bool init = false;
     if (init)
         return;
     init = true;
 
+    size_t size = sizeof(void *) * MAX_THREADS * 3;
+    uintptr_t thr_mem = (uintptr_t)alloc_memory((void *)partitions_offsets[5], size, true);
+    partition_allocators = (PartitionAllocator **)thr_mem;
+    thr_mem += ALIGN_CACHE(sizeof(PartitionAllocator *) * MAX_THREADS);
+    partition_owners = (int64_t *)thr_mem;
+    for (int i = 0; i < MAX_THREADS; i++) {
+        partition_owners[i] = -1;
+    }
+    thr_mem += ALIGN_CACHE(sizeof(int64_t *) * MAX_THREADS);
+    allocator_list = (Allocator **)thr_mem;
+
+    // reserve the first allocator for the main thread.
     main_thread_id = get_thread_id();
     os_page_size = get_os_page_size();
     tls_create(&_thread_key, &thread_done);
-
-    for (size_t i = 0; i < max_threads; i++) {
-        Queue *pool_base = pool_queues[i];
-        for (int j = 0; j < POOL_BIN_COUNT; j++) {
-            pool_base[j].head = NULL;
-            pool_base[j].tail = NULL;
-        }
-    }
-
-    for (size_t i = 0; i < max_threads; i++) {
-        Queue *heap_base = heap_queues[i];
-        for (size_t j = 0; j < HEAP_TYPE_COUNT; j++) {
-            heap_base[j].head = NULL;
-            heap_base[j].tail = NULL;
-        }
-    }
-
-    for (size_t i = 0; i < max_threads; i++) {
-        Queue *section_base = &section_queues[i];
-        section_base->head = NULL;
-        section_base->tail = NULL;
-    }
-
-    for (size_t i = 0; i < max_threads; i++) {
-        message *message_base = &message_sentinals[i];
-        message_base->next = (0UL);
-    }
-
-    for (size_t i = 0; i < max_threads; i++) {
-        message_queue *message_base = &message_queues[i];
-        message_base->head = (uintptr_t)&message_sentinals[i];
-        message_base->tail = (uintptr_t)&message_sentinals[i];
-    }
-
-    for (size_t i = 0; i < max_threads; i++) {
-        partition_owners[i] = -1;
-    }
-    for (size_t i = 0; i < max_threads; i++) {
-        PartitionAllocator *palloc = &partition_allocators[i];
-        size_t size = (SZ_GB * 2);
-        size_t offset = ((size_t)2 << 40);
-        uint32_t area_type = 0;
-        for (size_t j = 0; j < 4; j++) {
-            palloc->area[j].partition_id = (uint32_t)i;
-            palloc->area[j].start_addr = (i)*size + offset;
-            palloc->area[j].end_addr = palloc->area[j].start_addr + size;
-            palloc->area[j].type = area_type;
-            palloc->area[j].area_mask = 0;
-            palloc->area[j].previous_area = NULL;
-            size *= 2;
-            offset *= 2;
-            area_type++;
-        }
-        palloc->idx = i;
-        palloc->sections = &section_queues[i];
-        palloc->heaps = heap_queues[i];
-        palloc->pools = pool_queues[i];
-        palloc->thread_messages = NULL;
-        palloc->message_count = 0;
-        palloc->thread_free_queue = &message_queues[i];
-    }
-    for (size_t i = 0; i < max_threads; i++) {
-        allocator_list[i].idx = (int32_t)i;
-        allocator_list[i].part_alloc = NULL;
-        allocator_list[i].thread_free_part_alloc = NULL;
-        allocator_list[i].partition_allocators.head = NULL;
-        allocator_list[i].partition_allocators.tail = NULL;
-        allocator_list[i].cached_pool = NULL;
-        allocator_list[i].cached_pool_start = 0;
-        allocator_list[i].cached_pool_end = 0;
-    }
-    // reserve the first allocator for the main thread.
-    thread_instance = reserve_allocator();
-}
-
-static void allocator_destroy()
-{
-    static bool done = false;
-    if (done)
-        return;
-    done = true;
-
-    tls_set(_thread_key, NULL);
-    tls_delete(_thread_key);
+    main_instance = reserve_allocator();
+    thread_instance = main_instance;
 }
 
 #if defined(__cplusplus)
@@ -178,13 +113,7 @@ static cb *autoexit[] = {allocator_destroy};
 static void __attribute__((constructor)) library_init(void) { allocator_init(); }
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
-/*
 
-*/
-
-//
-// @API
-//
 void *cmalloc(size_t s)
 {
     if (get_thread_id() == main_thread_id) {
@@ -268,6 +197,23 @@ bool callocator_release(void)
         alloc = init_thread_instance();
     }
     return allocator_release_local_areas(alloc);
+}
+
+bool callocator_reset(void)
+{
+    /*
+    void* blocks = (uint8_t*)p + sizeof(Pool);
+    int32_t psize = (1 << size_clss_to_exponent[section->type]);
+    const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
+    const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
+    const size_t remaining_size = section_end - (uintptr_t)blocks;
+    const size_t the_end = MIN(remaining_size, block_memory);
+    const uintptr_t start_addr = (uintptr_t)blocks;
+    const uintptr_t first_page = (start_addr + (os_page_size - 1)) & ~(os_page_size - 1);
+    const size_t mem_size = the_end - first_page;
+    reset_memory((void*)first_page, mem_size);
+    */
+    return true;
 }
 
 void *cmalloc_from_heap(size_t size)

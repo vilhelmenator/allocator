@@ -97,6 +97,23 @@ void *heap_find_fit(Heap *h, uint32_t asize)
 
 void *heap_get_block(Heap *h, uint32_t s)
 {
+    if (h->num_allocations++ == 0) {
+        // on first allocation we write our footer at the end.
+        // we delay this just so that we do not touch the pages till needed
+        uint8_t *blocks = (uint8_t *)h + sizeof(Heap);
+        HeapBlock *hb = (HeapBlock *)(blocks + DSIZE * 2);
+        heap_block_set_footer(hb, h->total_memory, 0);
+        heap_block_set_header(heap_block_next(hb), 0, 1, 0);
+        //
+        if (h->total_memory < SECTION_SIZE) {
+            Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+            section_reserve_idx(section, h->idx);
+        } else {
+            size_t area_size = area_size_from_addr((uintptr_t)h);
+            Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
+            area_reserve_all(area);
+        }
+    }
     if (s <= DSIZE * 2) {
         s = DSIZE * 2;
     } else {
@@ -114,16 +131,6 @@ void *heap_get_block(Heap *h, uint32_t s)
 
     h->used_memory += s;
     h->max_block -= s;
-    if (h->num_allocations++ == 0) {
-        if (h->total_memory < SECTION_SIZE) {
-            Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-            section_reserve_idx(section, h->idx);
-        } else {
-            size_t area_size = area_size_from_addr((uintptr_t)h);
-            Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
-            area_reserve_all(area);
-        }
-    }
     return ptr;
 }
 
@@ -193,8 +200,7 @@ void heap_reset(Heap *h)
     HeapBlock *hb = (HeapBlock *)(blocks + DSIZE * 2);
     list_enqueue(&h->free_nodes, (QNode *)hb);
     heap_block_set_header(hb, h->total_memory, 0, 1);
-    heap_block_set_footer(hb, h->total_memory, 0);
-    heap_block_set_header(heap_block_next(hb), 0, 1, 0);
+
     h->max_block = h->total_memory;
 }
 

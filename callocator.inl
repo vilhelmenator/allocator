@@ -10,7 +10,7 @@
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
 #define SECTION_SIZE (1ULL << 22ULL)
 
-#define BASE_AREA_SIZE (SECTION_SIZE * 8ULL) //  32Mb
+#define BASE_AREA_SIZE (SECTION_SIZE * 8ULL) // 32Mb
 #define AREA_SIZE_SMALL BASE_AREA_SIZE
 #define AREA_SIZE_MEDIUM (SECTION_SIZE * 16ULL) // 64Mb
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)  // 128Mb
@@ -22,7 +22,7 @@
 #define LARGE_OBJECT_SIZE MEDIUM_OBJECT_SIZE * 16  // 2Mb
 #define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
 
-#define POOL_BIN_COUNT 17 * 8 + 1
+#define POOL_BIN_COUNT (17 * 8 + 1)
 #define HEAP_TYPE_COUNT 5
 
 #define MAX_ARES 64
@@ -32,6 +32,8 @@
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
 #define ALIGN(x) ((MAX(x, 1) + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
+#define ALIGN4(x) ((MAX(x, 1) + 3) & ~(3))
+#define ALIGN_CACHE(x) ((x + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
 
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 typedef enum AreaType_t {
