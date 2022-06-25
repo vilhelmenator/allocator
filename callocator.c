@@ -40,11 +40,24 @@ void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offse
     tn->prev = NULL;
 }
 
-Allocator *get_thread_instance(void)
+static inline bool is_main_thread(void)
 {
     if (get_thread_id() == main_thread_id) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static inline Allocator *get_thread_instance(void)
+{
+    if (is_main_thread()) {
         return main_instance;
     } else {
+        Allocator *ti = thread_instance;
+        if (ti == &default_alloc) {
+            init_thread_instance();
+        }
         return thread_instance;
     }
 }
@@ -72,7 +85,7 @@ static void allocator_init()
     init = true;
 
     size_t size = sizeof(void *) * MAX_THREADS * 3;
-    uintptr_t thr_mem = (uintptr_t)alloc_memory((void *)partitions_offsets[5], size, true);
+    uintptr_t thr_mem = (uintptr_t)cmalloc_os(size);
     partition_allocators = (PartitionAllocator **)thr_mem;
     thr_mem += ALIGN_CACHE(sizeof(PartitionAllocator *) * MAX_THREADS);
     partition_owners = (int64_t *)thr_mem;
@@ -114,18 +127,11 @@ static void __attribute__((constructor)) library_init(void) { allocator_init(); 
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
 
-void *cmalloc(size_t s)
-{
-    if (get_thread_id() == main_thread_id) {
-        return allocator_malloc(main_instance, s);
-    } else {
-        return allocator_malloc_th(thread_instance, s);
-    }
-}
+void *cmalloc(size_t s) { return allocator_malloc(get_thread_instance(), s); }
 
 void cfree(void *p)
 {
-    if (get_thread_id() == main_thread_id) {
+    if (is_main_thread()) {
         allocator_free(main_instance, p);
     } else {
         allocator_free_th(thread_instance, p);
@@ -142,7 +148,7 @@ void cfree(void *p)
 void *cmalloc_at(size_t size, uintptr_t vm_addr)
 {
     // we only support custom vm allocation from the 32 - 64 terabyte range.
-    if (vm_addr >= (((uintptr_t)32 << 40) + os_page_size) && vm_addr < (((uintptr_t)64 << 40) - (2 * os_page_size))) {
+    if (vm_addr >= (((uintptr_t)32 << 40) + CACHE_LINE) && vm_addr < (((uintptr_t)64 << 40) - (2 * CACHE_LINE))) {
         if (vm_addr % os_page_size != 0) {
             // vm address must be a multiple of os page
             return NULL;
@@ -150,8 +156,8 @@ void *cmalloc_at(size_t size, uintptr_t vm_addr)
 
         // the header is an os_page in size.
         // align size to page size
-        uintptr_t header = vm_addr - os_page_size;
-        size += os_page_size;
+        uintptr_t header = vm_addr - CACHE_LINE;
+        size += CACHE_LINE;
         size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
         //
         void *ptr = alloc_memory((void *)header, size, true);
@@ -159,7 +165,7 @@ void *cmalloc_at(size_t size, uintptr_t vm_addr)
             // we were able to allocate the memory, .. yay!
             uint64_t *_ptr = (uint64_t *)ptr;
             // write the address into the header and the size.
-            *_ptr = (uint64_t)(uintptr_t)ptr + os_page_size;
+            *_ptr = (uint64_t)(uintptr_t)ptr + CACHE_LINE;
             *(++_ptr) = size;
             return (void *)vm_addr;
         }
@@ -176,9 +182,6 @@ void *cmalloc_area(size_t s, size_t partition_idx)
         return NULL;
     }
     Allocator *alloc = get_thread_instance();
-    if (alloc->idx < 0) {
-        alloc = init_thread_instance();
-    }
 
     const size_t totalSize = sizeof(Area) + s;
     Area *area = partition_allocator_get_free_area(alloc->part_alloc, totalSize, (AreaType)partition_idx);
@@ -193,10 +196,10 @@ void *cmalloc_area(size_t s, size_t partition_idx)
 bool callocator_release(void)
 {
     Allocator *alloc = get_thread_instance();
-    if (alloc->idx < 0) {
-        alloc = init_thread_instance();
+    if (alloc->idx >= 0) {
+        return allocator_release_local_areas(alloc);
     }
-    return allocator_release_local_areas(alloc);
+    return false;
 }
 
 bool callocator_reset(void)
@@ -216,36 +219,17 @@ bool callocator_reset(void)
     return true;
 }
 
-void *cmalloc_from_heap(size_t size)
-{
-    if (get_thread_id() == main_thread_id) {
-        return allocator_malloc_heap(main_instance, size);
-    } else {
-        return allocator_malloc_heap_th(thread_instance, size);
-    }
-}
+void *cmalloc_from_heap(size_t size) { return allocator_malloc_heap(get_thread_instance(), size); }
 
 void *crealloc(void *p, size_t s)
 {
-    /*
-    size_t csize = allocator_get_allocation_size(p);
-    if(csize < os_page_size)
-    {
-        // just allocate the new size and memcpy
-    }
-    else
-    {
-        if(allocator_remap_supported())
-        {
-            // how many full pages can we remap.
-            //
-        }
-        else
-        {
-            // just memcpy
-        }
-    }
-    // memcpy remainder size.
-     */
-    return NULL;
+    size_t csize = allocator_get_allocation_size(get_thread_instance(), p);
+    // if was in a pool. move it to a heap where it is cheaper to resize.
+    // heap can grow.
+    size_t min_size = MIN(csize, s);
+    void *new_ptr = cmalloc(s);
+    memcpy(p, new_ptr, min_size);
+    cfree(p);
+
+    return new_ptr;
 }

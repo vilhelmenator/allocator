@@ -63,6 +63,18 @@ static inline void section_claim_idx(Section *s, uint8_t i)
 }
 
 static inline uint8_t section_reserve_next(Section *s) { return bitmask_allocate_bit_lo(&s->active_mask); }
+static inline void section_reserve_all(Section *s)
+{
+    Area *area = area_from_addr((uintptr_t)s);
+    area_reserve_idx(area, s->idx);
+    bitmask_reserve_all_lo(&s->active_mask);
+}
+static inline void section_free_all(Section *s)
+{
+    Area *area = area_from_addr((uintptr_t)s);
+    area_free_idx(area, s->idx);
+    bitmask_free_all_lo(&s->active_mask);
+}
 static inline bool section_is_full(const Section *s)
 {
     switch (s->type) {

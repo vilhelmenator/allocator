@@ -14,17 +14,22 @@
 #if defined(_MSC_VER)
 #define WINDOWS
 #endif
-#ifdef WINDOWS
+#if defined(WINDOWS)
 #include <intrin.h>
 #include <memoryapi.h>
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/vm_map.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #else
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
 
 #define CACHE_LINE 64
-#ifdef WINDOWS
+#if defined(WINDOWS)
 #define cache_align __declspec(align(CACHE_LINE))
 #else
 #define cache_align __attribute__((aligned(CACHE_LINE)))
@@ -32,7 +37,7 @@
 
 bool commit_memory(void *base, size_t size)
 {
-#ifdef WINDOWS
+#if defined(WINDOWS)
     return VirtualAlloc(base, size, MEM_COMMIT, PAGE_READWRITE) == base;
 #else
     return (mprotect(base, size, (PROT_READ | PROT_WRITE)) == 0);
@@ -41,7 +46,7 @@ bool commit_memory(void *base, size_t size)
 
 bool decommit_memory(void *base, size_t size)
 {
-#ifdef WINDOWS
+#if defined(WINDOWS)
     return VirtualFree(base, size, MEM_DECOMMIT);
 #else
     return (mmap(base, size, PROT_NONE, (MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE), -1, 0) == base);
@@ -50,7 +55,7 @@ bool decommit_memory(void *base, size_t size)
 
 bool free_memory(void *ptr, size_t size)
 {
-#ifdef WINDOWS
+#if defined(WINDOWS)
     return VirtualFree(ptr, 0, MEM_RELEASE) == 0;
 #else
     return (munmap(ptr, size) == -1);
@@ -68,7 +73,7 @@ bool release_memory(void *ptr, size_t size, bool commit)
 
 void *alloc_memory(void *base, size_t size, bool commit)
 {
-#ifdef WINDOWS
+#if defined(WINDOWS)
     int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
     return VirtualAlloc(base, size, flags, PAGE_READWRITE);
 #else
@@ -79,7 +84,7 @@ void *alloc_memory(void *base, size_t size, bool commit)
 
 bool reset_memory(void *base, size_t size)
 {
-#ifdef WINDOWS
+#if defined(WINDOWS)
     void *p = VirtualAlloc(base, size, MEM_RESET, PAGE_READWRITE);
     if (p == base && base != NULL) {
         VirtualUnlock(base, size);
@@ -99,12 +104,53 @@ bool reset_memory(void *base, size_t size)
 
 bool protect_memory(void *addr, size_t size, bool protect)
 {
-#ifdef _WIN32
+#if defined(WINDOWS)
     DWORD prev_value = 0;
     return VirtualProtect(addr, size, protect ? PAGE_NOACCESS : PAGE_READWRITE, &prev_value) == 0;
 #else
     return mprotect(addr, size, protect ? PROT_NONE : (PROT_READ | PROT_WRITE)) == 0;
 #endif
+}
+
+bool remap_memory(void *old_addr, void *new_addr, size_t size)
+{
+#if defined(WINDOWS)
+    /*
+    int32_t numberOfPages = size/os_page_size;
+    int32_t numberOfPagesInitial = numberOfPages;
+    if(AllocateUserPhysicalPages( GetCurrentProcess(),
+                                         &numberOfPages,
+                                         aPFNs ))
+    {
+        if(numberOfPagesInitial == numberOfPages)
+        {
+            if(MapUserPhysicalPages(new_addr, )
+        }
+
+    }*/
+
+    return false;
+#elif defined(__linux__)
+    if (mremap(old_addr, size, MREMAP_FIXED | MREMAP_MAYMOVE, new_addr) != MAP_FAILED) {
+        // I think linux unmaps the old address.
+        return true;
+    }
+#elif defined(__APPLE__)
+
+    vm_prot_t curProtection, maxProtection;
+    if (vm_remap(mach_task_self(), (vm_address_t *)new_addr, size,
+                 0, // mask
+                 0, // anywhere
+                 mach_task_self(), (vm_address_t)old_addr,
+                 0, // copy
+                 &curProtection, &maxProtection, VM_INHERIT_COPY) != KERN_NO_SPACE) {
+        // do we need to unmap the old address
+        return munmap(old_addr, size) == 0;
+    }
+#else
+    //
+#endif
+    return false;
 }
 
 size_t get_os_page_size(void)
@@ -150,7 +196,7 @@ static uintptr_t os_alloc_hint = (uintptr_t)64 << 40;
 void *cmalloc_os(size_t size)
 {
     // align size to page size
-    size += 2 * sizeof(uintptr_t);
+    size += CACHE_LINE;
     size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
 
     // look the counter while fetching our os memory.
@@ -165,10 +211,10 @@ void *cmalloc_os(size_t size)
 
     // write the allocation header
     uint64_t *_ptr = (uint64_t *)ptr;
-    *_ptr = (uint64_t)(uintptr_t)ptr + 2 * sizeof(uintptr_t);
+    *_ptr = (uint64_t)(uintptr_t)ptr + CACHE_LINE;
     *(++_ptr) = size;
 
-    return ++_ptr;
+    return (void *)((uintptr_t)ptr + CACHE_LINE);
 }
 
 #endif /* os_inl */

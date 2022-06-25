@@ -8,6 +8,44 @@
 #define HEADER_OVERHEAD 4
 #define HEADER_FOOTER_OVERHEAD 8
 
+/*
+
+ 64 bytes
+ 64 * 64 bytes 4k.
+ 4k * 64 = 256k
+ 1/16th is wasted on structures. 6.25%
+
+ 8 byte mask. per level.
+ 56 byte range fild.
+ // 64 bytes per range.
+
+ 4M heaps.
+    4m =    64 * 64k
+    64k =   64 * 1k
+    1k =    64 * 16bytes
+ 32M heaps.
+    32m =   64 * 512k
+    512k =  64 * 8k
+    8k =    64 * 128bytes
+ 64M heaps.
+    64m =   64 * 1m
+    1m =    64 * 16k
+    16k =   64 * 256bytes
+ 128M heaps.
+    128m =  64 * 2m
+    2m =    64 * 32k
+    32k =   64 * 512bytes
+ 256M heaps.
+    256m =  64 * 4m
+    4m =    64 * 64k
+    64k =   64 * 1k
+
+ find free.
+    - look at top level mask.
+    - will be aligned to size value. >= 64 k, aligned to 64 k.
+    - look at address alignment. if aligned to 64k, 1k, 16 bytes... which level to look at.
+    -
+ */
 static inline uint8_t size_to_heap(const size_t as)
 {
     if (as <= SMALL_OBJECT_SIZE) {
@@ -25,12 +63,12 @@ static inline uint8_t size_to_heap(const size_t as)
 
 static inline uint32_t heap_block_get_header(HeapBlock *hb) { return *(uint32_t *)((uint8_t *)&hb->data - WSIZE); }
 
-static inline void heap_block_set_header(HeapBlock *hb, uint32_t s, uint32_t v, uint32_t pa)
+static inline void heap_block_set_header(HeapBlock *hb, const uint32_t s, const uint32_t v, const uint32_t pa)
 {
     *(uint32_t *)((uint8_t *)&hb->data - WSIZE) = (s | v | pa << 1);
 }
 
-static inline void heap_block_set_footer(HeapBlock *hb, uint32_t s, uint32_t v)
+static inline void heap_block_set_footer(HeapBlock *hb, const uint32_t s, const uint32_t v)
 {
     const uint32_t size = (*(uint32_t *)((uint8_t *)&hb->data - WSIZE)) & ~0x7;
     *(uint32_t *)((uint8_t *)(&hb->data) + (size)-DSIZE) = (s | v);
@@ -60,11 +98,9 @@ bool heap_has_room(const Heap *h, const size_t s)
     return false;
 }
 
-void heap_place(Heap *h, void *bp, uint32_t asize)
+static inline void heap_place(Heap *h, void *bp, const uint32_t asize, const int32_t header, const int32_t csize)
 {
     HeapBlock *hb = (HeapBlock *)bp;
-    int header = heap_block_get_header(hb);
-    int32_t csize = header & ~0x7;
     const uint32_t prev_alloc = (header & 0x3) >> 1;
     if ((csize - asize) >= (DSIZE + HEADER_FOOTER_OVERHEAD)) {
         heap_block_set_header(hb, asize, 1, prev_alloc);
@@ -77,7 +113,7 @@ void heap_place(Heap *h, void *bp, uint32_t asize)
     }
 }
 
-void *heap_find_fit(Heap *h, uint32_t asize)
+void *heap_find_fit(Heap *h, const uint32_t asize)
 {
     // find the first fit.
     QNode *current = (QNode *)h->free_nodes.head;
@@ -87,12 +123,36 @@ void *heap_find_fit(Heap *h, uint32_t asize)
         uint32_t bsize = header & ~0x7;
         if (asize <= bsize) {
             list_remove(&h->free_nodes, current);
-            heap_place(h, current, asize);
+            heap_place(h, current, asize, header, bsize);
             return current;
         }
         current = (QNode *)current->next;
     }
     return NULL;
+}
+
+static size_t heap_get_block_size(Heap *h, void *bp)
+{
+    HeapBlock *hb = (HeapBlock *)bp;
+    int header = heap_block_get_header(hb);
+    return header & ~0x7;
+}
+
+static inline int32_t heap_get_good_size(uint32_t s)
+{
+    if (s <= DSIZE * 2) {
+        return DSIZE * 2 + HEADER_FOOTER_OVERHEAD;
+    } else {
+        //
+        // lets be nice to odd sizes. since for allocated items, it only needs the header. 4 bytes.
+        // if it is a multiple of 8. We will need to bump up to the next 8 multiple
+        // but, for multiples of 4. We can just bump up by 4 bytes.
+        if ((s & 0x7) == 0) {
+            return DSIZE * ((s + HEADER_FOOTER_OVERHEAD + DSIZE - 1) >> 3);
+        } else {
+            return WSIZE * ((s + HEADER_OVERHEAD + WSIZE - 1) >> 2);
+        }
+    }
 }
 
 void *heap_get_block(Heap *h, uint32_t s)
@@ -107,31 +167,48 @@ void *heap_get_block(Heap *h, uint32_t s)
         //
         if (h->total_memory < SECTION_SIZE) {
             Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-            section_reserve_idx(section, h->idx);
+            section_reserve_all(section);
         } else {
             size_t area_size = area_size_from_addr((uintptr_t)h);
             Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
             area_reserve_all(area);
         }
     }
-    if (s <= DSIZE * 2) {
-        s = DSIZE * 2;
-    } else {
-        //
-        // lets be nice to odd sizes. since for allocated items, it only needs the header. 4 bytes.
-        // if it is a multiple of 8. We will need to bump up to the next 8 multiple
-        // but, for multiples of 4. We can just bump up by 4 bytes.
-        if ((s & 0x7) == 0) {
-            s = DSIZE * ((s + HEADER_FOOTER_OVERHEAD + DSIZE - 1) >> 3);
-        } else {
-            s = WSIZE * ((s + HEADER_OVERHEAD + WSIZE - 1) >> 2);
-        }
-    }
+    s = heap_get_good_size(s);
     void *ptr = heap_find_fit(h, s);
-
     h->used_memory += s;
     h->max_block -= s;
     return ptr;
+}
+
+static inline bool resize_block(Heap *h, void *bp, int32_t size)
+{
+    //
+    HeapBlock *hb = (HeapBlock *)bp;
+    int header = heap_block_get_header(hb);
+    int32_t bsize = header & ~0x7;
+
+    //
+    HeapBlock *next_block = heap_block_next(hb);
+    int next_header = heap_block_get_header(next_block);
+    const size_t next_alloc = next_header & 0x1;
+    if (next_alloc) {
+        // next block is not free so we can't merge with it.
+        return false;
+    }
+    //
+    const size_t next_size = next_header & ~0x7;
+    if ((bsize + next_size) >= size) {
+        // merge the two blocks
+        const uint32_t prev_alloc = (header & 0x3) >> 1;
+        size += next_size;
+        heap_block_set_header(hb, size, 0, prev_alloc);
+        heap_block_set_footer(hb, size, 0);
+        list_remove(&h->free_nodes, (QNode *)next_block);
+        return true;
+    }
+    //
+    return false;
 }
 
 static inline void heap_update_max(Heap *h, int32_t size)
@@ -159,10 +236,10 @@ void *heap_coalesce(Heap *h, void *bp)
         // next is free
         if (prev_alloc && !next_alloc) {
             size += next_size;
-            heap_block_set_header(hb, size, 0, 1);
-            heap_block_set_footer(hb, size, 0);
             QNode *h_next = (QNode *)next_block;
             list_remove(&h->free_nodes, h_next);
+            heap_block_set_header(hb, size, 0, 1);
+            heap_block_set_footer(hb, size, 0);
             list_enqueue(&h->free_nodes, hn);
         } // prev is fre
         else {
@@ -177,11 +254,11 @@ void *heap_coalesce(Heap *h, void *bp)
                 bp = (void *)heap_block_prev(hb);
             } else { // both next and prev are free
                 size += prev_size + next_size;
+                QNode *h_next = (QNode *)next_block;
+                list_remove(&h->free_nodes, h_next);
                 heap_block_set_header(prev_block, size, 0, pprev_alloc);
                 heap_block_set_footer(next_block, size, 0);
                 bp = (void *)heap_block_prev(hb);
-                QNode *h_next = (QNode *)next_block;
-                list_remove(&h->free_nodes, h_next);
             }
         }
     } else {
@@ -228,7 +305,7 @@ static void heap_free(Heap *h, void *bp, bool should_coalesce)
         if (h->total_memory < SECTION_SIZE) {
             // if we have been placed inside of a section.
             Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-            section_free_idx(section, h->idx);
+            section_free_all(section);
         } else {
             size_t area_size = area_size_from_addr((uintptr_t)h);
             Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
@@ -261,7 +338,7 @@ static void heap_init(Heap *h, int8_t pidx, const size_t psize)
     h->used_memory = 0;
     h->total_memory = (uint32_t)((MIN(remaining_size, block_memory)) - header_footer_offset - HEADER_FOOTER_OVERHEAD);
     h->max_block = h->total_memory;
-    h->min_block = sizeof(uintptr_t);
+    h->min_block = sizeof(uint32_t);
     h->num_allocations = 0;
     h->next = NULL;
     h->prev = NULL;

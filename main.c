@@ -703,20 +703,19 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
 
-    MEASURE_TIME(allocator, alloc, {
+    MEASURE_TIME(allocator, cmalloc, {
         for (uint64_t j = 0; j < num_loops; j++) {
             for (uint64_t i = 0; i < num_items; i++) {
                 variables[i] = (char *)cmalloc(alloc_size);
             }
             for (uint64_t i = 0; i < num_items; i++) {
-
                 cfree(variables[i]);
             }
         }
     });
     // allocator_release_local_areas(alloc);
     /*
-    MEASURE_TIME(Allocator, malloc, {
+    MEASURE_TIME(Allocator, mi_malloc, {
         for (uint64_t j = 0; j < num_loops; j++) {
             for (uint64_t i = 0; i < num_items; i++)
                 variables[i] = (char *)mi_malloc(alloc_size);
@@ -737,40 +736,24 @@ int test(void *p)
     cfree(test);
     return 1;
 }
-void blach(void)
-{
-    // 8 + 4 +
-    size_t s = 4;
-    size_t ss = 0;
-    for (int i = 0; i < 32; i++) {
-        s += 4;
-        if (s <= 8 * 2) {
-            ss = 8 * 2;
-        } else {
-            if ((s & 0x7) == 0) {
-                ss = 8 * ((s + 8 + 8 - 1) >> 3);
-            } else {
-                ss = 4 * ((s + 4 + 4 - 1) >> 2);
-            }
-        }
-    }
-}
+
 int main()
 {
     // thrd_t trd;
     // thrd_create(&trd, &test, NULL);
     // blach();
-    run_tests();
+    // run_tests();
     // void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     // cfree(m);
     // m = cmalloc_os(123);
     // cfree(m);
+
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     }
     size_t item_count = 100;
     for (int i = 0; i < 6; i++) {
-        test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
+        // test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS);
         item_count *= 10;
     }
     return 0;

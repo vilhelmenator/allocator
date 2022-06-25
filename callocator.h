@@ -1,7 +1,7 @@
 /*
  // Finish something!!!!
  // part 1
- [ ] - reallocate.
+ [x] - reallocate.
 
  // part 2
  [ ] - partition set testing.
@@ -35,6 +35,10 @@
 // DONE
 void *cmalloc(size_t s);
 void cfree(void *p);
+// IN PROGRESS
+void *crealloc(void *p, size_t s);
+void *ccalloc(size_t num, size_t size);
+void *caligned_alloc(size_t alignment, size_t size);
 
 bool callocator_release(void);
 void *cmalloc_at(size_t s, uintptr_t vm_addr);
@@ -43,11 +47,8 @@ void *cmalloc_os(size_t s);
 void *cmalloc_from_heap(size_t s);
 
 // NOT DONE
-void *crealloc(void *p, size_t s);
 
 void callocator_purge(void);
-void *cmalloc_aligned(size_t s, size_t alignment);
-
 void *cmalloc_from_pool(size_t s);
 //
 // basic API

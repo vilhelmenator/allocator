@@ -10,7 +10,14 @@ static PartitionAllocator *partition_allocator_init(size_t idx)
 {
     // partition owners
     // message sentinels
-    uintptr_t thr_mem = (uintptr_t)alloc_memory((void *)partitions_offsets[5], os_page_size, true);
+    size_t parts[] = {ALIGN_CACHE(sizeof(Allocator)),
+                      ALIGN_CACHE(sizeof(Queue) * (POOL_BIN_COUNT + HEAP_TYPE_COUNT + 1)),
+                      ALIGN_CACHE(sizeof(message_queue)), ALIGN_CACHE(sizeof(PartitionAllocator))};
+    size_t size = 0;
+    for (int i = 0; i < sizeof(parts) / sizeof(size_t); i++) {
+        size += parts[i];
+    }
+    uintptr_t thr_mem = (uintptr_t)cmalloc_os(size);
     // the allocator is at 4k alignment
     Allocator *alloc = (Allocator *)thr_mem;
     alloc->idx = (int32_t)idx;
@@ -28,7 +35,7 @@ static PartitionAllocator *partition_allocator_init(size_t idx)
     thr_mem += CACHE_LINE;
 
     PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
-    size_t size = (SZ_GB * 2);
+    size = (SZ_GB * 2);
     size_t offset = ((size_t)2 << 40);
     uint32_t area_type = 0;
     for (size_t j = 0; j < 4; j++) {
@@ -264,7 +271,8 @@ static Area *partition_allocator_get_free_area_from_queue(Partition *current_que
         if (!area_is_full(previous_area)) {
             new_area = previous_area;
         }
-    } else {
+    }
+    if (new_area == NULL) {
         if (current_queue->area_mask != 0) {
             int32_t area_idx = area_list_get_next_area_idx(current_queue, 0);
             while (area_idx != -1) {

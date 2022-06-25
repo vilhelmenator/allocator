@@ -63,7 +63,7 @@ static Allocator *allocator_aquire(size_t idx)
 {
     if (allocator_list[idx] == NULL) {
         PartitionAllocator *part_alloc = partition_allocator_aquire(idx);
-        Allocator *new_alloc = (Allocator *)((uintptr_t)part_alloc & ~(os_page_size - 1));
+        Allocator *new_alloc = (Allocator *)(((uintptr_t)part_alloc & ~(os_page_size - 1)) + CACHE_LINE);
         allocator_list[idx] = new_alloc;
     }
     return allocator_list[idx];
@@ -336,24 +336,17 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
 
 void _free_extended_part(size_t pid, void *p)
 {
-    if (pid == NUM_AREA_PARTITIONS) {
-        // the first extended partition will prevent you from
-        uintptr_t header = (uintptr_t)p - os_page_size;
-        uint64_t size = 0;
-        uint64_t addr = *(uint64_t *)header;
-        if ((void *)addr == p) {
-            size = *(uint64_t *)(header + sizeof(uint64_t));
-            free_memory((void *)header, size);
-        }
-    } else {
-        // the first extended partition will prevent you from
-        uintptr_t header = (uintptr_t)p - 2 * sizeof(uintptr_t);
-        uint64_t size = 0;
-        uint64_t addr = *(uint64_t *)header;
-        if ((void *)addr == p) {
-            size = *(uint64_t *)(header + sizeof(uint64_t));
-            free_memory((void *)header, size);
-        }
+    if ((uintptr_t)p % os_page_size != 0) {
+        return;
+    }
+
+    // the first extended partition will prevent you from
+    uintptr_t header = (uintptr_t)p - CACHE_LINE;
+    uint64_t size = 0;
+    uint64_t addr = *(uint64_t *)header;
+    if ((void *)addr == p) {
+        size = *(uint64_t *)(header + sizeof(uint64_t));
+        free_memory((void *)header, size);
     }
 }
 
@@ -471,14 +464,6 @@ void *allocator_malloc(Allocator *a, size_t s)
     return ptr;
 }
 
-void *allocator_malloc_th(Allocator *a, size_t s)
-{
-    if (a == &default_alloc) {
-        a = init_thread_instance();
-    }
-    return allocator_malloc(a, s);
-}
-
 void *allocator_malloc_heap(Allocator *a, size_t s)
 {
     const size_t size = ALIGN4(s);
@@ -490,14 +475,6 @@ void *allocator_malloc_heap(Allocator *a, size_t s)
     } else {
         return allocator_alloc_slab(a, size);
     }
-}
-
-void *allocator_malloc_heap_th(Allocator *a, size_t s)
-{
-    if (a == &default_alloc) {
-        a = init_thread_instance();
-    }
-    return allocator_malloc_heap(a, s);
 }
 
 bool allocator_release_local_areas(Allocator *a)
@@ -582,6 +559,43 @@ void allocator_free_th(Allocator *a, void *p)
     } else {
         allocator_free(a, p);
     }
+}
+
+size_t allocator_get_allocation_size(Allocator *a, void *p)
+{
+    int8_t pid = partition_from_addr((uintptr_t)p);
+    if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
+        size_t area_size = area_size_from_partition_id(pid);
+        Area *area = (Area *)((uintptr_t)p & ~(area_size - 1));
+        switch (area_get_container_type(area)) {
+        case CT_SECTION: {
+            Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+            if (section->type != ST_HEAP_4M) {
+                Pool *pool = (Pool *)section_find_collection(section, p);
+                return pool->block_size;
+            } else {
+                Heap *heap = (Heap *)((uint8_t *)section + sizeof(Section));
+                return heap_get_block_size(heap, p);
+            }
+        }
+        case CT_HEAP: {
+            Heap *heap = (Heap *)((uintptr_t)area + sizeof(Area));
+            return heap_get_block_size(heap, p);
+        }
+        default: {
+            return area_get_size(area);
+        }
+        }
+    } else {
+        uintptr_t header = (uintptr_t)p - CACHE_LINE;
+        uint64_t size = 0;
+        uint64_t addr = *(uint64_t *)header;
+        if ((void *)addr == p) {
+            size = *(uint64_t *)(header + sizeof(uint64_t));
+            return size;
+        }
+    }
+    return 0;
 }
 
 #endif /* allocator_inl */
