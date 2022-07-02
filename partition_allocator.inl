@@ -91,11 +91,12 @@ static void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
 
 static Area *partition_allocator_get_next_area(Partition *area_queue, uint64_t size, uint64_t alignment)
 {
+    size_t type_exponent = area_type_to_exponent[area_queue->type];
     size_t type_size = area_type_to_size[area_queue->type];
-    size_t range = size / type_size;
-    range += (size % type_size) ? 1 : 0;
+    size_t range = size >> type_exponent;
+    range += (size & (1 << type_exponent) - 1) ? 1 : 0;
     size = type_size * range;
-    uint32_t idx = find_first_nzeros(area_queue->area_mask, range);
+    int32_t idx = find_first_nzeros(area_queue->area_mask, range);
     if (idx == -1) {
         return NULL; // no room.
     }
@@ -203,11 +204,7 @@ static bool partition_allocator_try_free_area(PartitionAllocator *pa, Area *area
 
 static int32_t area_list_get_next_area_idx(Partition *queue, uint32_t cidx)
 {
-    uint64_t msk_cpy = queue->area_mask << cidx;
-    if (msk_cpy == 0 || (cidx > 63)) {
-        return -1;
-    }
-    return __builtin_clzll(msk_cpy) + cidx;
+    return get_next_mask_idx(queue->area_mask, cidx);
 }
 
 static Area *area_list_get_area(Partition *queue, uint32_t cidx)

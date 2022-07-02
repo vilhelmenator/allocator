@@ -706,7 +706,7 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
     MEASURE_TIME(allocator, cmalloc, {
         for (uint64_t j = 0; j < num_loops; j++) {
             for (uint64_t i = 0; i < num_items; i++) {
-                variables[i] = (char *)cmalloc(alloc_size);
+                variables[i] = (char *)cmalloc_from_heap(alloc_size);
             }
             for (uint64_t i = 0; i < num_items; i++) {
                 cfree(variables[i]);
@@ -737,12 +737,30 @@ int test(void *p)
     return 1;
 }
 
+void test_new_heap(void)
+{
+    /*
+    void* mem = cmalloc_os(1<<22);
+    Heap*nh = heap_init((uintptr_t)mem + sizeof(Area), 22, true);
+    void* p1 = heap_get_block(nh, 16);
+    void* p2 = heap_get_block(nh, 16);
+    void* p3 = heap_get_block(nh, 16);
+    void* p4 = heap_get_block(nh, 16);
+    void* p5 = heap_get_block(nh, 16);
+    heap_free(nh, p1, false);
+    heap_free(nh, p2, false);
+    heap_free(nh, p3, false);
+    heap_free(nh, p4, false);
+    heap_free(nh, p5, false);
+     */
+}
 int main()
 {
+    test_new_heap();
     // thrd_t trd;
     // thrd_create(&trd, &test, NULL);
     // blach();
-    // run_tests();
+    //run_tests();
     // void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     // cfree(m);
     // m = cmalloc_os(123);

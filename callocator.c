@@ -149,7 +149,7 @@ void *cmalloc_at(size_t size, uintptr_t vm_addr)
 {
     // we only support custom vm allocation from the 32 - 64 terabyte range.
     if (vm_addr >= (((uintptr_t)32 << 40) + CACHE_LINE) && vm_addr < (((uintptr_t)64 << 40) - (2 * CACHE_LINE))) {
-        if (vm_addr % os_page_size != 0) {
+        if ((vm_addr & (os_page_size - 1)) != 0) {
             // vm address must be a multiple of os page
             return NULL;
         }

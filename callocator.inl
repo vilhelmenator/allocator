@@ -127,7 +127,7 @@ typedef struct Pool_t
     struct Pool_t *prev;
     struct Pool_t *next;
 } Pool;
-
+/*
 typedef struct Heap_t
 {
     int32_t idx;           // index into the parent section/if in a section.
@@ -139,6 +139,17 @@ typedef struct Heap_t
 
     Queue free_nodes;
 
+    struct Heap_t *prev;
+    struct Heap_t *next;
+} Heap;
+*/
+typedef struct Heap_t
+{
+    uint32_t idx;
+    uint32_t num_allocations;
+    uint32_t container_exponent;
+    uint32_t previous_l1_offset;
+    uint32_t previous_l2_offset;
     struct Heap_t *prev;
     struct Heap_t *next;
 } Heap;
@@ -225,5 +236,6 @@ void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offs
 void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset);
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+
 
 #endif /* callocator_inl */

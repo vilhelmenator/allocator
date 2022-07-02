@@ -45,7 +45,7 @@ void *alloc_memory_aligned(void *base, uintptr_t end, size_t size, size_t alignm
         goto err;
     }
 
-    if (((uintptr_t)ptr % alignment != 0)) {
+    if ((((uintptr_t)ptr & (alignment - 1)) != 0)) {
         // this should happen very rarely, if at all.
         // release our failed attempt.
         free_memory(ptr, size);
@@ -65,7 +65,7 @@ void *alloc_memory_aligned(void *base, uintptr_t end, size_t size, size_t alignm
         }
 
         // if we got our aligned memory
-        if (((uintptr_t)ptr % alignment) != 0) {
+        if (((uintptr_t)ptr & (alignment - 1)) != 0) {
             goto success;
         }
         // we are still not aligned, but we have an address that is aligned.
@@ -92,10 +92,8 @@ err:
     spinlock_unlock(&alloc_lock);
     return ptr;
 }
-
-static int32_t find_first_nzeros(uintptr_t x, int64_t n)
+static inline int32_t find_first_nones(uintptr_t x, int64_t n)
 {
-    x = ~x;
     int64_t s;
     while (n > 1) {
         s = n >> 1;
@@ -103,6 +101,11 @@ static int32_t find_first_nzeros(uintptr_t x, int64_t n)
         n = n - s;
     }
     return 63 - (x == 0 ? 64 : __builtin_clzll(x));
+}
+
+static inline int32_t find_first_nzeros(uintptr_t x, int64_t n)
+{
+    return find_first_nones(~x, n);
 }
 
 static const uintptr_t _Area_small_area_mask = UINT8_MAX;
