@@ -143,13 +143,21 @@ typedef struct Heap_t
     struct Heap_t *next;
 } Heap;
 */
+typedef struct HeapOffset_t
+{
+    int8_t range;
+    int8_t l3;
+    int8_t l2;
+    int8_t l1;
+} HeapOffset;
+
 typedef struct Heap_t
 {
     uint32_t idx;
     uint32_t num_allocations;
     uint32_t container_exponent;
-    uint32_t previous_l1_offset;
-    uint32_t previous_l2_offset;
+    HeapOffset previous_location; // x, y, z  .. byte per item.
+    uint32_t previous_offset;
     struct Heap_t *prev;
     struct Heap_t *next;
 } Heap;

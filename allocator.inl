@@ -238,6 +238,7 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
     const uint32_t heap_size_cls = size_to_heap(s);
     Queue *queue = &a->part_alloc->heaps[heap_size_cls];
     Heap *start = (Heap *)queue->head;
+    Heap *tail = (Heap *)queue->tail;
     while (start != NULL) {
         Heap *next = start->next;
         if (heap_has_room(start, s)) {
