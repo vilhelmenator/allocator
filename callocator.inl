@@ -156,8 +156,7 @@ typedef struct Heap_t
     uint32_t idx;
     uint32_t num_allocations;
     uint32_t container_exponent;
-    HeapOffset previous_location; // x, y, z  .. byte per item.
-    uint32_t previous_offset;
+    uint64_t previous_l1_offset;
     struct Heap_t *prev;
     struct Heap_t *next;
 } Heap;

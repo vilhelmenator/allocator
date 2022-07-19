@@ -16,8 +16,47 @@
 #define HEAP_BITS_QUAD (HEAP_BITS_PER_RANGE * 4)
 #define HEAP_BITS_GROUP (HEAP_BITS_QUAD/HEAP_BITS_PER_RANGE)
 #define HEAP_BASE_SIZE_EXPONENT 22
+
+/*
+    block. Memory
+    slab. collection of blocks.
+    
+ 
+    top - [a, s, links][a, s, links][a, s, zero] [filter1, filter2]
+    mid - [a, s, links][a, s, zero][p, n, scale]
+    bot - [a, s][ p, n, scale]
+ 
+    find a slab.
+        - if request size is the same as previously.
+            - if we have a cached slab. Allocate from slab if we can.
+        - how big memory are you asking for.
+            - at what level. l1, l2, l3.
+            - the range count.
+            - cache previous size.
+    
+    if size > 64th of heap.
+        - allocate from the top.
+    else
+        - find mid slab with free space.
+            - allocate from the top. 64k.
+ 
+ 
+    find a free slab [ ]
+    get a block from slab [ ]
+        - if fail. goto find.
+ 
+    if slab is full, update parent slab.
+        heap
+            - slab
+                - parent
+    current_slab
+        -next free idx
+        -
+ */
+
 /*
  
+
  heap allocations.
  // Layout
  [L3     ] 1     [(headers 128b)(masks 192b)| data   ]
@@ -249,13 +288,7 @@ Heap* heap_init(uintptr_t base_addr, int32_t idx, size_t heap_size_exponent)
     uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
     //
     h->num_allocations = 0;
-    h->previous_offset = -1;
-    //
-    h->previous_location.range = 0;
-    h->previous_location.l3 = 0;
-    h->previous_location.l2 = 0;
-    h->previous_location.l1 = 0;
-    
+    h->previous_l1_offset = 0;
     // high allocations
     heap_init_head_range(h, mask_offset, (mask_offset + sizeof(uint64_t)*10) - base);
     *(uint64_t*)(mask_offset + sizeof(uint64_t)) = 0;
@@ -476,103 +509,15 @@ uint64_t* heap_get_mask(Heap*h, HeapOffset* hoffset, HeapLevels level)
     return (uint64_t*)offset;
     
 }
-void heap_get_free_idx(Heap*h, uintptr_t base, size_t range, uint32_t* masksoffset, uint32_t *idx)
-{
-    uintptr_t masks = ((uintptr_t)h + sizeof(Heap) + (CACHE_LINE - 1)) & ~(CACHE_LINE - 1);
-    uint64_t *filters = (uint64_t*)(masks + CACHE_LINE);
-    const heap_size_table* stable = get_size_table(h->container_exponent);
-    
-    uint64_t invmask = ~filters[0];
-    uint32_t midx = -1;
-    
-    
-    uint64_t *zmask = (uint64_t*)((uint8_t*)masks[2] + sizeof(uint64_t));
-    uint64_t *l3_reserve = masks[2];
-    while((midx = get_next_mask_idx(invmask, midx+1)) != -1)
-    {
-        
-        uintptr_t base_addr = (base + (midx*stable->sizes[2]));
-        if(midx == 0)
-        {
-            base_addr = (uintptr_t)masks[0];
-        }
-        if(((1UL << (63 - midx)) & *zmask) == 0)
-        {
-            // if it is empty... we can safely just get the first available.
-            heap_init_zero(base_addr);
-            heap_init_zero(base_addr +sizeof(int64_t)*3);
-            *zmask = *zmask | (1UL << (63 - midx));
-        }
-        
-        uintptr_t binvmask = ~*(uint64_t*)(base_addr + sizeof(uint64_t));
-        uint32_t bidx = -1;
-        while((bidx = get_next_mask_idx(binvmask, bidx+1)) != -1)
-        {
-            uintptr_t sub_base_addr = (base_addr + (bidx*stable->sizes[1]));
-            int32_t idx = 0;
-            if(midx != 0)
-            {
-                uint64_t *bzmask = (uint64_t*)((uint8_t*)base_addr +sizeof(int64_t)*4);
-                if(((1UL << (63 - bidx)) & *bzmask) == 0)
-                {
-                    // if it is empty... we can safely just get the first available.
-                    idx = heap_init_head_range(h, sub_base_addr, sizeof(uint64_t)*6);
-                    *bzmask = *bzmask | (1UL << (63 - bidx));
-                }
-                else
-                {
-                    idx = find_first_nzeros(*(uint64_t*)sub_base_addr, range);
-                }
-            }
-            else
-            {
-                idx = find_first_nzeros(*(uint64_t*)sub_base_addr, range);
-            }
-            
-            
-            if(idx != -1)
-            {
-                uintptr_t mask = reserve_range_idx(range, idx);
-                *(uint64_t*)sub_base_addr |= mask;
-                idx = 63 - idx;
-                if(range > 1)
-                {
-                    *(uint64_t*)(sub_base_addr+sizeof(uint64_t)) |= apply_range((uint32_t)range, idx);
-                }
-                h->num_allocations++;
-                *l3_reserve = *l3_reserve | (1UL << (63 -  midx));
-                if(*(uint64_t*)sub_base_addr == UINT64_MAX)
-                {
-                    uint64_t* scmask = (uint64_t*)(base_addr + sizeof(uint64_t));
-                    *scmask = *scmask | (1UL << (63 -  bidx));
-                    if(*(uint64_t*)scmask == UINT64_MAX)
-                    {
-                        filters[0] = filters[0] | (1UL << (63 -  midx));
-                    }
-                }
-                h->previous_l1_offset = sub_base_addr;
-                if(h->previous_l1_offset == (uintptr_t)masks[0])
-                {
-                    return (void*)(base + (idx*stable->sizes[0]));
-                }
-                else
-                {
-                    return (void*)(h->previous_l1_offset + (idx*stable->sizes[0]));
-                }
-            }
-        }
-    }
-    h->previous_l1_offset  = 0;
-    return NULL;
-}
-HeapOffset heap_get_block_L1(Heap*h, uintptr_t base, size_t range, uint64_t** masks)
+
+void* heap_get_block_L1(Heap*h, uintptr_t base, size_t range, uint64_t** masks)
 {
     uint64_t *filters = (uint64_t*)((uint8_t*)masks[0] + CACHE_LINE);
     const heap_size_table* stable = get_size_table(h->container_exponent);
     
-    if(h->previous_offset != -1)
+    if(h->previous_l1_offset != -1)
     {
-        uint64_t* offset = (uint64_t*)((uintptr_t)h + (uintptr_t)h->previous_offset);
+        uint64_t* offset = (uint64_t*)((uintptr_t)h + (uintptr_t)h->previous_l1_offset);
         int32_t idx = find_first_nzeros(*offset, range);
         if(idx != -1)
         {
@@ -611,7 +556,7 @@ HeapOffset heap_get_block_L1(Heap*h, uintptr_t base, size_t range, uint64_t** ma
                 return (void*)(offset + (idx*stable->sizes[0]));
             }
         }
-        h->previous_offset = -1;
+        h->previous_l1_offset = -1;
     }
     
     uint64_t invmask = ~filters[0];
