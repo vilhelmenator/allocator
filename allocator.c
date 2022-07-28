@@ -386,7 +386,7 @@ void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
     queue->head = (uintptr_t)curr;
 }
 
-extern inline void allocator_flush_thread_free_queue(Allocator *a)
+static inline void allocator_flush_thread_free_queue(Allocator *a)
 {
     message_queue *q = a->part_alloc->thread_free_queue;
     if (q->head != q->tail) {
@@ -394,7 +394,7 @@ extern inline void allocator_flush_thread_free_queue(Allocator *a)
     }
 }
 
-extern inline void *allocator_try_malloc(Allocator *a, size_t as)
+static inline void *allocator_try_malloc(Allocator *a, size_t as)
 {
     if (as <= LARGE_OBJECT_SIZE) {
         return allocator_alloc_from_pool(a, as);
