@@ -31,9 +31,18 @@
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
+
+#define CACHE_LINE 64
+#if defined(WINDOWS)
+#define cache_align __declspec(align(CACHE_LINE))
+#else
+#define cache_align __attribute__((aligned(CACHE_LINE)))
+#endif
+
 #define ALIGN(x) ((MAX(x, 1) + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
 #define ALIGN4(x) ((MAX(x, 1) + 3) & ~(3))
 #define ALIGN_CACHE(x) ((x + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
+
 
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 typedef enum AreaType_t {
@@ -127,7 +136,7 @@ typedef struct Pool_t
     struct Pool_t *prev;
     struct Pool_t *next;
 } Pool;
-/*
+
 typedef struct Heap_t
 {
     int32_t idx;           // index into the parent section/if in a section.
@@ -142,24 +151,6 @@ typedef struct Heap_t
     struct Heap_t *prev;
     struct Heap_t *next;
 } Heap;
-*/
-typedef struct HeapOffset_t
-{
-    int8_t range;
-    int8_t l3;
-    int8_t l2;
-    int8_t l1;
-} HeapOffset;
-
-typedef struct Heap_t
-{
-    uint32_t idx;
-    uint32_t num_allocations;
-    uint32_t container_exponent;
-    uint64_t previous_l1_offset;
-    struct Heap_t *prev;
-    struct Heap_t *next;
-} Heap;
 
 typedef struct HeapBlock_t
 {
@@ -171,6 +162,15 @@ typedef struct QNode_t
     void *prev;
     void *next;
 } QNode;
+
+typedef struct Arena_t
+{
+    uint32_t num_allocations;
+    uint32_t container_exponent;
+    uint64_t previous_l1_offset;
+    struct Arena_t *prev;
+    struct Arena_t *next;
+} Arena;
 
 typedef struct Partition_t
 {
@@ -228,21 +228,34 @@ typedef struct Allocator_t
     uintptr_t cached_pool_end;
 } Allocator;
 
-// os wrappers
-bool commit_memory(void *base, size_t size);
-bool decommit_memory(void *base, size_t size);
-bool free_memory(void *ptr, size_t size);
-bool release_memory(void *ptr, size_t size, bool commit);
-void *alloc_memory(void *base, size_t size, bool commit);
-bool reset_memory(void *base, size_t size);
-bool protect_memory(void *addr, size_t size, bool protect);
-size_t get_os_page_size(void);
-
 // list utilities
 void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset);
 void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset);
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+
+static inline int32_t find_first_nones(uintptr_t x, int64_t n)
+{
+    int64_t s;
+    while (n > 1) {
+        s = n >> 1;
+        x = x & (x << s);
+        n = n - s;
+    }
+    return 63 - (x == 0 ? 64 : __builtin_clzll(x));
+}
+
+static inline int32_t find_first_nzeros(uintptr_t x, int64_t n) { return find_first_nones(~x, n); }
+static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
+{
+    uint64_t msk_cpy = mask << cidx;
+    if (msk_cpy == 0 || (cidx > 63)) {
+        return -1;
+    }
+    return __builtin_clzll(msk_cpy) + cidx;
+}
+
+
 
 
 #endif /* callocator_inl */

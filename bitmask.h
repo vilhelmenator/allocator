@@ -1,8 +1,7 @@
-
-#ifndef bitmask_inl
-#define bitmask_inl
-
+#ifndef BITMASK_H
+#define BITMASK_H
 #include "callocator.inl"
+
 
 static inline bool bitmask_is_set_hi(const Bitmask *bm, uint8_t bit) { return bm->_w32[1] & ((uint32_t)1 << bit); }
 static inline bool bitmask_is_set_lo(const Bitmask *bm, uint8_t bit) { return bm->_w32[0] & ((uint32_t)1 << bit); }
@@ -43,4 +42,5 @@ static inline int8_t bitmask_allocate_bit_lo(Bitmask *bm)
     return fidx;
 }
 
-#endif // bitmask_inl
+
+#endif

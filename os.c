@@ -6,34 +6,7 @@
 //  Copyright © 2022 Vilhelm Sævarsson. All rights reserved.
 //
 
-#ifndef os_inl
-#define os_inl
-
-#include "callocator.inl"
-
-#if defined(_MSC_VER)
-#define WINDOWS
-#endif
-#if defined(WINDOWS)
-#include <intrin.h>
-#include <memoryapi.h>
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach/mach.h>
-#include <mach/vm_map.h>
-#include <sys/mman.h>
-#include <unistd.h>
-#else
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
-
-#define CACHE_LINE 64
-#if defined(WINDOWS)
-#define cache_align __declspec(align(CACHE_LINE))
-#else
-#define cache_align __attribute__((aligned(CACHE_LINE)))
-#endif
+#include "os.h"
 
 bool commit_memory(void *base, size_t size)
 {
@@ -152,69 +125,3 @@ bool remap_memory(void *old_addr, void *new_addr, size_t size)
 #endif
     return false;
 }
-
-size_t get_os_page_size(void)
-{
-#ifdef WINDOWS
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    return si.dwPageSize;
-#else
-    return sysconf(_SC_PAGESIZE);
-#endif
-}
-
-static uintptr_t main_thread_id = 0;
-static inline uintptr_t get_thread_id(void)
-{
-#if defined(WINDOWS)
-    return (uintptr_t)NtCurrentTeb();
-#elif defined(__GNUC__)
-    void *res;
-    const size_t ofs = 0;
-#if defined(__APPLE__)
-#if defined(__x86_64__)
-    __asm__("movq %%gs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
-#elif defined(__aarch64__)
-    void **tcb;
-    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tcb));
-    tcb = (void **)((uintptr_t)tcb & ~0x07UL);
-    res = *tcb;
-#endif
-#elif defined(__x86_64__)
-    __asm__("movq %%fs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
-#endif
-    return (uintptr_t)res;
-#else
-    return (uintptr_t)&thread_instance;
-#endif
-}
-// Allocating memory from the OS that will not conflict with any memory region
-// of the allocator.
-static spinlock os_alloc_lock = {0};
-static uintptr_t os_alloc_hint = (uintptr_t)64 << 40;
-void *cmalloc_os(size_t size)
-{
-    // align size to page size
-    size += CACHE_LINE;
-    size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
-
-    // look the counter while fetching our os memory.
-    spinlock_lock(&os_alloc_lock);
-    void *ptr = alloc_memory((void *)os_alloc_hint, size, true);
-    os_alloc_hint = (uintptr_t)ptr + size;
-    if (os_alloc_hint >= (uintptr_t)127 << 40) {
-        // something has been running for a very long time!
-        os_alloc_hint = (uintptr_t)64 << 40;
-    }
-    spinlock_unlock(&os_alloc_lock);
-
-    // write the allocation header
-    uint64_t *_ptr = (uint64_t *)ptr;
-    *_ptr = (uint64_t)(uintptr_t)ptr + CACHE_LINE;
-    *(++_ptr) = size;
-
-    return (void *)((uintptr_t)ptr + CACHE_LINE);
-}
-
-#endif /* os_inl */

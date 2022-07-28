@@ -1,12 +1,16 @@
 
-#ifndef allocator_inl
-#define allocator_inl
 
-#include "os.inl"
-#include "partition_allocator.inl"
+#include "allocator.h"
+#include "partition_allocator.h"
+#include "pool.h"
+#include "heap.h"
+#include "os.h"
 
-static int64_t *partition_owners = NULL;
-static Allocator **allocator_list = NULL;
+#include "../cthread/cthread.h"
+
+extern PartitionAllocator **partition_allocators;
+int64_t *partition_owners = NULL;
+Allocator **allocator_list = NULL;
 
 static const int32_t thread_message_imit = 100;
 
@@ -59,7 +63,7 @@ void release_partition_set(const int32_t idx)
     }
 }
 
-static Allocator *allocator_aquire(size_t idx)
+Allocator *allocator_aquire(size_t idx)
 {
     if (allocator_list[idx] == NULL) {
         PartitionAllocator *part_alloc = partition_allocator_aquire(idx);
@@ -69,7 +73,7 @@ static Allocator *allocator_aquire(size_t idx)
     return allocator_list[idx];
 }
 
-static void allocator_set_cached_pool(Allocator *a, Pool *p)
+void allocator_set_cached_pool(Allocator *a, Pool *p)
 {
     if (p == a->cached_pool) {
         return;
@@ -238,7 +242,6 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
     const uint32_t heap_size_cls = size_to_heap(s);
     Queue *queue = &a->part_alloc->heaps[heap_size_cls];
     Heap *start = (Heap *)queue->head;
-    Heap *tail = (Heap *)queue->tail;
     while (start != NULL) {
         Heap *next = start->next;
         if (heap_has_room(start, s)) {
@@ -335,7 +338,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     return pool_get_free_block(start);
 }
 
-void _free_extended_part(size_t pid, void *p)
+static void _free_extended_part(size_t pid, void *p)
 {
     if (((uintptr_t)p & (os_page_size - 1)) != 0) {
         return;
@@ -366,28 +369,7 @@ static void _allocator_free(Allocator *a, void *p)
     }
 }
 
-static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
 
-static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
-static Allocator *main_instance = NULL;
-static tls_t _thread_key = (tls_t)(-1);
-static void thread_done(void *a)
-{
-    if (a != NULL) {
-        Allocator *alloc = (Allocator *)a;
-        release_partition_set((int32_t)alloc->idx);
-    }
-}
-
-static Allocator *init_thread_instance(void)
-{
-    int32_t idx = reserve_any_partition_set();
-    Allocator *new_alloc = allocator_list[idx];
-    new_alloc->part_alloc = partition_allocators[idx];
-    thread_instance = new_alloc;
-    tls_set(_thread_key, new_alloc);
-    return new_alloc;
-}
 
 void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 {
@@ -404,7 +386,7 @@ void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
     queue->head = (uintptr_t)curr;
 }
 
-static inline void allocator_flush_thread_free_queue(Allocator *a)
+extern inline void allocator_flush_thread_free_queue(Allocator *a)
 {
     message_queue *q = a->part_alloc->thread_free_queue;
     if (q->head != q->tail) {
@@ -412,7 +394,7 @@ static inline void allocator_flush_thread_free_queue(Allocator *a)
     }
 }
 
-static inline void *allocator_try_malloc(Allocator *a, size_t as)
+extern inline void *allocator_try_malloc(Allocator *a, size_t as)
 {
     if (as <= LARGE_OBJECT_SIZE) {
         return allocator_alloc_from_pool(a, as);
@@ -598,5 +580,3 @@ size_t allocator_get_allocation_size(Allocator *a, void *p)
     }
     return 0;
 }
-
-#endif /* allocator_inl */

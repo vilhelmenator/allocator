@@ -1,7 +1,37 @@
 
+#include "callocator.inl"
+#include "allocator.h"
+#include "os.h"
+#include "area.h"
+#include "partition_allocator.h"
 #include "../cthread/cthread.h"
 
-#include "allocator.inl"
+extern PartitionAllocator **partition_allocators;
+extern int64_t *partition_owners;
+uintptr_t main_thread_id;
+extern Allocator **allocator_list;
+static Allocator *main_instance = NULL;
+static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
+
+static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
+static tls_t _thread_key = (tls_t)(-1);
+static void thread_done(void *a)
+{
+    if (a != NULL) {
+        Allocator *alloc = (Allocator *)a;
+        release_partition_set((int32_t)alloc->idx);
+    }
+}
+
+static Allocator *init_thread_instance(void)
+{
+    int32_t idx = reserve_any_partition_set();
+    Allocator *new_alloc = allocator_list[idx];
+    new_alloc->part_alloc = partition_allocators[idx];
+    thread_instance = new_alloc;
+    tls_set(_thread_key, new_alloc);
+    return new_alloc;
+}
 
 void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
@@ -232,4 +262,32 @@ void *crealloc(void *p, size_t s)
     cfree(p);
 
     return new_ptr;
+}
+
+// Allocating memory from the OS that will not conflict with any memory region
+// of the allocator.
+static spinlock os_alloc_lock = {0};
+static uintptr_t os_alloc_hint = (uintptr_t)64 << 40;
+void *cmalloc_os(size_t size)
+{
+    // align size to page size
+    size += CACHE_LINE;
+    size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
+
+    // look the counter while fetching our os memory.
+    spinlock_lock(&os_alloc_lock);
+    void *ptr = alloc_memory((void *)os_alloc_hint, size, true);
+    os_alloc_hint = (uintptr_t)ptr + size;
+    if (os_alloc_hint >= (uintptr_t)127 << 40) {
+        // something has been running for a very long time!
+        os_alloc_hint = (uintptr_t)64 << 40;
+    }
+    spinlock_unlock(&os_alloc_lock);
+
+    // write the allocation header
+    uint64_t *_ptr = (uint64_t *)ptr;
+    *_ptr = (uint64_t)(uintptr_t)ptr + CACHE_LINE;
+    *(++_ptr) = size;
+
+    return (void *)((uintptr_t)ptr + CACHE_LINE);
 }
