@@ -706,7 +706,7 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
     MEASURE_TIME(allocator, cmalloc, {
         for (uint64_t j = 0; j < num_loops; j++) {
             for (uint64_t i = 0; i < num_items; i++) {
-                variables[i] = (char *)cmalloc_from_heap(alloc_size);
+                variables[i] = (char *)cmalloc(alloc_size);
             }
             for (uint64_t i = 0; i < num_items; i++) {
                 cfree(variables[i]);
