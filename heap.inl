@@ -7,6 +7,7 @@
 #define DSIZE 8
 #define HEADER_OVERHEAD 4
 #define HEADER_FOOTER_OVERHEAD 8
+/*
 #define HEAP_PARTS 64
 #define HEAP_AVAIL_1 3
 #define HEAP_AVAIL_2 4
@@ -15,8 +16,9 @@
 #define HEAP_BITS_PER_RANGE 6
 #define HEAP_BITS_QUAD (HEAP_BITS_PER_RANGE * 4)
 #define HEAP_BITS_GROUP (HEAP_BITS_QUAD/HEAP_BITS_PER_RANGE)
+*/
 /*
- 
+
  heap allocations.
  // Layout
  [L3     ] 1     [(headers 128b)(masks 192b)| data   ]
@@ -69,6 +71,7 @@
  // if mask empty : free L2 at L2 root ( 1 bit )
  // if L2 mask empty from previous step: free L3 at L3 root ( 1 bit )
  */
+/*
 const uint32_t new_heap_container_overhead = HEAP_PARTS + HEAP_PARTS*HEAP_PARTS + HEAP_PARTS*HEAP_PARTS*HEAP_PARTS;
 const uint32_t new_heap_level_size[] = {0, HEAP_PARTS, HEAP_PARTS*HEAP_PARTS};
 const uint32_t new_heap_level_offset[] = { 0, HEAP_PARTS, HEAP_PARTS+HEAP_PARTS*HEAP_PARTS};
@@ -122,16 +125,8 @@ static inline uintptr_t new_heap_get_mask_addr(Heap* h, size_t i, size_t j)
 static inline uintptr_t new_heap_get_data_addr(Heap* h, size_t i, size_t j, size_t k)
 {
     uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
-    return base + (1 << (h->container_exponent - 6))*i + (1 << ((h->container_exponent - 12)))*j + (1 << (h->container_exponent - 18))*k;
-}
-
-static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
-{
-    uint64_t msk_cpy = mask << cidx;
-    if (msk_cpy == 0 || (cidx > 63)) {
-        return -1;
-    }
-    return __builtin_clzll(msk_cpy) + cidx;
+    return base + (1 << (h->container_exponent - 6))*i + (1 << ((h->container_exponent - 12)))*j + (1 <<
+(h->container_exponent - 18))*k;
 }
 
 static inline uintptr_t reserve_range_idx(size_t range, size_t idx){
@@ -161,7 +156,7 @@ uint64_t new_heap_init_head_range(Heap* nheap, uintptr_t mask_offset)
 
 Heap* heap_init(uintptr_t base_addr, int32_t idx, size_t heap_size_exponent)
 {
-    
+
     Heap* nheap = (Heap*)base_addr;
     nheap->idx = idx;
     nheap->container_exponent = (uint32_t)heap_size_exponent;
@@ -192,7 +187,7 @@ Heap* heap_init(uintptr_t base_addr, int32_t idx, size_t heap_size_exponent)
         *(uint64_t*)mask_offset = 0;
         *(uint64_t*)(mask_offset + sizeof(uint64_t)) = 0;
     }
-    
+
     return nheap;
 }
 
@@ -207,7 +202,7 @@ bool heap_has_room(Heap*h, size_t size)
         (uint64_t*)mask_offset,
         (uint64_t*)(mask_offset + CACHE_LINE),
         (uint64_t*)(mask_offset + CACHE_LINE*2)};
-        
+
     if((*masks[0] == UINT64_MAX) && (*masks[1] == UINT64_MAX) && (*masks[2] == UINT64_MAX))
     {
         return false;
@@ -230,7 +225,7 @@ bool heap_has_room(Heap*h, size_t size)
             limit = 1 << (h->container_exponent - 6);
         }
     }
-    
+
     if(size > limit)
     {
         return false;
@@ -246,14 +241,14 @@ void* heap_get_block(Heap*h, size_t size)
         (h->container_exponent - 12),
         (h->container_exponent - 6),
         (h->container_exponent)};
-    
+
     const uint64_t level_sizes[] = {
         (1 << level_exponents[0]),
         (1 << level_exponents[1]),
         (1 << level_exponents[2]),
         (1 << level_exponents[3])
     };
-    
+
     uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
     uintptr_t mask_offset = ((uintptr_t)h + sizeof(Heap) + (CACHE_LINE - 1)) & ~(CACHE_LINE - 1);
     uintptr_t data_offset = mask_offset + CACHE_LINE*3;
@@ -262,12 +257,12 @@ void* heap_get_block(Heap*h, size_t size)
         (uint64_t*)mask_offset,
         (uint64_t*)(mask_offset + CACHE_LINE),
         (uint64_t*)(mask_offset + CACHE_LINE*2)};
-        
+
     if((*masks[0] == UINT64_MAX) && (*masks[1] == UINT64_MAX) && (*masks[2] == UINT64_MAX))
     {
         return NULL;
     }
-    
+
     size_t limit = end_offset - data_offset;
     if((*masks[1] == UINT64_MAX) || (*masks[2] == UINT64_MAX))
     {
@@ -286,12 +281,12 @@ void* heap_get_block(Heap*h, size_t size)
             limit = level_sizes[2];
         }
     }
-    
+
     if(size > limit)
     {
         return NULL;
     }
-    
+
     int32_t level_idx = 2;
     int32_t midx = 0;
     uint64_t invmask = 0;
@@ -307,8 +302,8 @@ void* heap_get_block(Heap*h, size_t size)
         invmask = ~*(masks[level_idx] + sizeof(uint64_t));
         midx = get_next_mask_idx(invmask, 0);
     }
-    
-    
+
+
     size_t range = size >> level_exponents[level_idx];
     range += (size & (level_sizes[level_idx] - 1)) ? 1 : 0;
     uint32_t pidx = midx;
@@ -328,10 +323,10 @@ void* heap_get_block(Heap*h, size_t size)
             if(*base_mask == UINT64_MAX)
             {
 
-                
+
                 for(int32_t i = 0; i < level_idx - 1; i++)
                 {
-                    
+
                 }
                 h->filter_l[0] |= (1UL << (63 - pidx));
                 h->filter_l[1] |= (1UL << (63 - pidx));
@@ -382,7 +377,7 @@ void* heap_get_block(Heap*h, size_t size)
                 h->num_allocations++;
                 return (void*)(base_addr + (idx*level_sizes[level_idx]));
             }
-        
+
             midx = get_next_mask_idx(invmask, midx+1);
         }while(midx != -1);
 
@@ -423,7 +418,7 @@ void* heap_get_block(Heap*h, size_t size)
                 h->num_allocations++;
                 return (void*)(base_addr + (idx*level_sizes[level_idx]));
             }
-        
+
             midx = get_next_mask_idx(invmask, midx+1);
         }while(midx != -1);
 
@@ -438,17 +433,17 @@ void heap_free(Heap*h, void*p, bool dummy)
         (h->container_exponent - 12),
         (h->container_exponent - 6),
         (h->container_exponent)};
-    
+
     const uint64_t level_sizes[] = {
         (1 << level_exponents[0]),
         (1 << level_exponents[1]),
         (1 << level_exponents[2]),
         (1 << level_exponents[3])};
-    
+
     uintptr_t pmask = ((uintptr_t)p & ~(level_sizes[2] - 1));
     ptrdiff_t pdiff = (uint8_t *)p - (uint8_t *)pmask;
     uint32_t pidx = (uint32_t)((size_t)pdiff >> level_exponents[2]);
-    
+
     for(int i = 0; i < 3; i++)
     {
         if(((uintptr_t)p & (level_sizes[i] - 1)) == 0)
@@ -494,13 +489,13 @@ static size_t heap_get_block_size(Heap *h, void *p)
         (h->container_exponent - 6),
         (h->container_exponent - 12),
         (h->container_exponent - 18)};
-    
+
     const uint64_t level_sizes[] = {
         (1 << level_exponents[0]),
         (1 << level_exponents[1]),
         (1 << level_exponents[2]),
         (1 << level_exponents[3])};
-    
+
     for(int i = 1; i < 4; i++)
     {
         if(((uintptr_t)p & (level_sizes[i] - 1)) == 0)
@@ -515,13 +510,14 @@ static size_t heap_get_block_size(Heap *h, void *p)
                 uintptr_t mask_offset = ((uintptr_t)h + sizeof(Heap) + (CACHE_LINE - 1)) & ~(CACHE_LINE - 1);
                 mask = mask_offset + (i - 1)*CACHE_LINE;
             }
-            
+
             uint32_t range = new_heap_get_range_for_index(mask, idx);
             return level_sizes[i]*range;
         }
     }
     return 0;
 }
+*/
 /*
     - sizelimits (4m / 64 == 64k)
                 base_size = area_size/64
@@ -532,7 +528,7 @@ static size_t heap_get_block_size(Heap *h, void *p)
         - >= 64k gets 64k piece
           <  64k get 1k pieces.
  -
- 
+
  [Area|Section 48 bytes ] 4M
  64 bytes
  64 * 64 bytes 4k.
@@ -584,8 +580,7 @@ static inline uint8_t size_to_heap(const size_t as)
         return 4; // 256Mb pages
     }
 }
-bool heap_is_connected(const Heap *h) { return h->prev != NULL || h->next != NULL; }
-/*
+
 static inline uint32_t heap_block_get_header(HeapBlock *hb) { return *(uint32_t *)((uint8_t *)&hb->data - WSIZE); }
 
 static inline void heap_block_set_header(HeapBlock *hb, const uint32_t s, const uint32_t v, const uint32_t pa)
@@ -869,5 +864,5 @@ static void heap_init(Heap *h, int8_t pidx, const size_t psize)
     h->prev = NULL;
     heap_extend(h);
 }
-*/
+
 #endif /* heap_h */

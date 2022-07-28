@@ -10,7 +10,14 @@
 #define area_inl
 
 #include "bitmask.inl"
-
+static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
+{
+    uint64_t msk_cpy = mask << cidx;
+    if (msk_cpy == 0 || (cidx > 63)) {
+        return -1;
+    }
+    return __builtin_clzll(msk_cpy) + cidx;
+}
 static bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
 {
     if (base == ptr) {
@@ -103,10 +110,7 @@ static inline int32_t find_first_nones(uintptr_t x, int64_t n)
     return 63 - (x == 0 ? 64 : __builtin_clzll(x));
 }
 
-static inline int32_t find_first_nzeros(uintptr_t x, int64_t n)
-{
-    return find_first_nones(~x, n);
-}
+static inline int32_t find_first_nzeros(uintptr_t x, int64_t n) { return find_first_nones(~x, n); }
 
 static const uintptr_t _Area_small_area_mask = UINT8_MAX;
 static const uintptr_t _Area_medium_area_mask = UINT16_MAX;

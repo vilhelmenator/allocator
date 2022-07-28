@@ -94,7 +94,7 @@ static Area *partition_allocator_get_next_area(Partition *area_queue, uint64_t s
     size_t type_exponent = area_type_to_exponent[area_queue->type];
     size_t type_size = area_type_to_size[area_queue->type];
     size_t range = size >> type_exponent;
-    range += (size & (1 << type_exponent) - 1) ? 1 : 0;
+    range += (size & ((1 << type_exponent) - 1)) ? 1 : 0;
     size = type_size * range;
     int32_t idx = find_first_nzeros(area_queue->area_mask, range);
     if (idx == -1) {
