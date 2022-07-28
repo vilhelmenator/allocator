@@ -238,7 +238,7 @@ Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st
 
 void *allocator_alloc_from_heap(Allocator *a, const size_t s)
 {
-    const uint32_t heap_sizes[] = {HT_4M, 1 << HT_32M, 1 << HT_64M, 1 << HT_128M, 1 << HT_256M};
+    const uint32_t heap_sizes[] = {1 << HT_4M, 1 << HT_32M, 1 << HT_64M, 1 << HT_128M, 1 << HT_256M};
     const uint32_t heap_size_cls = size_to_heap(s);
     Queue *queue = &a->part_alloc->heaps[heap_size_cls];
     Heap *start = (Heap *)queue->head;
