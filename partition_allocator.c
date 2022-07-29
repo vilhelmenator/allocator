@@ -1,6 +1,5 @@
 
 #include "partition_allocator.h"
-#include "area.h"
 #include "section.h"
 #include "os.h"
 

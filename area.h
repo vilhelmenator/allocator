@@ -8,7 +8,6 @@
 #ifndef AREA_H
 #define AREA_H
 
-
 #include "callocator.inl"
 #include "bitmask.h"
 static cache_align const uintptr_t area_type_to_exponent[] = {

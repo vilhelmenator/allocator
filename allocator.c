@@ -113,7 +113,7 @@ void allocator_thread_enqueue(message_queue *queue, message *first, message *las
                           memory_order_release); // prev.next = first
 }
 
-void allocator_flush_thread_free(Allocator *a)
+static inline void allocator_flush_thread_free(Allocator *a)
 {
     if (a->thread_free_part_alloc != NULL) {
         // get the first and last item of the tf queue
@@ -293,7 +293,7 @@ void *allocator_alloc_slab(Allocator *a, const size_t s)
     return (void *)((uintptr_t)area + sizeof(Area));
 }
 
-Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s)
+static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s)
 {
     Section *sfree_section = allocator_get_free_section(a, s, get_pool_size_class(s));
     if (sfree_section == NULL) {
@@ -338,7 +338,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     return pool_get_free_block(start);
 }
 
-static void _free_extended_part(size_t pid, void *p)
+void _free_extended_part(size_t pid, void *p)
 {
     if (((uintptr_t)p & (os_page_size - 1)) != 0) {
         return;
@@ -354,7 +354,7 @@ static void _free_extended_part(size_t pid, void *p)
     }
 }
 
-static void _allocator_free(Allocator *a, void *p)
+static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
     if (allocator_check_cached_pool(a, p)) {
         pool_free_block(a->cached_pool, p);

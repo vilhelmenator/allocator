@@ -21,7 +21,7 @@ int8_t area_get_section_count(Area *a)
         return 1;
     }
 }
-static bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
+static inline bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
 {
     if (base == ptr) {
         return true;

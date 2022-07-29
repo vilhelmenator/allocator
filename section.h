@@ -8,7 +8,6 @@
 #ifndef SECTION_H
 #define SECTION_H
 #include "area.h"
-#include "bitmask.h"
 #include "callocator.inl"
 
 static cache_align const uintptr_t size_clss_to_exponent[] = {

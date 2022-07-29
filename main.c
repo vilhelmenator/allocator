@@ -758,7 +758,7 @@ void test_new_heap(void)
 }
 int main()
 {
-    // test_new_heap();
+    test_new_heap();
     //  thrd_t trd;
     //  thrd_create(&trd, &test, NULL);
     //  blach();
@@ -769,7 +769,7 @@ int main()
     //  cfree(m);
 
     for (int i = 0; i < 14; i++) {
-        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+        //test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     }
     size_t item_count = 100;
     for (int i = 0; i < 6; i++) {

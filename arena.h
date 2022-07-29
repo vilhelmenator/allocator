@@ -10,8 +10,8 @@
 #define ARENA_H
 
 #include "callocator.inl"
-
 #include <stdio.h>
+
 #define WSIZE 4
 #define DSIZE 8
 #define HEADER_OVERHEAD 4
@@ -211,25 +211,7 @@ int32_t arena_init_head_range(Arena *h, uintptr_t mask_offset, size_t size);
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent);
 
 bool arena_has_room(Arena *h, size_t size);
-
-void *arena_get_block_L3(Arena *h, uintptr_t base, size_t range, uint64_t **masks);
-
-void *arena_get_block_L2(Arena *h, uintptr_t base, size_t range, uint64_t **masks);
-
-void *arena_get_block_L1(Arena *h, uintptr_t base, size_t range, uint64_t **masks);
-
-void *arena_get_block_at(Arena *h, size_t l3idx, size_t l2idx, size_t l1idx);
-
 void *arena_get_block(Arena *h, size_t size);
-
-void arena_reset_L3(Arena *h, uintptr_t sub_mask, bool needs_zero);
-
-void arena_free_L3(Arena *h, void *p, uintptr_t mask, uintptr_t sub_mask);
-
-void arena_free_L2(Arena *h, void *p, uintptr_t mask, uintptr_t sub_mask, uintptr_t root_mask, uint32_t ridx,
-                   bool needs_zero);
-void arena_free_L1(Arena *h, void *p, uintptr_t mask, uintptr_t sub_mask, uintptr_t root_mask, uint32_t ridx);
-
 void arena_free(Arena *h, void *p, bool dummy);
 
 size_t arena_get_block_size(Arena *h, void *p);
