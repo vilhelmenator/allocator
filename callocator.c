@@ -8,7 +8,7 @@
 
 extern PartitionAllocator **partition_allocators;
 extern int64_t *partition_owners;
-uintptr_t main_thread_id;
+static uintptr_t main_thread_id;
 extern Allocator **allocator_list;
 static Allocator *main_instance = NULL;
 static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
@@ -36,10 +36,10 @@ static Allocator *init_thread_instance(void)
 void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
-    tn->next = tq->head;
-    tn->prev = NULL;
     if (tq->head != NULL) {
+        QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
+        tn->next = tq->head;
+        tn->prev = NULL;
         QNode *temp = (QNode *)((uint8_t *)tq->head + prev_offset);
         temp->prev = node;
         tq->head = node;
@@ -52,20 +52,30 @@ void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offse
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
     QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
-    if (tn->prev != NULL) {
-        QNode *temp = (QNode *)((uint8_t *)tn->prev + prev_offset);
-        temp->next = tn->next;
+    
+    if(tq->head == tq->tail)
+    {
+        tq->head = NULL;
+        tq->tail = NULL;
     }
-    if (tn->next != NULL) {
-        QNode *temp = (QNode *)((uint8_t *)tn->next + prev_offset);
-        temp->prev = tn->prev;
+    else
+    {
+        if (tn->prev != NULL) {
+            QNode *temp = (QNode *)((uint8_t *)tn->prev + prev_offset);
+            temp->next = tn->next;
+        }
+        if (tn->next != NULL) {
+            QNode *temp = (QNode *)((uint8_t *)tn->next + prev_offset);
+            temp->prev = tn->prev;
+        }
+        if (node == tq->head) {
+            tq->head = tn->next;
+        }
+        else if (node == tq->tail) {
+            tq->tail = tn->prev;
+        }
     }
-    if (node == tq->head) {
-        tq->head = tn->next;
-    }
-    if (node == tq->tail) {
-        tq->tail = tn->prev;
-    }
+    
     tn->next = NULL;
     tn->prev = NULL;
 }
