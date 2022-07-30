@@ -230,7 +230,21 @@ typedef struct Allocator_t
 } Allocator;
 
 // list utilities
-void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset);
+static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
+{
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    if (tq->head != NULL) {
+        QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
+        tn->next = tq->head;
+        tn->prev = NULL;
+        QNode *temp = (QNode *)((uint8_t *)tq->head + prev_offset);
+        temp->prev = node;
+        tq->head = node;
+    } else {
+        tq->tail = tq->head = node;
+    }
+}
+
 void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset);
 
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
@@ -256,8 +270,6 @@ static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
     }
     return __builtin_clzll(msk_cpy) + cidx;
 }
-
-
 
 
 #endif /* callocator_inl */

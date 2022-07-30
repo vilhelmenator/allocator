@@ -3,19 +3,7 @@
 #include "../cthread/cthread.h"
 #include "os.h"
 
-int8_t area_get_section_count(Area *a)
-{
-    const AreaType at = area_get_type(a);
-    if (at == AT_FIXED_32) {
-        return 8;
-    } else if (at == AT_FIXED_64) {
-        return 16;
-    } else if (at == AT_FIXED_128) {
-        return 32;
-    } else {
-        return 1;
-    }
-}
+
 static inline bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
 {
     if (base == ptr) {
@@ -96,22 +84,4 @@ success:
 err:
     spinlock_unlock(&alloc_lock);
     return ptr;
-}
-
-static const uintptr_t _Area_small_area_mask = UINT8_MAX;
-static const uintptr_t _Area_medium_area_mask = UINT16_MAX;
-static const uintptr_t _Area_large_area_mask = UINT32_MAX;
-
-bool area_is_full(const Area *a)
-{
-    if (bitmask_is_full_hi(&a->active_mask)) {
-        return true;
-    }
-    if (area_get_type(a) == AT_FIXED_32) {
-        return ((a->active_mask.whole >> 32) & _Area_small_area_mask) == _Area_small_area_mask;
-    } else if (area_get_type(a) == AT_FIXED_64) {
-        return ((a->active_mask.whole >> 32) & _Area_medium_area_mask) == _Area_medium_area_mask;
-    } else {
-        return ((a->active_mask.whole >> 32) & _Area_large_area_mask) == _Area_large_area_mask;
-    }
 }

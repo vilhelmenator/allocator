@@ -172,13 +172,13 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     free_memory(a, area_get_size(a));
 }
 
-Partition *partition_allocator_get_area_list(PartitionAllocator *pa, Area *area)
+static inline Partition *partition_allocator_get_area_list(PartitionAllocator *pa, Area *area)
 {
     const AreaType at = area_get_type(area);
     return &pa->area[at];
 }
 
-uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, Partition *queue)
+static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, Partition *queue)
 {
     const ptrdiff_t diff = (uint8_t *)area - (uint8_t *)queue->start_addr;
     return (uint32_t)(((size_t)diff) >> area_type_to_exponent[area_get_type(area)]);
@@ -202,7 +202,7 @@ bool partition_allocator_try_free_area(PartitionAllocator *pa, Area *area, Parti
     return false;
 }
 
-int32_t area_list_get_next_area_idx(Partition *queue, uint32_t cidx)
+static inline int32_t area_list_get_next_area_idx(Partition *queue, uint32_t cidx)
 {
     return get_next_mask_idx(queue->area_mask, cidx);
 }
@@ -285,7 +285,7 @@ Area *partition_allocator_get_free_area_from_queue(Partition *current_queue)
     return new_area;
 }
 
-Partition *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType t, const size_t s, size_t *area_size,
+static inline Partition *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaType t, const size_t s, size_t *area_size,
                                                  size_t *alignement)
 {
     if (t == AT_VARIABLE) {
@@ -299,7 +299,7 @@ Partition *partition_allocator_get_current_queue(PartitionAllocator *pa, AreaTyp
     }
 }
 
-Partition *partition_allocator_promote_area(PartitionAllocator *pa, AreaType *t, size_t *area_size, size_t *alignement)
+static inline Partition *partition_allocator_promote_area(PartitionAllocator *pa, AreaType *t, size_t *area_size, size_t *alignement)
 {
     if (*t > AT_FIXED_128) {
         return NULL;
@@ -377,7 +377,7 @@ Section *partition_allocator_alloc_section(PartitionAllocator *pa, const size_t 
         }
         return NULL;
     }
-    const int32_t section_idx = partition_allocator_claim_section(new_area);
+    const int32_t section_idx = area_claim_section(new_area);
     area_set_container_type(new_area, CT_SECTION);
     Section *section = (Section *)((uint8_t *)new_area + SECTION_SIZE * section_idx);
     section->constr_mask._w32[0] = 0;

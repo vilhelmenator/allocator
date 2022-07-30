@@ -14,5 +14,5 @@ Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaTy
 AreaType get_area_type_for_heap(const size_t size);
 Section *partition_allocator_alloc_section(PartitionAllocator *pa, const size_t size);
 
-static inline uint32_t partition_allocator_claim_section(Area *area) { return area_claim_section(area); }
+
 #endif

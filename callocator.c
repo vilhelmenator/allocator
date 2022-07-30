@@ -8,8 +8,8 @@
 
 extern PartitionAllocator **partition_allocators;
 extern int64_t *partition_owners;
-static uintptr_t main_thread_id;
 extern Allocator **allocator_list;
+static uintptr_t main_thread_id;
 static Allocator *main_instance = NULL;
 static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
 
@@ -33,20 +33,6 @@ static Allocator *init_thread_instance(void)
     return new_alloc;
 }
 
-void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
-{
-    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    if (tq->head != NULL) {
-        QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
-        tn->next = tq->head;
-        tn->prev = NULL;
-        QNode *temp = (QNode *)((uint8_t *)tq->head + prev_offset);
-        temp->prev = node;
-        tq->head = node;
-    } else {
-        tq->tail = tq->head = node;
-    }
-}
 
 void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
@@ -167,7 +153,7 @@ static void __attribute__((constructor)) library_init(void) { allocator_init(); 
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
 
-void *cmalloc(size_t s) { return allocator_malloc(get_thread_instance(), s); }
+void __attribute__((malloc)) *cmalloc(size_t s) { return allocator_malloc(get_thread_instance(), s); }
 
 void cfree(void *p)
 {
