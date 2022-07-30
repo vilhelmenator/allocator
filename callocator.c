@@ -1,10 +1,10 @@
 
 #include "callocator.inl"
-#include "allocator.h"
-#include "os.h"
-#include "area.h"
-#include "partition_allocator.h"
 #include "../cthread/cthread.h"
+#include "allocator.h"
+#include "area.h"
+#include "os.h"
+#include "partition_allocator.h"
 
 extern PartitionAllocator **partition_allocators;
 extern int64_t *partition_owners;

@@ -3,7 +3,6 @@
 #include "heap.h"
 #include "section.h"
 
-
 static inline void heap_block_set_header(HeapBlock *hb, const uint32_t s, const uint32_t v, const uint32_t pa)
 {
     *(uint32_t *)((uint8_t *)&hb->data - WSIZE) = (s | v | pa << 1);
@@ -128,7 +127,6 @@ bool resize_block(Heap *h, void *bp, int32_t size)
     //
     return false;
 }
-
 
 void *heap_coalesce(Heap *h, void *bp)
 {

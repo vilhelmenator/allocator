@@ -30,6 +30,7 @@ static inline uint8_t size_to_pool(const size_t as)
         return (row + ((as >> (28 - tz)) & 0x7)) + incr - 1;
     }
 }
+
 static inline void *pool_extend(Pool *p)
 {
     p->num_used++;
@@ -50,9 +51,8 @@ static inline void pool_free_block(Pool *p, void *block)
         p->free->next = NULL;
         return;
     }
-    Block *new_free = (Block *)block;
-    new_free->next = p->free;
-    p->free = new_free;
+    *(uint64_t **)block = (uint64_t *)p->free;
+    p->free = (Block *)block;
 }
 
 static inline Block *pool_get_free_block(Pool *p)
@@ -79,7 +79,8 @@ static inline void *pool_aquire_block(Pool *p)
     return NULL;
 }
 
-static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const uint32_t block_size, const int32_t psize)
+static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const uint32_t block_size,
+                      const int32_t psize)
 {
     void *blocks = (uint8_t *)p + sizeof(Pool);
     const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);

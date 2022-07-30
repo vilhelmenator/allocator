@@ -728,7 +728,7 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
         }
     });
     //mi_collect(true);
-     */
+    */
     END_TEST(allocator, {});
     free(variables);
 }
@@ -756,20 +756,21 @@ void test_new_heap(void)
     arena_free(nh, p4, false);
     arena_free(nh, p5, false);
 }
+
 int main()
 {
-    test_new_heap();
-    //  thrd_t trd;
-    //  thrd_create(&trd, &test, NULL);
-    //  blach();
-    //  run_tests();
-    //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
-    //  cfree(m);
-    //  m = cmalloc_os(123);
-    //  cfree(m);
+    // test_new_heap();
+    //   thrd_t trd;
+    //   thrd_create(&trd, &test, NULL);
+    //   blach();
+    //   run_tests();
+    //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
+    //   cfree(m);
+    //   m = cmalloc_os(123);
+    //   cfree(m);
 
     for (int i = 0; i < 14; i++) {
-        //test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     }
     size_t item_count = 100;
     for (int i = 0; i < 6; i++) {

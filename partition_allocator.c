@@ -1,7 +1,7 @@
 
 #include "partition_allocator.h"
-#include "section.h"
 #include "os.h"
+#include "section.h"
 
 PartitionAllocator **partition_allocators = NULL;
 

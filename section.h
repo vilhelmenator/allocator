@@ -1,10 +1,4 @@
-//
-//  section.h
-//  MemPoolTests
-//
-//  Created by Vilhelm Sævarsson on 23.6.2022.
-//  Copyright © 2022 Vilhelm Sævarsson. All rights reserved.
-//
+
 #ifndef SECTION_H
 #define SECTION_H
 #include "area.h"
@@ -16,8 +10,8 @@ static cache_align const uintptr_t size_clss_to_exponent[] = {
     19, // 512k
     22, // 4Mb
 };
-static inline bool section_is_connected(const Section *s) { return s->prev != NULL || s->next != NULL; }
 
+static inline bool section_is_connected(const Section *s) { return s->prev != NULL || s->next != NULL; }
 static inline uint8_t section_get_collection_count(const Section *s)
 {
     switch (s->type) {
@@ -43,7 +37,10 @@ static inline void section_free_idx(Section *s, uint8_t i)
     }
 }
 
-static inline bool section_is_claimed(const Section *s, const uint8_t idx) { return bitmask_is_set_lo(&s->constr_mask, idx); }
+static inline bool section_is_claimed(const Section *s, const uint8_t idx)
+{
+    return bitmask_is_set_lo(&s->constr_mask, idx);
+}
 
 static inline void section_reserve_idx(Section *s, uint8_t i)
 {

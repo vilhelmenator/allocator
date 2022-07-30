@@ -39,7 +39,7 @@ void printBits(size_t const size, void const *const ptr)
 void print_header(Arena *h, uintptr_t ptr)
 {
     uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
-    ptrdiff_t rdiff = (uint8_t *)ptr - (uint8_t *)base;
+    // ptrdiff_t rdiff = (uint8_t *)ptr - (uint8_t *)base;
     printf("\nL3!\n");
     printf("L1 Allocated:[0b");
     printBits(sizeof(uint64_t), (uint64_t *)base);
@@ -259,7 +259,6 @@ void *arena_get_block_L2(Arena *h, uintptr_t base, size_t range, uint64_t **mask
 
     return NULL;
 }
-
 
 void *arena_get_block_L1(Arena *h, uintptr_t base, size_t range, uint64_t **masks)
 {

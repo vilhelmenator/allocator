@@ -408,11 +408,9 @@ static inline void *allocator_try_malloc(Allocator *a, size_t as)
 
 void *allocator_malloc(Allocator *a, size_t s)
 {
-    // align reqested memory size to 8 bytes.
-    const size_t as = ALIGN(s);
     // do we have  cached pool to use of a fitting size?
     if (a->cached_pool != NULL) {
-        if (as == a->cached_pool->block_size) {
+        if (s == a->prev_size) {
             void *block = pool_aquire_block(a->cached_pool);
             if (block != NULL) {
                 return block;
@@ -420,7 +418,10 @@ void *allocator_malloc(Allocator *a, size_t s)
         }
         allocator_unset_cached_pool(a);
     }
-
+    
+    a->prev_size = s;
+    
+    const size_t as = ALIGN(s);
     // if we have some memory waiting in our thread free queue.
     // lets make it available.
     allocator_flush_thread_free_queue(a);

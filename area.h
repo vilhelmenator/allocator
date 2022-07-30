@@ -8,8 +8,8 @@
 #ifndef AREA_H
 #define AREA_H
 
-#include "callocator.inl"
 #include "bitmask.h"
+#include "callocator.inl"
 static cache_align const uintptr_t area_type_to_exponent[] = {
     25, // 2^25 == 32MB
     26, // 2^26 == 64MB
@@ -24,7 +24,10 @@ static inline ContainerType area_get_container_type(const Area *a)
 }
 
 static inline size_t area_get_range(const Area *a) { return (AreaType)((a->partition_mask >> 48)); }
-static inline size_t area_get_size(const Area *a) { return (1 << area_get_type(a)) * BASE_AREA_SIZE * area_get_range(a); }
+static inline size_t area_get_size(const Area *a)
+{
+    return (1 << area_get_type(a)) * BASE_AREA_SIZE * area_get_range(a);
+}
 
 static inline void area_set_container_type(Area *a, ContainerType ct)
 {
@@ -54,7 +57,6 @@ static inline void area_reserve_all(Area *a)
     bitmask_reserve_all(&a->constr_mask);
     bitmask_reserve_all(&a->active_mask);
 }
-
 
 static inline void area_claim_idx(Area *a, uint8_t idx) { bitmask_reserve_hi(&a->constr_mask, idx); }
 static inline int8_t area_claim_section(Area *a)

@@ -197,7 +197,10 @@ static inline uint32_t get_range(uint32_t at, uint64_t mask)
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
 uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k);
 
-static inline uintptr_t reserve_range_idx(size_t range, size_t idx) { return ((1UL << range) - 1UL) << (idx - (range - 1)); }
+static inline uintptr_t reserve_range_idx(size_t range, size_t idx)
+{
+    return ((1UL << range) - 1UL) << (idx - (range - 1));
+}
 
 static inline void arena_init_zero(uintptr_t baseptr)
 {

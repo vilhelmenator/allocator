@@ -28,7 +28,7 @@
 #include <unistd.h>
 #endif
 
-static bool commit_memory(void *base, size_t size)
+static inline bool commit_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
     return VirtualAlloc(base, size, MEM_COMMIT, PAGE_READWRITE) == base;
@@ -37,7 +37,7 @@ static bool commit_memory(void *base, size_t size)
 #endif
 }
 
-static bool decommit_memory(void *base, size_t size)
+static inline bool decommit_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
     return VirtualFree(base, size, MEM_DECOMMIT);
@@ -46,7 +46,7 @@ static bool decommit_memory(void *base, size_t size)
 #endif
 }
 
-static bool free_memory(void *ptr, size_t size)
+static inline bool free_memory(void *ptr, size_t size)
 {
 #if defined(WINDOWS)
     return VirtualFree(ptr, 0, MEM_RELEASE) == 0;
@@ -55,7 +55,7 @@ static bool free_memory(void *ptr, size_t size)
 #endif
 }
 
-static bool release_memory(void *ptr, size_t size, bool commit)
+static inline bool release_memory(void *ptr, size_t size, bool commit)
 {
     if (commit) {
         return decommit_memory(ptr, size);
@@ -64,7 +64,7 @@ static bool release_memory(void *ptr, size_t size, bool commit)
     }
 }
 
-static void *alloc_memory(void *base, size_t size, bool commit)
+static inline void *alloc_memory(void *base, size_t size, bool commit)
 {
 #if defined(WINDOWS)
     int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
@@ -75,7 +75,7 @@ static void *alloc_memory(void *base, size_t size, bool commit)
 #endif
 }
 
-static bool reset_memory(void *base, size_t size)
+static inline bool reset_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
     void *p = VirtualAlloc(base, size, MEM_RESET, PAGE_READWRITE);
@@ -95,7 +95,7 @@ static bool reset_memory(void *base, size_t size)
 #endif
 }
 
-static bool protect_memory(void *addr, size_t size, bool protect)
+static inline bool protect_memory(void *addr, size_t size, bool protect)
 {
 #if defined(WINDOWS)
     DWORD prev_value = 0;
@@ -105,7 +105,7 @@ static bool protect_memory(void *addr, size_t size, bool protect)
 #endif
 }
 
-static bool remap_memory(void *old_addr, void *new_addr, size_t size)
+static inline bool remap_memory(void *old_addr, void *new_addr, size_t size)
 {
 #if defined(WINDOWS)
     /*

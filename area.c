@@ -1,13 +1,8 @@
-//
-//  area.inl
-//  MemPoolTests
-//
-//  Created by Vilhelm Sævarsson on 23.6.2022.
-//  Copyright © 2022 Vilhelm Sævarsson. All rights reserved.
-//
-#include "os.h"
+
 #include "area.h"
 #include "../cthread/cthread.h"
+#include "os.h"
+
 int8_t area_get_section_count(Area *a)
 {
     const AreaType at = area_get_type(a);
@@ -106,7 +101,6 @@ err:
 static const uintptr_t _Area_small_area_mask = UINT8_MAX;
 static const uintptr_t _Area_medium_area_mask = UINT16_MAX;
 static const uintptr_t _Area_large_area_mask = UINT32_MAX;
-
 
 bool area_is_full(const Area *a)
 {

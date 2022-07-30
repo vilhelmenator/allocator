@@ -224,6 +224,7 @@ typedef struct Allocator_t
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
     Pool *cached_pool;
+    size_t prev_size;
     uintptr_t cached_pool_start;
     uintptr_t cached_pool_end;
 } Allocator;
@@ -231,6 +232,7 @@ typedef struct Allocator_t
 // list utilities
 void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset);
 void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset);
+
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 
