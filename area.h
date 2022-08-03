@@ -11,6 +11,9 @@
 #include "bitmask.h"
 #include "callocator.inl"
 static cache_align const uintptr_t area_type_to_exponent[] = {
+    22, // 2^22 == 4MB
+    23, // 2^23 == 8MB
+    24, // 2^24 == 16MB
     25, // 2^25 == 32MB
     26, // 2^26 == 64MB
     27, // 2^27 == 128MB
@@ -67,13 +70,16 @@ static inline int8_t area_claim_section(Area *a)
 }
 static inline Area *area_from_addr(uintptr_t p)
 {
-    static const uint64_t masks[] = {~(AREA_SIZE_SMALL - 1),
-                                     ~(AREA_SIZE_MEDIUM - 1),
-                                     ~(AREA_SIZE_LARGE - 1),
-                                     ~(AREA_SIZE_HUGE - 1),
-                                     UINT64_MAX,
-                                     UINT64_MAX,
-                                     UINT64_MAX};
+    static const uint64_t masks[] = {~((AREA_SIZE_SMALL>>3) - 1),
+                                    ~((AREA_SIZE_SMALL>>2) - 1),
+                                    ~((AREA_SIZE_SMALL>>1) - 1),
+                                    ~(AREA_SIZE_SMALL - 1),
+                                    ~(AREA_SIZE_MEDIUM - 1),
+                                    ~(AREA_SIZE_LARGE - 1),
+                                    ~(AREA_SIZE_HUGE - 1),
+                                    UINT64_MAX,
+                                    UINT64_MAX,
+                                    UINT64_MAX};
 
     const int8_t pidx = partition_from_addr(p);
     if (pidx < 0) {

@@ -35,10 +35,14 @@ PartitionAllocator *partition_allocator_init(size_t idx)
     thr_mem += CACHE_LINE;
 
     PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
-    size = (SZ_GB * 2);
-    size_t offset = ((size_t)2 << 40);
+    size = (SZ_MB * 256);
+    // 1 << 40 .... 1TB
+    // 1 << 39 .... 512GB
+    // 1 << 38 .... 256GB
+    //size_t offset = ((size_t)2 << 40);
+    size_t offset = ((size_t)1 << 38);
     uint32_t area_type = 0;
-    for (size_t j = 0; j < 4; j++) {
+    for (size_t j = 0; j < 7; j++) {
         palloc->area[j].partition_id = (uint32_t)idx;
         palloc->area[j].start_addr = (idx)*size + offset;
         palloc->area[j].end_addr = palloc->area[j].start_addr + size;

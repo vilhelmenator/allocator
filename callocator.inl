@@ -10,12 +10,12 @@
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
 #define SECTION_SIZE (1ULL << 22ULL)
 
-#define BASE_AREA_SIZE (SECTION_SIZE * 8ULL) // 32Mb
-#define AREA_SIZE_SMALL BASE_AREA_SIZE
+#define BASE_AREA_SIZE SECTION_SIZE 
+#define AREA_SIZE_SMALL (BASE_AREA_SIZE * 8ULL) // 32Mb
 #define AREA_SIZE_MEDIUM (SECTION_SIZE * 16ULL) // 64Mb
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)  // 128Mb
 #define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)   // 256Mb
-#define NUM_AREA_PARTITIONS 4
+#define NUM_AREA_PARTITIONS 7
 
 #define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4 // 16k
 #define MEDIUM_OBJECT_SIZE SMALL_OBJECT_SIZE * 8   // 128kb
@@ -46,14 +46,20 @@
 
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 typedef enum AreaType_t {
-    AT_FIXED_32 = 0,  //  small allocations, mostly pools.
-    AT_FIXED_64 = 1,  //
-    AT_FIXED_128 = 2, //  larger allocations, but can also contain pools and sections.
-    AT_FIXED_256 = 3, //  heap allocations only
-    AT_VARIABLE = 4   //  not a fixed size area. found in extended partitions.
+    AT_FIXED_4 = 0,
+    AT_FIXED_8 = 1,
+    AT_FIXED_16 = 2,
+    AT_FIXED_32 = 3,  //  small allocations, mostly pools.
+    AT_FIXED_64 = 4,  //
+    AT_FIXED_128 = 5, //  larger allocations, but can also contain pools and sections.
+    AT_FIXED_256 = 6, //  heap allocations only
+    AT_VARIABLE = 7   //  not a fixed size area. found in extended partitions.
 } AreaType;
 
 static const uintptr_t partitions_offsets[] = {
+    ((uintptr_t)1 << 38),
+    ((uintptr_t)1 << 39),
+    ((uintptr_t)1 << 40),
     ((uintptr_t)2 << 40), // allocations smaller than SECTION_MAX_MEMORY
     ((uintptr_t)4 << 40),
     ((uintptr_t)8 << 40),   // SECTION_MAX_MEMORY < x < AREA_MAX_MEMORY
@@ -63,14 +69,16 @@ static const uintptr_t partitions_offsets[] = {
     ((uintptr_t)128 << 40), // end
 };
 
-static const uintptr_t area_type_to_size[] = {AREA_SIZE_SMALL, AREA_SIZE_MEDIUM, AREA_SIZE_LARGE, AREA_SIZE_HUGE,
-                                              UINT64_MAX};
+static const uintptr_t area_type_to_size[] = {
+    AREA_SIZE_SMALL>>3, AREA_SIZE_SMALL>>2, AREA_SIZE_SMALL>>1,
+    AREA_SIZE_SMALL, AREA_SIZE_MEDIUM, AREA_SIZE_LARGE,
+    AREA_SIZE_HUGE, UINT64_MAX};
 
 static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_type_to_size[pid]; }
 
 static inline int8_t partition_from_addr(uintptr_t p)
 {
-    static const uint8_t partition_count = 7;
+    static const uint8_t partition_count = 9;
     const int lz = 22 - __builtin_clz(p >> 32);
     if (lz < 0 || lz > partition_count) {
         return -1;
@@ -198,7 +206,7 @@ typedef void (*free_func)(void *);
 typedef struct PartitionAllocator_t
 {
     int64_t idx;
-    Partition area[4];
+    Partition area[7];
 
     // sections local to this thread with free heaps or pools
     Queue *sections;
