@@ -79,7 +79,7 @@ static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_ty
 static inline int8_t partition_from_addr(uintptr_t p)
 {
     static const uint8_t partition_count = 9;
-    const int lz = 22 - __builtin_clz(p >> 32);
+    const int lz = 25 - __builtin_clz(p >> 32);
     if (lz < 0 || lz > partition_count) {
         return -1;
     } else {
