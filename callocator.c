@@ -202,15 +202,23 @@ void *cmalloc_at(size_t size, uintptr_t vm_addr)
     return NULL;
 }
 
-void *cmalloc_area(size_t s, size_t partition_idx)
+void *cmalloc_arena(size_t s, size_t partition_idx)
 {
     if (partition_idx > (NUM_AREA_PARTITIONS - 1)) {
         return NULL;
     }
     Allocator *alloc = get_thread_instance();
+    void *arena = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx);
+    if (arena == NULL) {
+        return NULL;
+    }
+    return arena;
+}
 
-    const size_t totalSize = sizeof(Area) + s;
-    Area *area = partition_allocator_get_free_area(alloc->part_alloc, totalSize, (AreaType)partition_idx);
+
+void *cmalloc_area(size_t s, size_t partition_idx)
+{
+    Area *area = cmalloc_arena(sizeof(Area) + s, partition_idx);
     if (area == NULL) {
         return NULL;
     }
