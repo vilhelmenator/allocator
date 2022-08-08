@@ -178,6 +178,10 @@ static inline uint64_t apply_range(uint32_t range, uint32_t at)
     // set bit at at + (range - 1).
     //
     // 111110011
+    if(range == 1)
+    {
+        return 0;
+    }
     return (1UL << at) | (1UL << (at - (range - 1)));
 }
 
@@ -190,6 +194,10 @@ static inline uint32_t get_range(uint32_t at, uint64_t mask)
     //  lz8 - at == 3
     //  3 + 2 == 5
     // zero all bits from at to the highest bit.
+    if(mask == 0)
+    {
+        return 1;
+    }
     uint64_t top_mask = ((1UL << at) - 1);
     return at - __builtin_ctzll(mask & top_mask) + 1;
 }
@@ -209,7 +217,11 @@ static inline void arena_init_zero(uintptr_t baseptr)
     *(uint64_t *)(baseptr + sizeof(uint64_t) * 2) = 0;
 }
 
-int32_t arena_init_head_range(Arena *h, uintptr_t mask_offset, size_t size);
+static inline uint32_t delta_exp_to_idx(uintptr_t a, uintptr_t b, size_t exp)
+{
+    const ptrdiff_t diff = (uint8_t *)a - (uint8_t *)b;
+    return (uint32_t)((size_t)diff >> exp);
+}
 
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent);
 

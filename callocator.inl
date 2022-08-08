@@ -180,6 +180,48 @@ typedef struct Arena_t
     struct Arena_t *next;
 } Arena;
 
+typedef struct Arena_L2_t
+{
+    uint64_t* prev;
+    uint64_t* next;
+    uint64_t  L0_allocations;
+    uint64_t  L0_ranges;
+    // 32
+    uint64_t  L0_available;
+    uint64_t  L1_allocations;
+    uint64_t  L1_ranges;
+    uint64_t  L1_zero;
+    // 64
+    uint64_t  L1_available;
+    uint64_t  L2_allocations;
+    uint64_t  L2_ranges;
+    uint64_t  L2_zero;
+    // 96
+    uint64_t  L0_filter;
+    uint64_t  L1_filter;
+} Arena_L2;
+
+typedef struct Arena_L1_t
+{
+    uint64_t* prev;
+    uint64_t* next;
+    uint64_t  L0_allocations;
+    uint64_t  L0_ranges;
+    uint64_t  L0_available;
+    uint64_t  L1_allocations;
+    uint64_t  L1_ranges;
+    uint64_t  L1_zero;
+} Arena_L1;
+
+typedef struct Arena_L0_t
+{
+    uint64_t* prev;
+    uint64_t* next;
+    uint64_t  L0_allocations;
+    uint64_t  L0_ranges;
+} Arena_L0;
+
+
 typedef struct Partition_t
 {
     uint64_t partition_id;

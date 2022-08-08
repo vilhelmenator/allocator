@@ -740,26 +740,45 @@ int test(void *p)
     return 1;
 }
 
-void test_new_heap(void)
+void test_size_arena_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
 {
-    void *mem = alloc_memory_aligned((void *)partitions_offsets[0], partitions_offsets[0],
-                                     partitions_offsets[0] + SZ_GB * 10, SZ_MB * 32);
-    Arena *nh = arena_init((uintptr_t)mem + sizeof(Area), 0, 22);
-    void *p1 = arena_get_block(nh, 16);
-    void *p2 = arena_get_block(nh, 16);
-    void *p3 = arena_get_block(nh, 16);
-    void *p4 = arena_get_block(nh, 16);
-    void *p5 = arena_get_block(nh, 16);
-    arena_free(nh, p1, false);
-    arena_free(nh, p2, false);
-    arena_free(nh, p3, false);
-    arena_free(nh, p4, false);
-    arena_free(nh, p5, false);
+
+    START_TEST(allocator, {});
+    char **variables = (char **)malloc(num_items * sizeof(char *));
+
+    MEASURE_TIME(allocator, cmalloc, {
+        for (uint64_t j = 0; j < num_loops; j++) {
+            for (uint64_t i = 0; i < num_items; i++) {
+                variables[i] = (char *)cmalloc(alloc_size);
+            }
+            for (uint64_t i = 0; i < num_items; i++) {
+                cfree(variables[i]);
+            }
+        }
+    });
+    END_TEST(allocator, {});
+    free(variables);
+}
+
+void test_new_heap(size_t num_items)
+{
+    void *mem = cmalloc_arena(SZ_MB * 4, AT_FIXED_4);
+    Arena *nh = arena_init((uintptr_t)mem, 0, 22);
+    char **variables = (char **)malloc(num_items * 16);
+    for(int i = 0; i < num_items; i++)
+    {
+        variables[i] = arena_get_block(nh, 16);
+    }
+    
+    for (uint64_t i = 0; i < num_items; i++) {
+        arena_free(nh, variables[i], false);
+    }
+    free(variables);
 }
 
 int main()
 {
-    // test_new_heap();
+    test_new_heap(129);
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
