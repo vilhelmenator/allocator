@@ -143,10 +143,7 @@ static const uint32_t new_arena_container_overhead =
 static const uint32_t new_arena_level_size[] = {0, ARENA_PARTS, ARENA_PARTS *ARENA_PARTS};
 static const uint32_t new_arena_level_offset[] = {0, ARENA_PARTS, ARENA_PARTS + ARENA_PARTS *ARENA_PARTS};
 static const uint32_t arena_level_offset = ARENA_BASE_SIZE_EXPONENT;
-static const uint64_t arena_empty_mask = 1UL << 63;
-static const uint64_t arena_empty_mask_z = 15UL << 60;
-static const uint64_t arena_mask_size = sizeof(uint64_t) * 3;
-static const uint64_t arena_filter_size = sizeof(uint64_t) * 2;
+
 
 // 4, 8, 16, 32, 64, 128, 256
 // 22, 23, 24, 25, 26, 27, 28
@@ -156,16 +153,44 @@ typedef struct arena_size_table_t
     uint64_t exponents[4];
     uint64_t sizes[4];
 } arena_size_table;
-
+typedef struct arena_empty_mask_table_t
+{
+    uint64_t sizes[3];
+} arena_empty_mask_table;
 static const arena_size_table arena_tables[7] = {
     {{4, 10, 16, 22}, {1 << 4, 1 << 10, 1 << 16, 1 << 22}},  {{5, 11, 17, 23}, {1 << 5, 1 << 11, 1 << 17, 1 << 23}},
     {{6, 12, 18, 24}, {1 << 6, 1 << 12, 1 << 18, 1 << 24}},  {{7, 13, 19, 25}, {1 << 7, 1 << 13, 1 << 19, 1 << 25}},
     {{8, 14, 20, 26}, {1 << 8, 1 << 14, 1 << 20, 1 << 26}},  {{9, 15, 21, 27}, {1 << 9, 1 << 15, 1 << 21, 1 << 27}},
     {{10, 16, 22, 28}, {1 << 10, 1 << 16, 1 << 22, 1 << 28}}};
 
-static inline const arena_size_table *get_size_table(uint32_t exponent)
+static const uint64_t arena_L2_size = sizeof(Arena_L2) + sizeof(Arena);
+static const uint64_t arena_L2_range = (arena_L2_size >> 4) + ((arena_L2_size & ((1 << 4) - 1))?1:0);
+static const uint64_t arena_L2_mask = ((1UL << arena_L2_range) - 1UL) << (63 - (arena_L2_range - 1));
+static const uint64_t arena_L1_size = sizeof(Arena_L1);
+static const uint64_t arena_L1_range = (arena_L1_size >> 4) + ((arena_L1_size & ((1 << 4) - 1))?1:0);
+static const uint64_t arena_L1_mask = ((1UL << arena_L1_range) - 1UL) << (63 - (arena_L1_range - 1));
+static const uint64_t arena_L0_size = sizeof(Arena_L0);
+static const uint64_t arena_L0_range = (arena_L0_size >> 4) + ((arena_L0_size & ((1 << 4) - 1))?1:0);
+static const uint64_t arena_L0_mask = ((1UL << arena_L0_range) - 1UL) << (63 - (arena_L0_range - 1));
+static const uint64_t arena_empty_mask = 1UL << 63;
+static const arena_empty_mask_table empty_masks[7] = {
+    {arena_L0_mask, arena_L1_mask, arena_L2_mask},
+    {(arena_L0_mask << 2) | arena_empty_mask,(arena_L1_mask << 2) | arena_empty_mask, (arena_L2_mask << 2) | arena_empty_mask},
+    {(arena_L0_mask << 4) | arena_empty_mask, (arena_L1_mask << 4) | arena_empty_mask, (arena_L2_mask << 4) | arena_empty_mask},
+    {(arena_L0_mask << 6) | arena_empty_mask,(arena_L1_mask << 6) | arena_empty_mask,(arena_L2_mask << 6) | arena_empty_mask},
+    {(arena_L0_mask << 8) | arena_empty_mask, (arena_L1_mask << 8) | arena_empty_mask,(arena_L2_mask << 8) | arena_empty_mask},
+    {(arena_L0_mask << 10) | arena_empty_mask, (arena_L1_mask << 10) | arena_empty_mask, (arena_L2_mask << 10) | arena_empty_mask},
+    {(arena_L0_mask << 12) | arena_empty_mask, (arena_L1_mask << 12) | arena_empty_mask, (arena_L2_mask << 12) | arena_empty_mask}
+};
+
+static inline const arena_size_table *get_size_table(Arena* a)
 {
-    return &arena_tables[exponent - arena_level_offset];
+    return &arena_tables[a->container_exponent - arena_level_offset];
+}
+
+static inline const uint64_t get_base_empty_mask(Arena* a, uint32_t level)
+{
+    return empty_masks[a->container_exponent - arena_level_offset].sizes[level];
 }
 
 void printBits(size_t const size, void const *const ptr);

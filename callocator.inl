@@ -187,12 +187,12 @@ typedef struct Arena_L2_t
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
     // 32
-    uint64_t  L0_available;
+    uint64_t  L0_reserved;
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
     // 64
-    uint64_t  L1_available;
+    uint64_t  L1_reserved;
     uint64_t  L2_allocations;
     uint64_t  L2_ranges;
     uint64_t  L2_zero;
@@ -207,7 +207,7 @@ typedef struct Arena_L1_t
     uint64_t* next;
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
-    uint64_t  L0_available;
+    uint64_t  L0_reserved;
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
