@@ -767,6 +767,10 @@ void test_new_heap(size_t num_items)
     char **variables = (char **)malloc(num_items * 16);
     for(int i = 0; i < num_items; i++)
     {
+        if(i == num_items - 2)
+        {
+            int bbb = 0;
+        }
         variables[i] = arena_get_block(nh, 16);
     }
     
@@ -778,7 +782,8 @@ void test_new_heap(size_t num_items)
 
 int main()
 {
-    test_new_heap(129);
+    int count =  64*62 - 6;
+    test_new_heap(count);
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
