@@ -352,15 +352,16 @@ void *arena_get_block(Arena *h, size_t size)
 
     uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
     uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
-    if ((al2->L0_allocations == UINT64_MAX) && (al2->L1_allocations == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
+    if (al2->L2_L0_slots == UINT64_MAX) {
+        // we don't even have room for the smallest allocation.
         return NULL;
     }
 
     size_t limit = end_offset - data_offset;
-    if ((al2->L1_allocations == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
+    if ((al2->L2_L1_slots == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
         // there is no room for anything more than a small multiple of the smallest
         // size. new requests will be rejected. Only resize requests will be permitted.
-        if ((al2->L1_allocations == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
+        if ((al2->L2_L1_slots == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
             limit = stable->sizes[0];
         } else if (al2->L2_allocations == UINT64_MAX) {
             limit = stable->sizes[1];

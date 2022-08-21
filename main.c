@@ -793,7 +793,7 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
         {
             err_count++;
         }
-        variables[current_count++] = all;arena_get_block(nh, size_l2);
+        variables[current_count++] = all;
     }
     for(int i = 0; i < num_items_l2; i++)
     {
@@ -804,13 +804,13 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
         }
         variables[current_count++] = all;
     }
-    print_header(nh,variables[0]);
+    print_header(nh,(uintptr_t)variables[0]);
     for (uint64_t i = 0; i < num_items; i++) {
         arena_free(nh, variables[i], false);
     }
-    print_header(nh,variables[0]);
+    print_header(nh,(uintptr_t)variables[0]);
     free(variables);
-    printf("error count: %lu", err_count);
+    printf("error count: %lu\n", err_count);
 }
 
 int main()
@@ -825,11 +825,12 @@ int main()
     //test_new_heap(63, 1024*64);
     //test_new_heap(63, 1024);
     //test_new_heap(55, 16);
+    test_new_heap(22, l0_count, 0, 0);
     test_new_heap(22, 55, 63, 63);
     test_new_heap(22, 55, 63, 63);
-    //test_new_heap(22, l0_count, 0, 0);
-    //test_new_heap(22, 0, l1_count, 0);
-    //test_new_heap(22, 0, 0, l2_count);
+    test_new_heap(22, l0_count, 0, 0);
+    test_new_heap(22, 0, l1_count, 0);
+    test_new_heap(22, 0, 0, l2_count);
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
