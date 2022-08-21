@@ -760,21 +760,57 @@ void test_size_arena_iter(uint32_t alloc_size, size_t num_items, size_t num_loop
     free(variables);
 }
 
-void test_new_heap(size_t num_items, size_t size)
+void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_t num_items_l2 )
 {
+    // [ ] reserve all memory
+    // [ ] reserve all levels
+    // [ ] release all memory
+    // [ ] release all levels
+    //
+    size_t err_count = 0;
+    size_t size_l0 = 1 << (a_exp - 18);
+    size_t size_l1 = 1 << (a_exp - 12);
+    size_t size_l2 = 1 << (a_exp - 6);
+    size_t num_items = num_items_l0 + num_items_l1 + num_items_l2;
+    size_t size = (num_items_l0 * size_l0) + (num_items_l1 * size_l1) + (num_items_l2 * size_l2);
     void *mem = cmalloc_arena(SZ_MB * 4, AT_FIXED_4);
-    Arena *nh = arena_init((uintptr_t)mem, 0, 22);
+    Arena *nh = arena_init((uintptr_t)mem, 0, a_exp);
     char **variables = (char **)malloc(num_items * size);
-    for(int i = 0; i < num_items; i++)
+    size_t current_count = 0;
+    for(int i = 0; i < num_items_l0; i++)
     {
-        variables[i] = arena_get_block(nh, size);
+        void* all = arena_get_block(nh, size_l0);
+        if(all == NULL)
+        {
+            err_count++;
+        }
+        variables[current_count++] = all;
+    }
+    for(int i = 0; i < num_items_l1; i++)
+    {
+        void* all = arena_get_block(nh, size_l1);
+        if(all == NULL)
+        {
+            err_count++;
+        }
+        variables[current_count++] = all;arena_get_block(nh, size_l2);
+    }
+    for(int i = 0; i < num_items_l2; i++)
+    {
+        void* all = arena_get_block(nh, size_l2);
+        if(all == NULL)
+        {
+            err_count++;
+        }
+        variables[current_count++] = all;
     }
     print_header(nh,variables[0]);
     for (uint64_t i = 0; i < num_items; i++) {
         arena_free(nh, variables[i], false);
     }
-    free(variables);
     print_header(nh,variables[0]);
+    free(variables);
+    printf("error count: %lu", err_count);
 }
 
 int main()
@@ -782,12 +818,18 @@ int main()
     int c1 = (64 - 9) * 1;
     int c2 = (64 - 4) * 63;
     int c3 = (64 - 2) * 63*64;
+    
     int l0_count =  c1 + c2 + c3;
     int l1_count = 63 * 64;
     int l2_count = 63;
-    test_new_heap(l0_count, 16);
-    //test_new_heap(l1_count, 1024);
-    //test_new_heap(l2_count, 1024*64);
+    //test_new_heap(63, 1024*64);
+    //test_new_heap(63, 1024);
+    //test_new_heap(55, 16);
+    test_new_heap(22, 55, 63, 63);
+    test_new_heap(22, 55, 63, 63);
+    //test_new_heap(22, l0_count, 0, 0);
+    //test_new_heap(22, 0, l1_count, 0);
+    //test_new_heap(22, 0, 0, l2_count);
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();

@@ -175,6 +175,7 @@ typedef struct Arena_t
 {
     uint32_t num_allocations;
     uint32_t container_exponent;
+    uint64_t previous_l0_offset;
     uint64_t previous_l1_offset;
     struct Arena_t *prev;
     struct Arena_t *next;

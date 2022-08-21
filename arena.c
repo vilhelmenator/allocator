@@ -152,6 +152,7 @@ Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
     
     //
     h->num_allocations = 0;
+    h->previous_l0_offset = -1;
     h->previous_l1_offset = -1;
     // high allocations
     arena_init_head_range(h, base_addr);
@@ -294,13 +295,13 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
 {
     const arena_size_table *stable = get_size_table(h);
     Arena_L2* al2 = (Arena_L2*)base;
-    if (h->previous_l1_offset != -1) {
-        Arena_L0* al0 = (Arena_L0*)h->previous_l1_offset;
+    if (h->previous_l0_offset != -1) {
+        Arena_L0* al0 = (Arena_L0*)h->previous_l0_offset;
         int32_t idx = find_first_nzeros(al0->L0_allocations, range);
         if (idx != -1) {
             return arena_get_block_L0(h, base, range, al0, idx);
         }
-        h->previous_l1_offset = -1;
+        h->previous_l0_offset = -1;
     }
 
     uint32_t midx = -1;
@@ -323,14 +324,14 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
             int32_t idx = find_first_nzeros(al0->L0_allocations, range);
             if(idx != -1)
             {
-                h->previous_l1_offset = (uintptr_t)al0;
+                h->previous_l0_offset = (uintptr_t)al0;
                 al1->L1_allocations |= (1UL << (63 - bidx));
                 al2->L2_allocations |= (1UL << (63 - midx));
                 return arena_get_block_L0(h, base, range, al0, idx);
             }
         }
     }
-    h->previous_l1_offset = 0;
+    h->previous_l0_offset = 0;
     return NULL;
 }
 
@@ -347,23 +348,21 @@ void *arena_get_block(Arena *h, size_t size)
     const arena_size_table *stable = get_size_table(h);
 
     uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
-    uintptr_t mask_offset = base;
+    Arena_L2* al2 = (Arena_L2*)base;
+
     uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
     uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
-    uint64_t *masks[] = {(uint64_t *)mask_offset, (uint64_t *)(mask_offset + sizeof(uint64_t) * 3),
-                         (uint64_t *)(mask_offset + sizeof(uint64_t) * 6)};
-
-    if ((*masks[0] == UINT64_MAX) && (*masks[1] == UINT64_MAX) && (*masks[2] == UINT64_MAX)) {
+    if ((al2->L0_allocations == UINT64_MAX) && (al2->L1_allocations == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
         return NULL;
     }
 
     size_t limit = end_offset - data_offset;
-    if ((*masks[1] == UINT64_MAX) || (*masks[2] == UINT64_MAX)) {
+    if ((al2->L1_allocations == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
         // there is no room for anything more than a small multiple of the smallest
         // size. new requests will be rejected. Only resize requests will be permitted.
-        if ((*masks[1] == UINT64_MAX) && (*masks[2] == UINT64_MAX)) {
+        if ((al2->L1_allocations == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
             limit = stable->sizes[0];
-        } else if (*masks[2] == UINT64_MAX) {
+        } else if (al2->L2_allocations == UINT64_MAX) {
             limit = stable->sizes[1];
         } else {
             limit = stable->sizes[2];
