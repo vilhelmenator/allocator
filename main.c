@@ -760,30 +760,34 @@ void test_size_arena_iter(uint32_t alloc_size, size_t num_items, size_t num_loop
     free(variables);
 }
 
-void test_new_heap(size_t num_items)
+void test_new_heap(size_t num_items, size_t size)
 {
     void *mem = cmalloc_arena(SZ_MB * 4, AT_FIXED_4);
     Arena *nh = arena_init((uintptr_t)mem, 0, 22);
-    char **variables = (char **)malloc(num_items * 16);
+    char **variables = (char **)malloc(num_items * size);
     for(int i = 0; i < num_items; i++)
     {
-        if(i == num_items - 2)
-        {
-            int bbb = 0;
-        }
-        variables[i] = arena_get_block(nh, 16);
+        variables[i] = arena_get_block(nh, size);
     }
-    
+    print_header(nh,variables[0]);
     for (uint64_t i = 0; i < num_items; i++) {
         arena_free(nh, variables[i], false);
     }
     free(variables);
+    print_header(nh,variables[0]);
 }
 
 int main()
 {
-    int count =  64*62 - 6;
-    test_new_heap(count);
+    int c1 = (64 - 9) * 1;
+    int c2 = (64 - 4) * 63;
+    int c3 = (64 - 2) * 63*64;
+    int l0_count =  c1 + c2 + c3;
+    int l1_count = 63 * 64;
+    int l2_count = 63;
+    test_new_heap(l0_count, 16);
+    //test_new_heap(l1_count, 1024);
+    //test_new_heap(l2_count, 1024*64);
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();

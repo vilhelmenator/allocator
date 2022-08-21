@@ -184,30 +184,29 @@ typedef struct Arena_L2_t
 {
     uint64_t* prev;
     uint64_t* next;
-    uint64_t  L0_allocations;
-    uint64_t  L0_ranges;
+    uint64_t  L0_allocations;   // base allocations here at the root
+    uint64_t  L0_ranges;        // size of allocations at the root.
     // 32
-    uint64_t  L0_reserved;
-    uint64_t  L1_allocations;
-    uint64_t  L1_ranges;
-    uint64_t  L1_zero;
+    uint64_t  L1_L0_slots;      // are l0 size slots available at root 64th part.
+    uint64_t  L1_allocations;   // base allocations here at the root
+    uint64_t  L1_ranges;        // sizes of allocations at the root
+    uint64_t  L1_zero;          // have the L0 headers been zeroed at the root 64th part.
     // 64
-    uint64_t  L1_reserved;
-    uint64_t  L2_allocations;
-    uint64_t  L2_ranges;
-    uint64_t  L2_zero;
+    uint64_t  L2_L1_slots;      // are l1 size slots available at each 64th part
+    uint64_t  L2_allocations;   // base allocations for largest element
+    uint64_t  L2_ranges;        // sizes of allocations.
+    uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     // 96
-    uint64_t  L0_filter;
-    uint64_t  L1_filter;
+    uint64_t  L2_L0_slots;      // are l0 size slots available at each 64th part.
 } Arena_L2;
 
 typedef struct Arena_L1_t
 {
     uint64_t* prev;
     uint64_t* next;
-    uint64_t  L0_allocations;
+    uint64_t  L0_allocations;   
     uint64_t  L0_ranges;
-    uint64_t  L0_reserved;
+    uint64_t  L1_L0_slots;
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
