@@ -813,8 +813,52 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     printf("error count: %lu\n", err_count);
 }
 
+uint32_t numConsecutiveZeros(uint64_t test)
+{
+    if(test == 0xffffffffffffffff)
+    {
+        return 0;
+    }
+    if(test == 0)
+    {
+        return 64;
+    }
+    uint32_t lz = __builtin_clzll(test);
+    uint32_t tz = __builtin_ctzll(test);
+    uint32_t mz = MAX(lz, tz);
+    uint32_t rem_bits = 64 - (lz + tz);
+    if(rem_bits < mz)
+    {
+        return mz;
+    }
+    uint64_t sum = (1UL << mz) - 1;
+    uint32_t count = 0;
+    for(int32_t i = tz; i < 64 - lz; i++)
+    {
+        if(!(test & (1UL << i)))
+        {
+            sum |= 1UL << (count++);
+        }
+        else
+        {
+            count = 0;
+        }
+    }
+    return 64 - __builtin_clzll(sum);
+}
+
 int main()
 {
+    int32_t a = numConsecutiveZeros(0x0000000000000000);
+    int32_t b = numConsecutiveZeros(0xffffffffffffffff);
+    int32_t _b =numConsecutiveZeros(0x8000000000000000);
+    int32_t _c =numConsecutiveZeros(0x0000000000000007);
+    int32_t c = numConsecutiveZeros(0x0f000000000000f0);
+    int32_t d = numConsecutiveZeros(0x00f0000000000f00);
+    int32_t e = numConsecutiveZeros(0x000f00000000f000);
+    int32_t f = numConsecutiveZeros(0x0000f000000f0000);
+    int32_t g = numConsecutiveZeros(0x00000f0000f00000);
+    int32_t h = numConsecutiveZeros(0x000000f00f000000);
     int c1 = (64 - 9) * 1;
     int c2 = (64 - 4) * 63;
     int c3 = (64 - 2) * 63*64;
@@ -831,6 +875,14 @@ int main()
     test_new_heap(22, l0_count, 0, 0);
     test_new_heap(22, 0, l1_count, 0);
     test_new_heap(22, 0, 0, l2_count);
+    
+    // intermittently allocate a block
+    //
+    
+    // size lists for the smallest and medium
+    //  - sort by remaining size per block.
+    //  - 2, 4, 8, 16, 32
+    
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();

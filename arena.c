@@ -143,17 +143,18 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
 
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
 {
-    // 64 bytes for root mask data. [a,s,l][a,s,l][a,s]
-    // 24 bytes for root zero and filter data. [z,f1,f2]
-    // heap data and header info.
     Arena *h = (Arena *)(base_addr + sizeof(Arena_L2));
 
     h->container_exponent = (uint32_t)arena_size_exponent;
-    
     //
     h->num_allocations = 0;
     h->previous_l0_offset = -1;
     h->previous_l1_offset = -1;
+    for(int i = 0; i < 5; i++)
+    {
+        h->L0_lists[i] = (Queue){NULL, NULL};
+        h->L1_lists[i] = (Queue){NULL, NULL};
+    }
     // high allocations
     arena_init_head_range(h, base_addr);
     print_header(h, (uintptr_t)h);

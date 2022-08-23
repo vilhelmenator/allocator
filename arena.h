@@ -196,6 +196,41 @@ static inline const uint64_t get_base_empty_mask(Arena* a, uint32_t level)
 void printBits(size_t const size, void const *const ptr);
 
 void print_header(Arena *h, uintptr_t ptr);
+
+static uint32_t num_consecutive_zeros(uint64_t test)
+{
+    if(test == 0xffffffffffffffff)
+    {
+        return 0;
+    }
+    if(test == 0)
+    {
+        return 64;
+    }
+    uint32_t lz = __builtin_clzll(test);
+    uint32_t tz = __builtin_ctzll(test);
+    uint32_t mz = MAX(lz, tz);
+    uint32_t rem_bits = 64 - (lz + tz);
+    if(rem_bits < mz)
+    {
+        return mz;
+    }
+    uint64_t sum = (1UL << mz) - 1;
+    uint32_t count = 0;
+    for(int32_t i = tz; i < 64 - lz; i++)
+    {
+        if(!(test & (1UL << i)))
+        {
+            sum |= 1UL << (count++);
+        }
+        else
+        {
+            count = 0;
+        }
+    }
+    return 64 - __builtin_clzll(sum);
+}
+
 static inline uint64_t apply_range(uint32_t range, uint32_t at)
 {
     // range == 1 -> nop
