@@ -106,9 +106,15 @@ typedef struct Block_t
 
 typedef struct Queue_t
 {
-    void *head;
-    void *tail;
+    void* head;
+    void* tail;
 } Queue;
+
+typedef struct Queue32_t
+{
+    uint32_t head;
+    uint32_t tail;
+} Queue32;
 
 typedef struct Area_t
 {
@@ -167,48 +173,60 @@ typedef struct HeapBlock_t
 
 typedef struct QNode_t
 {
-    void *prev;
-    void *next;
+    void* prev;
+    void* next;
 } QNode;
+
+typedef struct QNode32_t
+{
+    uint32_t prev;
+    uint32_t next;
+} QNode32;
 
 typedef struct Arena_t
 {
     uint32_t num_allocations;
     uint32_t container_exponent;
-    uint64_t previous_l0_offset;
-    uint64_t previous_l1_offset;
-    Queue  L0_lists[5]; // 2,4,8,16,32
-    Queue  L1_lists[5]; // 2,4,8,16,32
+    int32_t active_l0_offset;
+    int32_t active_l1_offset;
+    Queue32   L0_lists[6]; // 1,2,4,8,16,32
+    uint64_t  L1_lists[6]; // 1,2,4,8,16,32
     struct Arena_t *prev;
     struct Arena_t *next;
-} Arena; // 120 bytes
+} Arena; // 128 bytes
 
 typedef struct Arena_L2_t
 {
-    uint64_t* prev;
-    uint64_t* next;
+    uint32_t  prev;             // internal prev/next ptrs offsets for l0 size lists
+    uint32_t  next;
     uint64_t  L0_allocations;   // base allocations here at the root
     uint64_t  L0_ranges;        // size of allocations at the root.
-    // 32
+    uint32_t  L0_list_index;
+    // L0 - 32 bytes
+    uint32_t  L1_list_index;
     uint64_t  L1_L0_slots;      // are l0 size slots available at root 64th part.
     uint64_t  L1_allocations;   // base allocations here at the root
     uint64_t  L1_ranges;        // sizes of allocations at the root
     uint64_t  L1_zero;          // have the L0 headers been zeroed at the root 64th part.
-    // 64
+    // L1 - 64 bytes
     uint64_t  L2_L1_slots;      // are l1 size slots available at each 64th part
     uint64_t  L2_allocations;   // base allocations for largest element
     uint64_t  L2_ranges;        // sizes of allocations.
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     // 96
     uint64_t  L2_L0_slots;      // are l0 size slots available at each 64th part.
-} Arena_L2; // 104 bytes
-// root header 224 bytes .. 64,64,64,64 .. 256
+    uint64_t  padding[3];
+} Arena_L2; // 128 bytes
+// root header 256 bytes .. 64,64,64,64 .. 256
+
 typedef struct Arena_L1_t
 {
-    uint64_t* prev;
-    uint64_t* next;
+    uint32_t  prev;
+    uint32_t  next;
     uint64_t  L0_allocations;   
     uint64_t  L0_ranges;
+    uint32_t  L0_list_index;
+    uint32_t  L1_list_index;
     uint64_t  L1_L0_slots;
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
@@ -217,10 +235,11 @@ typedef struct Arena_L1_t
 
 typedef struct Arena_L0_t
 {
-    uint64_t* prev;
-    uint64_t* next;
+    uint32_t  prev;
+    uint32_t  next;
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
+    uint32_t  L0_list_index;
 } Arena_L0;
 
 
@@ -282,25 +301,49 @@ typedef struct Allocator_t
 } Allocator;
 
 // list utilities
+static inline bool qnode_is_connected(QNode* n)
+{
+    return (n->prev != 0) || (n->next != 0);
+}
+// list utilities
+static inline bool qnode32_is_connected(QNode32* n)
+{
+    return (n->prev != 0) || (n->next != 0);
+}
+
 static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    if (tq->head != NULL) {
+    if (tq->head != 0) {
         QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
         tn->next = tq->head;
-        tn->prev = NULL;
+        tn->prev = 0;
         QNode *temp = (QNode *)((uint8_t *)tq->head + prev_offset);
-        temp->prev = node;
-        tq->head = node;
+        temp->prev = tq->head = node;
     } else {
         tq->tail = tq->head = node;
     }
 }
 
-void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset);
-
+void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offset);
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+
+static inline void list_enqueue32(void *queue, void *node, void*base)
+{
+    Queue32 *tq = (Queue32 *)queue;
+    if (tq->head != 0) {
+        QNode32 *tn = (QNode32 *)node;
+        tn->next = tq->head;
+        tn->prev = 0;
+        QNode32 *temp = (QNode32 *)((uint8_t *)base + tq->head);
+        temp->prev = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
+    } else {
+        tq->tail = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
+    }
+}
+void list_remove32(void *queue, void* node, void* base);
+
 
 static inline int32_t find_first_nones(uintptr_t x, int64_t n)
 {

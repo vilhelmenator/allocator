@@ -700,6 +700,111 @@ bool testAreaFail(void)
     return false;
 }
 
+
+
+uint32_t numConsecutiveZeros(uint64_t test)
+{
+    if(test == 0)
+    {
+        return 64;
+    }
+    
+    uint32_t lz = __builtin_clzll(test);
+    uint32_t tz = __builtin_ctzll(test);
+    if(lz == 0)
+    {
+        uint32_t l1 = __builtin_clzll(~test);
+        if((64 - l1) <= tz)
+        {
+            return tz;
+        }
+        test &= (1UL << (64 - (l1 - 1))) - 1;
+    }
+    
+    uint32_t mz = MAX(lz, tz);
+    if((64 - (lz + tz)) <= mz)
+    {
+        return mz;
+    }
+    
+    if(tz == 0)
+    {
+        test = test >> __builtin_ctzll(~test);
+    }
+    else
+    {
+        test = test >> (tz + 1);
+    }
+    
+    while(test >= (1UL << mz))
+    {
+        tz = __builtin_ctzll(test);
+        mz = mz ^ ((mz ^ tz) & -(mz < tz));
+        test = test >> (tz + 1);
+        test = test >> __builtin_ctzll(~test);
+    }
+    return mz;
+}
+
+uint32_t _numConsecutiveZeros(uint64_t test)
+{
+    int32_t count = 0;
+    int32_t result = 0;
+    for(int i = 0; i < 64; i++)
+    {
+        if(!(test & (1UL << i)))
+        {
+            count++;
+        }
+        else
+        {
+            if(count > result)
+            {
+                result = count;
+            }
+            count = 0;
+        }
+    }
+    if(count > result)
+    {
+        result = count;
+    }
+    return result;
+}
+uint32_t minor_test(void)
+{
+    START_TEST(allocator, {});
+    uint32_t lz = 0;
+    MEASURE_TIME(allocator, num_zeros, {
+        for (uint64_t j = 0; j < 100000000; j++) {
+            uint64_t test = j | (j << 32);
+            lz += __builtin_ctzll(test);
+            __asm__ __volatile__("");
+        }
+    });
+    MEASURE_TIME(allocator, num_zeros, {
+        for (uint64_t j = 0; j < 100000000; j++) {
+            uint64_t test = j | (j << 32);
+            lz = numConsecutiveZeros(test);
+            //lz = numConsecutiveZeros(~j);
+            __asm__ __volatile__("");
+        }
+    });
+    MEASURE_TIME(allocator, num_zeros_naive, {
+        for (uint64_t j = 0; j < 100000000; j++) {
+            uint64_t test = j | (j << 32);
+            lz = _numConsecutiveZeros(test);
+            if(lz != numConsecutiveZeros(test))
+            {
+                exit(1);
+            }
+            __asm__ __volatile__("");
+        }
+    });
+    END_TEST(allocator, {});
+    return lz;
+}
+
 void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
 {
 
@@ -813,52 +918,20 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     printf("error count: %lu\n", err_count);
 }
 
-uint32_t numConsecutiveZeros(uint64_t test)
-{
-    if(test == 0xffffffffffffffff)
-    {
-        return 0;
-    }
-    if(test == 0)
-    {
-        return 64;
-    }
-    uint32_t lz = __builtin_clzll(test);
-    uint32_t tz = __builtin_ctzll(test);
-    uint32_t mz = MAX(lz, tz);
-    uint32_t rem_bits = 64 - (lz + tz);
-    if(rem_bits < mz)
-    {
-        return mz;
-    }
-    uint64_t sum = (1UL << mz) - 1;
-    uint32_t count = 0;
-    for(int32_t i = tz; i < 64 - lz; i++)
-    {
-        if(!(test & (1UL << i)))
-        {
-            sum |= 1UL << (count++);
-        }
-        else
-        {
-            count = 0;
-        }
-    }
-    return 64 - __builtin_clzll(sum);
-}
 
 int main()
 {
-    int32_t a = numConsecutiveZeros(0x0000000000000000);
-    int32_t b = numConsecutiveZeros(0xffffffffffffffff);
-    int32_t _b =numConsecutiveZeros(0x8000000000000000);
-    int32_t _c =numConsecutiveZeros(0x0000000000000007);
-    int32_t c = numConsecutiveZeros(0x0f000000000000f0);
-    int32_t d = numConsecutiveZeros(0x00f0000000000f00);
-    int32_t e = numConsecutiveZeros(0x000f00000000f000);
-    int32_t f = numConsecutiveZeros(0x0000f000000f0000);
-    int32_t g = numConsecutiveZeros(0x00000f0000f00000);
-    int32_t h = numConsecutiveZeros(0x000000f00f000000);
+    /*
+    printf("%d\n", _numConsecutiveZeros(0x0000000000000000));
+    printf("%d\n", _numConsecutiveZeros(0xffffffffffffffff));
+    printf("%d\n", _numConsecutiveZeros(0x8000000000000000));
+    printf("%d\n", _numConsecutiveZeros(0x0000000000000007));
+    printf("%d\n", _numConsecutiveZeros(0x0f000000000000f0));
+    printf("%d\n", _numConsecutiveZeros(0x00f0000000000f00));
+    printf("%d\n", _numConsecutiveZeros(0x000f00000000f000));
+    printf("%d\n", _numConsecutiveZeros(0x0000f000000f0000));
+    printf("%d\n", _numConsecutiveZeros(0x00000f0000f00000));
+    printf("%d\n", _numConsecutiveZeros(0x000000f00f000000));
     int c1 = (64 - 9) * 1;
     int c2 = (64 - 4) * 63;
     int c3 = (64 - 2) * 63*64;
@@ -875,7 +948,13 @@ int main()
     test_new_heap(22, l0_count, 0, 0);
     test_new_heap(22, 0, l1_count, 0);
     test_new_heap(22, 0, 0, l2_count);
+    */
     
+    printf("Arena :%llu\n", sizeof(Arena));
+    printf("Arena :%llu\n", sizeof(Arena_L0));
+    printf("Arena :%llu\n", sizeof(Arena_L1));
+    printf("Arena :%llu\n", sizeof(Arena_L2));
+    //minor_test();
     // intermittently allocate a block
     //
     

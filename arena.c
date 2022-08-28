@@ -1,5 +1,4 @@
 //
-//  arena.inl
 //  MemPoolTests
 //
 //  Created by Vilhelm Sævarsson on 24.7.2022.
@@ -9,6 +8,51 @@
 #include "arena.h"
 #include "area.h"
 #include "section.h"
+
+uint32_t num_consecutive_zeros(uint64_t test)
+{
+    if(test == 0)
+    {
+        return 64;
+    }
+    
+    uint32_t lz = __builtin_clzll(test);
+    uint32_t tz = __builtin_ctzll(test);
+    if(lz == 0)
+    {
+        uint32_t l1 = __builtin_clzll(~test);
+        if((64 - l1) <= tz)
+        {
+            return tz;
+        }
+        test &= (1UL << (64 - (l1 - 1))) - 1;
+    }
+    
+    uint32_t mz = MAX(lz, tz);
+    if((64 - (lz + tz)) <= mz)
+    {
+        return mz;
+    }
+    
+    if(tz == 0)
+    {
+        test = test >> __builtin_ctzll(~test);
+    }
+    else
+    {
+        test = test >> (tz + 1);
+    }
+    
+    while(test >= (1UL << mz))
+    {
+        tz = __builtin_ctzll(test);
+        mz = mz ^ ((mz ^ tz) & -(mz < tz));
+        test = test >> (tz + 1);
+        test = test >> __builtin_ctzll(~test);
+    }
+    return mz;
+}
+
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j)
 {
     uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
@@ -117,6 +161,7 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
     if (mask_offset == (uintptr_t)al2)
     {
         idx = 2;
+        al2->L1_list_index = -1;
         al2->L1_L0_slots = 0;
         al2->L1_allocations =  arena_empty_mask;
         al2->L2_L1_slots = 0;
@@ -128,6 +173,7 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
     else if (mask_offset == (uintptr_t)al1)
     {
         idx = 1;
+        al1->L1_list_index = -1;
         al1->L1_L0_slots = 0;
         al1->L1_allocations =  arena_empty_mask;
         al1->L1_ranges = 0;
@@ -137,8 +183,11 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
     // setup initial masks.
     uint32_t pidx = delta_exp_to_idx((uintptr_t)al0, (uintptr_t)al1, stable->exponents[1]);
     al1->L1_zero |= (1UL << (63 - pidx));
+    al0->prev = 0;
+    al0->next = 0;
     al0->L0_allocations = get_base_empty_mask(h, idx);
     al0->L0_ranges = 0;
+    al0->L0_list_index = -1;
 }
 
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
@@ -148,12 +197,12 @@ Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
     h->container_exponent = (uint32_t)arena_size_exponent;
     //
     h->num_allocations = 0;
-    h->previous_l0_offset = -1;
-    h->previous_l1_offset = -1;
-    for(int i = 0; i < 5; i++)
+    h->active_l0_offset = -1;
+    h->active_l1_offset = -1;
+    for(int i = 0; i < 6; i++)
     {
-        h->L0_lists[i] = (Queue){NULL, NULL};
-        h->L1_lists[i] = (Queue){NULL, NULL};
+        h->L0_lists[i] = (Queue32){-1, -1};
+        h->L1_lists[i] = 0;
     }
     // high allocations
     arena_init_head_range(h, base_addr);
@@ -238,13 +287,13 @@ void *arena_find_block_L1(Arena *h, uintptr_t base, size_t range)
 {
     const arena_size_table *stable = get_size_table(h);
     Arena_L2* al2 = (Arena_L2*)base;
-    if (h->previous_l1_offset != -1) {
-        Arena_L1* al1 = (Arena_L1*)h->previous_l1_offset;
+    if (h->active_l1_offset != -1) {
+        Arena_L1* al1 = (Arena_L1*)(base + h->active_l1_offset);
         int32_t idx = find_first_nzeros(al1->L1_allocations, range);
         if (idx != -1) {
             return arena_get_block_L1(h, base, range, al1, idx);
         }
-        h->previous_l1_offset = -1;
+        h->active_l1_offset = -1;
     }
 
     uint32_t midx = -1;
@@ -258,13 +307,13 @@ void *arena_find_block_L1(Arena *h, uintptr_t base, size_t range)
         int32_t idx = find_first_nzeros(al1->L1_allocations, range);
         if(idx != -1)
         {
-            h->previous_l1_offset = (uintptr_t)al1;
+            h->active_l1_offset = (int32_t)((uintptr_t)base - (uintptr_t)al1);
             al2->L2_allocations |= (1UL << (63 - midx));
             return arena_get_block_L1(h, base, range, al1, idx);
         }
     
     }
-    h->previous_l1_offset = 0;
+    h->active_l1_offset = -1;
     return NULL;
 }
 
@@ -296,13 +345,13 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
 {
     const arena_size_table *stable = get_size_table(h);
     Arena_L2* al2 = (Arena_L2*)base;
-    if (h->previous_l0_offset != -1) {
-        Arena_L0* al0 = (Arena_L0*)h->previous_l0_offset;
+    if (h->active_l0_offset != -1) {
+        Arena_L0* al0 = (Arena_L0*)(base + h->active_l0_offset);
         int32_t idx = find_first_nzeros(al0->L0_allocations, range);
         if (idx != -1) {
             return arena_get_block_L0(h, base, range, al0, idx);
         }
-        h->previous_l0_offset = -1;
+        h->active_l0_offset = -1;
     }
 
     uint32_t midx = -1;
@@ -325,14 +374,14 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
             int32_t idx = find_first_nzeros(al0->L0_allocations, range);
             if(idx != -1)
             {
-                h->previous_l0_offset = (uintptr_t)al0;
+                h->active_l0_offset = (int32_t)((uintptr_t)base - (uintptr_t)al0);
                 al1->L1_allocations |= (1UL << (63 - bidx));
                 al2->L2_allocations |= (1UL << (63 - midx));
                 return arena_get_block_L0(h, base, range, al0, idx);
             }
         }
     }
-    h->previous_l0_offset = 0;
+    h->active_l0_offset = -1;
     return NULL;
 }
 

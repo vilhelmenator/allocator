@@ -197,38 +197,87 @@ void printBits(size_t const size, void const *const ptr);
 
 void print_header(Arena *h, uintptr_t ptr);
 
-static uint32_t num_consecutive_zeros(uint64_t test)
+uint32_t num_consecutive_zeros(uint64_t test);
+
+static inline int32_t get_list_index(uint64_t alloc_mask)
 {
-    if(test == 0xffffffffffffffff)
+    uint32_t nz = num_consecutive_zeros(alloc_mask);
+    if(nz != 0)
     {
-        return 0;
-    }
-    if(test == 0)
-    {
-        return 64;
-    }
-    uint32_t lz = __builtin_clzll(test);
-    uint32_t tz = __builtin_ctzll(test);
-    uint32_t mz = MAX(lz, tz);
-    uint32_t rem_bits = 64 - (lz + tz);
-    if(rem_bits < mz)
-    {
-        return mz;
-    }
-    uint64_t sum = (1UL << mz) - 1;
-    uint32_t count = 0;
-    for(int32_t i = tz; i < 64 - lz; i++)
-    {
-        if(!(test & (1UL << i)))
+        if((nz & (nz - 1)) == 0)
         {
-            sum |= 1UL << (count++);
+            return __builtin_ctz(nz);
         }
         else
         {
-            count = 0;
+            return 64 - __builtin_clz(nz);
         }
     }
-    return 64 - __builtin_clzll(sum);
+    return -1;
+}
+
+static inline void add_to_size_list_l1(Arena* a, Arena_L1* l1, int32_t l1_idx)
+{
+    // get index of l1 [0 - 63]
+    int32_t idx = get_list_index(l1->L1_allocations);
+    uint64_t add_mask = (1UL << (63 - l1_idx));
+    if(l1->L1_list_index != -1)
+    {
+        if(idx != l1->L1_list_index)
+        {
+            a->L1_lists[l1->L1_list_index] &= ~add_mask;
+        }
+        else
+        {
+            return; // nothing to do
+        }
+    }
+    
+    if(idx != -1)
+    {
+        a->L1_lists[idx] &= add_mask;
+    }
+    l1->L1_list_index = idx;
+}
+
+static inline void remove_from_size_list_l1(Arena* a, Arena_L1* l1, int32_t l1_idx)
+{
+    if(l1->L1_list_index != -1)
+    {
+        a->L1_lists[l1->L1_list_index] &= ~(1UL << (63 - l1_idx));
+    }
+}
+
+static inline void add_to_size_list_l0(Arena* a, Arena_L0* l0)
+{
+    int32_t idx = get_list_index(l0->L0_allocations);
+    Arena_L2 *al2 = (Arena_L2 *)((uintptr_t)a & ~(os_page_size - 1));
+    if(l0->L0_list_index != -1)
+    {
+        if(idx != l0->L0_list_index)
+        {
+            list_remove32(&a->L0_lists[l0->L0_list_index], l0, al2);
+        }
+        else
+        {
+            return; // nothing to do
+        }
+    }
+    if(idx != -1)
+    {
+        Queue32* q = &a->L0_lists[idx];
+        list_enqueue32(q, l0, al2);
+    }
+    l0->L0_list_index = idx;
+}
+
+static inline void remove_from_size_list_l0(Arena* a, Arena_L0* l0)
+{
+    if(l0->L0_list_index != -1)
+    {
+        Arena_L2 *al2 = (Arena_L2 *)((uintptr_t)a & ~(os_page_size - 1));
+        list_remove32(&a->L0_lists[l0->L0_list_index], l0, al2);
+    }
 }
 
 static inline uint64_t apply_range(uint32_t range, uint32_t at)
