@@ -245,6 +245,7 @@ static inline void remove_from_size_list_l1(Arena* a, Arena_L1* l1, int32_t l1_i
     if(l1->L1_list_index != -1)
     {
         a->L1_lists[l1->L1_list_index] &= ~(1UL << (63 - l1_idx));
+        l1->L1_list_index = -1;
     }
 }
 
@@ -277,6 +278,7 @@ static inline void remove_from_size_list_l0(Arena* a, Arena_L0* l0)
     {
         Arena_L2 *al2 = (Arena_L2 *)((uintptr_t)a & ~(os_page_size - 1));
         list_remove32(&a->L0_lists[l0->L0_list_index], l0, al2);
+        l0->L0_list_index = -1;
     }
 }
 
@@ -291,6 +293,7 @@ static inline uint64_t apply_range(uint32_t range, uint32_t at)
     {
         return 0;
     }
+    
     return (1UL << at) | (1UL << (at - (range - 1)));
 }
 

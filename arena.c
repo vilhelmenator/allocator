@@ -90,48 +90,50 @@ void print_header(Arena *h, uintptr_t ptr)
     printf("\nL2!\n");
     printf("L0 Allocated:[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L0_allocations);
-    printf("L0 Ranges:   [0b");
+    printf("L0 Ranges   :[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L0_ranges);
-    printf("L0 Reserved: [0b");
-    printBits(sizeof(uint64_t), (uint64_t*)&al2->L1_L0_slots);
+    printf("L0 L1 Slots :[0b");
+    printBits(sizeof(uint64_t), (uint64_t*)&al2->L0_L1_Slots);
     
     printf("L1 Allocated:[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L1_allocations);
-    printf("L1 Ranges:   [0b");
+    printf("L1 Ranges   :[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L1_ranges);
-    printf("L1 Reserved: [0b");
-    printBits(sizeof(uint64_t), (uint64_t*)&al2->L2_L1_slots);
+    printf("L1 L2 Slots :[0b");
+    printBits(sizeof(uint64_t), (uint64_t*)&al2->L1_L2_Slots);
     
     printf("L2 Allocated:[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L2_allocations);
-    printf("L2 Ranges:   [0b");
+    printf("L2 Ranges   :[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L2_ranges);
     
     printf("L1 ZERO     :[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L1_zero);
     printf("L2 ZERO     :[0b");
     printBits(sizeof(uint64_t), (uint64_t*)&al2->L2_zero);
-    printf("L0 Filter   :[0b");
-    printBits(sizeof(uint64_t), (uint64_t*)&al2->L2_L0_slots);
+    printf("L0 L2 Slots :[0b");
+    printBits(sizeof(uint64_t), (uint64_t*)&al2->L0_L2_Slots);
 
     if (ridx != 0) {
-        Arena_L1 *al1 = (Arena_L1 *)((uintptr_t)al2 + ridx * (1UL << (h->container_exponent - 6)));
-        
-        printf("L1!\n");
-        printf("L0 Allocated:[0b");
-        printBits(sizeof(uint64_t), (uint64_t *)&al1->L0_allocations);
-        printf("L0 Ranges:   [0b");
-        printBits(sizeof(uint64_t), (uint64_t *)&al1->L0_ranges);
-        printf("L0 Reserved: [0b");
-        printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_L0_slots);
-        
-        printf("L1 Allocated:[0b");
-        printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_allocations);
-        printf("L1 Ranges:   [0b");
-        printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_ranges);
-        printf("L1 ZERO:     [0b");
-        printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_zero);
-        
+        if(((uintptr_t)ptr & (stable->sizes[2] - 1)) != 0)
+        {
+            Arena_L1 *al1 = (Arena_L1 *)((uintptr_t)al2 + ridx * (1UL << (h->container_exponent - 6)));
+            
+            printf("L1!\n");
+            printf("L0 Allocated:[0b");
+            printBits(sizeof(uint64_t), (uint64_t *)&al1->L0_allocations);
+            printf("L0 Ranges   :[0b");
+            printBits(sizeof(uint64_t), (uint64_t *)&al1->L0_ranges);
+            printf("L0 L1 Slots :[0b");
+            printBits(sizeof(uint64_t), (uint64_t *)&al1->L0_L1_Slots);
+            
+            printf("L1 Allocated:[0b");
+            printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_allocations);
+            printf("L1 Ranges   :[0b");
+            printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_ranges);
+            printf("L1 ZERO     :[0b");
+            printBits(sizeof(uint64_t), (uint64_t *)&al1->L1_zero);
+        }
     }
     if(((uintptr_t)ptr & (stable->sizes[1] - 1)) != 0)
     {
@@ -162,19 +164,19 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
     {
         idx = 2;
         al2->L1_list_index = -1;
-        al2->L1_L0_slots = 0;
+        al2->L0_L1_Slots = 0;
         al2->L1_allocations =  arena_empty_mask;
-        al2->L2_L1_slots = 0;
+        al2->L1_L2_Slots = 0;
         al2->L2_allocations = arena_empty_mask;
         al2->L2_ranges = 0;
         al2->L2_zero = 1UL << 63;
-        al2->L2_L0_slots = 0;
+        al2->L0_L2_Slots = 0;
     }
     else if (mask_offset == (uintptr_t)al1)
     {
         idx = 1;
         al1->L1_list_index = -1;
-        al1->L1_L0_slots = 0;
+        al1->L0_L1_Slots = 0;
         al1->L1_allocations =  arena_empty_mask;
         al1->L1_ranges = 0;
         uint32_t pidx = delta_exp_to_idx((uintptr_t)al1, (uintptr_t)al2, stable->exponents[2]);
@@ -183,8 +185,8 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
     // setup initial masks.
     uint32_t pidx = delta_exp_to_idx((uintptr_t)al0, (uintptr_t)al1, stable->exponents[1]);
     al1->L1_zero |= (1UL << (63 - pidx));
-    al0->prev = 0;
-    al0->next = 0;
+    al0->prev = -1;
+    al0->next = -1;
     al0->L0_allocations = get_base_empty_mask(h, idx);
     al0->L0_ranges = 0;
     al0->L0_list_index = -1;
@@ -250,13 +252,13 @@ void *arena_find_block_L2(Arena *h, uintptr_t base, size_t range)
     if(idx != -1)
     {
         uintptr_t mask = reserve_range_idx(range, idx);
-        idx = 63 - idx;
+        
         
         al2->L2_allocations |= mask;
         al2->L2_ranges |= apply_range((uint32_t)range, idx);
         h->num_allocations++;
-        al2->L2_L0_slots |= mask;
-        
+        al2->L0_L2_Slots |= mask;
+        idx = 63 - idx;
         return (void *)((uintptr_t)al2 + (idx * stable->sizes[2]));
     }
     return NULL;
@@ -267,17 +269,17 @@ void *arena_get_block_L1(Arena *h, uintptr_t base, size_t range, Arena_L1* al1, 
     const arena_size_table *stable = get_size_table(h);
     Arena_L2* al2 = (Arena_L2*)base;
     uintptr_t mask = reserve_range_idx(range, idx);
-    idx = 63 - idx;
     
     al1->L1_allocations |= mask;
     al1->L1_ranges |= apply_range((uint32_t)range, idx);
     
     h->num_allocations++;
-
+    idx = 63 - idx;
+    
     if (al1->L1_allocations == UINT64_MAX) {
         uint32_t pidx = delta_exp_to_idx((uintptr_t)al1, (uintptr_t)al2, stable->exponents[2]);
-        al2->L2_L1_slots |= (1UL << (63 - pidx));
-        al2->L2_L0_slots |= (1UL << (63 - pidx));
+        al2->L1_L2_Slots |= (1UL << (63 - pidx));
+        al2->L0_L2_Slots |= (1UL << (63 - pidx));
     }
     
     return (void *)((uintptr_t)al1 + (idx * stable->sizes[1]));
@@ -293,11 +295,13 @@ void *arena_find_block_L1(Arena *h, uintptr_t base, size_t range)
         if (idx != -1) {
             return arena_get_block_L1(h, base, range, al1, idx);
         }
+        uint32_t pidx = delta_exp_to_idx((uintptr_t)al1, (uintptr_t)al2, stable->exponents[2]);
+        add_to_size_list_l1(h, al1, pidx);
         h->active_l1_offset = -1;
     }
 
     uint32_t midx = -1;
-    while ((midx = get_next_mask_idx(~(al2->L2_L1_slots|(al2->L2_allocations ^ arena_empty_mask)), midx + 1)) != -1) {
+    while ((midx = get_next_mask_idx(~(al2->L1_L2_Slots|(al2->L2_allocations ^ arena_empty_mask)), midx + 1)) != -1) {
 
         Arena_L1* al1 = (Arena_L1*)(base + (midx * stable->sizes[2]));
         if (((1UL << (63 - midx)) & al2->L2_zero) == 0) {
@@ -307,8 +311,9 @@ void *arena_find_block_L1(Arena *h, uintptr_t base, size_t range)
         int32_t idx = find_first_nzeros(al1->L1_allocations, range);
         if(idx != -1)
         {
-            h->active_l1_offset = (int32_t)((uintptr_t)base - (uintptr_t)al1);
+            h->active_l1_offset = (int32_t)((uintptr_t)al1 - (uintptr_t)base);
             al2->L2_allocations |= (1UL << (63 - midx));
+            remove_from_size_list_l1(h, al1, midx);
             return arena_get_block_L1(h, base, range, al1, idx);
         }
     
@@ -322,19 +327,18 @@ void *arena_get_block_L0(Arena *h, uintptr_t base, size_t range, Arena_L0* al0, 
     const arena_size_table *stable = get_size_table(h);
     Arena_L2* al2 = (Arena_L2*)base;
     uintptr_t mask = reserve_range_idx(range, idx);
-    idx = 63 - idx;
-    
     al0->L0_allocations |= mask;
     al0->L0_ranges |= apply_range((uint32_t)range, idx);
-    
+    idx = 63 - idx;
     h->num_allocations++;
-    Arena_L1* al1 = (Arena_L1*)((uintptr_t)al0 & ~(stable->sizes[2] - 1));
     if (al0->L0_allocations == UINT64_MAX) {
+        Arena_L1* al1 = (Arena_L1*)((uintptr_t)al0 & ~(stable->sizes[2] - 1));
         uint32_t pidx = delta_exp_to_idx((uintptr_t)al0, (uintptr_t)al1, stable->exponents[1]);
-        al1->L1_L0_slots |= (1UL << (63 - pidx));
-        if (al1->L1_L0_slots == UINT64_MAX) {
-            pidx = delta_exp_to_idx((uintptr_t)al0, (uintptr_t)al2, stable->exponents[2]);
-            al2->L2_L0_slots |= (1UL << (63 - pidx));
+        al1->L0_L1_Slots |= (1UL << (63 - pidx));
+        pidx = delta_exp_to_idx((uintptr_t)al0, (uintptr_t)al2, stable->exponents[2]);
+        add_to_size_list_l1(h, al1, pidx);
+        if (al1->L0_L1_Slots == UINT64_MAX) {
+            al2->L0_L2_Slots |= (1UL << (63 - pidx));
         }
     }
     
@@ -351,11 +355,12 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
         if (idx != -1) {
             return arena_get_block_L0(h, base, range, al0, idx);
         }
+        add_to_size_list_l0(h, al0);
         h->active_l0_offset = -1;
     }
 
     uint32_t midx = -1;
-    while ((midx = get_next_mask_idx(~al2->L2_L0_slots, midx + 1)) != -1) {
+    while ((midx = get_next_mask_idx(~al2->L0_L2_Slots, midx + 1)) != -1) {
 
         Arena_L1* al1 = (Arena_L1*)(base + (midx * stable->sizes[2]));
         if (((1UL << (63 - midx)) & al2->L2_zero) == 0) {
@@ -364,7 +369,7 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
         }
         
         uint32_t bidx = -1;
-        while ((bidx = get_next_mask_idx(~(al1->L1_L0_slots|(al1->L1_allocations ^ arena_empty_mask)), bidx + 1)) != -1) {
+        while ((bidx = get_next_mask_idx(~(al1->L0_L1_Slots|(al1->L1_allocations ^ arena_empty_mask)), bidx + 1)) != -1) {
             
             Arena_L0* al0 = (Arena_L0*)((uintptr_t)al1 + (bidx * stable->sizes[1]));
             if (((1UL << (63 - bidx)) & al1->L1_zero) == 0) {
@@ -374,9 +379,10 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
             int32_t idx = find_first_nzeros(al0->L0_allocations, range);
             if(idx != -1)
             {
-                h->active_l0_offset = (int32_t)((uintptr_t)base - (uintptr_t)al0);
+                h->active_l0_offset = (int32_t)((uintptr_t)al0 - (uintptr_t)base);
                 al1->L1_allocations |= (1UL << (63 - bidx));
                 al2->L2_allocations |= (1UL << (63 - midx));
+                remove_from_size_list_l0(h, al0);
                 return arena_get_block_L0(h, base, range, al0, idx);
             }
         }
@@ -402,16 +408,16 @@ void *arena_get_block(Arena *h, size_t size)
 
     uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
     uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
-    if (al2->L2_L0_slots == UINT64_MAX) {
+    if (al2->L0_L2_Slots == UINT64_MAX) {
         // we don't even have room for the smallest allocation.
         return NULL;
     }
 
     size_t limit = end_offset - data_offset;
-    if ((al2->L2_L1_slots == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
+    if ((al2->L1_L2_Slots == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
         // there is no room for anything more than a small multiple of the smallest
         // size. new requests will be rejected. Only resize requests will be permitted.
-        if ((al2->L2_L1_slots == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
+        if ((al2->L1_L2_Slots == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
             limit = stable->sizes[0];
         } else if (al2->L2_allocations == UINT64_MAX) {
             limit = stable->sizes[1];
@@ -447,7 +453,7 @@ void *arena_get_block(Arena *h, size_t size)
         break;
     }
     }
-    //print_header(h, (uintptr_t)res);
+    print_header(h, (uintptr_t)res);
     return res;
 }
 
@@ -459,7 +465,7 @@ void arena_reset_L2(Arena *h, void *p, Arena_L2* al2, uintptr_t sub_mask, bool n
         al2->L1_allocations &= sub_mask| arena_empty_mask;
     }
 
-    al2->L2_L0_slots &= sub_mask;
+    al2->L0_L2_Slots &= sub_mask;
     al2->L2_allocations &= sub_mask| arena_empty_mask;
     al2->L2_ranges &= sub_mask;
     if(needs_zero)
@@ -478,7 +484,7 @@ void arena_free_L1(Arena *h, void *p, Arena_L1* al1, Arena_L2* al2, uintptr_t su
     al1->L1_allocations = (al1->L1_allocations & sub_mask) | arena_empty_mask;
     al1->L1_ranges = al1->L1_ranges & sub_mask;
     if ((al1->L1_allocations == arena_empty_mask) && (previous_mask != al1->L1_allocations)) {
-        al2->L2_L1_slots &= ~(1UL << (63 - ridx));
+        al2->L1_L2_Slots &= ~(1UL << (63 - ridx));
         arena_reset_L2(h, al1, al2, ~(1UL << (63 - ridx)), needs_zero);
         if(needs_zero)
         {
@@ -512,13 +518,13 @@ void arena_free_L0(Arena *h, void *p, Arena_L0* al0, Arena_L2* al2, uintptr_t su
         }
     }
     uintptr_t previous_mask = al0->L0_allocations;
-    al2->L2_L0_slots &= ~(1UL << (63 - ridx));
+    al2->L0_L2_Slots &= ~(1UL << (63 - ridx));
     al0->L0_allocations = (al0->L0_allocations & sub_mask) | base_empty_mask;
     al0->L0_ranges = al0->L0_ranges & sub_mask;
     if ((al0->L0_allocations == base_empty_mask) && (previous_mask != al0->L0_allocations)) {
         uint32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)al1, stable->exponents[1]);
         sub_mask = ~(1UL << (63 - idx));
-        al1->L1_L0_slots &= sub_mask;
+        al1->L0_L1_Slots &= sub_mask;
         // if you have released a whole l0 plate.
         // let the parent know.
         arena_free_L1(h, al0, al1, al2, sub_mask, ridx, false);
@@ -575,7 +581,7 @@ void arena_free(Arena *h, void *p, bool dummy)
             break;
         }
     }
-    //print_header(h, (uintptr_t)p);
+    print_header(h, (uintptr_t)p);
 }
 
 size_t arena_get_block_size(Arena *h, void *p)

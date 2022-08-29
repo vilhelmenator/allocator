@@ -865,7 +865,7 @@ void test_size_arena_iter(uint32_t alloc_size, size_t num_items, size_t num_loop
     free(variables);
 }
 
-void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_t num_items_l2 )
+void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_t num_items_l2, size_t mult )
 {
     // [ ] reserve all memory
     // [ ] reserve all levels
@@ -873,9 +873,9 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     // [ ] release all levels
     //
     size_t err_count = 0;
-    size_t size_l0 = 1 << (a_exp - 18);
-    size_t size_l1 = 1 << (a_exp - 12);
-    size_t size_l2 = 1 << (a_exp - 6);
+    size_t size_l0 = (1 << (a_exp - 18)) * mult;
+    size_t size_l1 = (1 << (a_exp - 12)) * mult;
+    size_t size_l2 = (1 << (a_exp - 6)) * mult;
     size_t num_items = num_items_l0 + num_items_l1 + num_items_l2;
     size_t size = (num_items_l0 * size_l0) + (num_items_l1 * size_l1) + (num_items_l2 * size_l2);
     void *mem = cmalloc_arena(SZ_MB * 4, AT_FIXED_4);
@@ -921,18 +921,7 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
 
 int main()
 {
-    /*
-    printf("%d\n", _numConsecutiveZeros(0x0000000000000000));
-    printf("%d\n", _numConsecutiveZeros(0xffffffffffffffff));
-    printf("%d\n", _numConsecutiveZeros(0x8000000000000000));
-    printf("%d\n", _numConsecutiveZeros(0x0000000000000007));
-    printf("%d\n", _numConsecutiveZeros(0x0f000000000000f0));
-    printf("%d\n", _numConsecutiveZeros(0x00f0000000000f00));
-    printf("%d\n", _numConsecutiveZeros(0x000f00000000f000));
-    printf("%d\n", _numConsecutiveZeros(0x0000f000000f0000));
-    printf("%d\n", _numConsecutiveZeros(0x00000f0000f00000));
-    printf("%d\n", _numConsecutiveZeros(0x000000f00f000000));
-    int c1 = (64 - 9) * 1;
+    int c1 = (64 - 16) * 1;
     int c2 = (64 - 4) * 63;
     int c3 = (64 - 2) * 63*64;
     
@@ -942,18 +931,19 @@ int main()
     //test_new_heap(63, 1024*64);
     //test_new_heap(63, 1024);
     //test_new_heap(55, 16);
-    test_new_heap(22, l0_count, 0, 0);
-    test_new_heap(22, 55, 63, 63);
-    test_new_heap(22, 55, 63, 63);
-    test_new_heap(22, l0_count, 0, 0);
-    test_new_heap(22, 0, l1_count, 0);
-    test_new_heap(22, 0, 0, l2_count);
-    */
+    test_new_heap(22, 48, 0, 0, 2);
+    //test_new_heap(22, 48, 63, 63, 1);
+    //test_new_heap(22, 48, 63, 63, 1);
+    //test_new_heap(22, l0_count, 0, 0, 1);
+    //test_new_heap(22, 0, l1_count, 0, 1);
+    //test_new_heap(22, 0, 0, l2_count, 1);
     
+    /*
     printf("Arena :%llu\n", sizeof(Arena));
     printf("Arena :%llu\n", sizeof(Arena_L0));
     printf("Arena :%llu\n", sizeof(Arena_L1));
     printf("Arena :%llu\n", sizeof(Arena_L2));
+     */
     //minor_test();
     // intermittently allocate a block
     //

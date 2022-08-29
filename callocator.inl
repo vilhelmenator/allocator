@@ -204,17 +204,17 @@ typedef struct Arena_L2_t
     uint32_t  L0_list_index;
     // L0 - 32 bytes
     uint32_t  L1_list_index;
-    uint64_t  L1_L0_slots;      // are l0 size slots available at root 64th part.
+    uint64_t  L0_L1_Slots;      // are l0 size slots available at root 64th part.
     uint64_t  L1_allocations;   // base allocations here at the root
     uint64_t  L1_ranges;        // sizes of allocations at the root
     uint64_t  L1_zero;          // have the L0 headers been zeroed at the root 64th part.
     // L1 - 64 bytes
-    uint64_t  L2_L1_slots;      // are l1 size slots available at each 64th part
+    uint64_t  L1_L2_Slots;      // are l1 size slots available at each 64th part
     uint64_t  L2_allocations;   // base allocations for largest element
     uint64_t  L2_ranges;        // sizes of allocations.
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     // 96
-    uint64_t  L2_L0_slots;      // are l0 size slots available at each 64th part.
+    uint64_t  L0_L2_Slots;      // are l0 size slots available at each 64th part.
     uint64_t  padding[3];
 } Arena_L2; // 128 bytes
 // root header 256 bytes .. 64,64,64,64 .. 256
@@ -227,7 +227,7 @@ typedef struct Arena_L1_t
     uint64_t  L0_ranges;
     uint32_t  L0_list_index;
     uint32_t  L1_list_index;
-    uint64_t  L1_L0_slots;
+    uint64_t  L0_L1_Slots;
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
