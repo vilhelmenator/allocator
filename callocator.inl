@@ -344,26 +344,29 @@ static inline void list_enqueue32(void *queue, void *node, void*base)
 }
 void list_remove32(void *queue, void* node, void* base);
 
-
 static inline int32_t find_first_nones(uintptr_t x, int64_t n)
 {
+    if(n > 64)
+    {
+        return -1;
+    }
     int64_t s;
     while (n > 1) {
         s = n >> 1;
-        x = x & (x << s);
+        x = x & (x >> s);
         n = n - s;
     }
-    return 63 - (x == 0 ? 64 : __builtin_clzll(x));
+    return x == 0 ? -1 : __builtin_ctzll(x);
 }
 
 static inline int32_t find_first_nzeros(uintptr_t x, int64_t n) { return find_first_nones(~x, n); }
 static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
 {
-    uint64_t msk_cpy = mask << cidx;
+    uint64_t msk_cpy = mask >> cidx;
     if (msk_cpy == 0 || (cidx > 63)) {
         return -1;
     }
-    return __builtin_clzll(msk_cpy) + cidx;
+    return __builtin_ctzll(msk_cpy) + cidx;
 }
 
 

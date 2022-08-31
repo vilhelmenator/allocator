@@ -932,11 +932,11 @@ int main()
     //test_new_heap(63, 1024);
     //test_new_heap(55, 16);
     test_new_heap(22, 48, 0, 0, 2);
-    //test_new_heap(22, 48, 63, 63, 1);
-    //test_new_heap(22, 48, 63, 63, 1);
-    //test_new_heap(22, l0_count, 0, 0, 1);
-    //test_new_heap(22, 0, l1_count, 0, 1);
-    //test_new_heap(22, 0, 0, l2_count, 1);
+    test_new_heap(22, 48, 63, 63, 1);
+    test_new_heap(22, 48, 63, 63, 1);
+    test_new_heap(22, l0_count, 0, 0, 1);
+    test_new_heap(22, 0, l1_count, 0, 1);
+    test_new_heap(22, 0, 0, l2_count, 1);
     
     /*
     printf("Arena :%llu\n", sizeof(Arena));
@@ -955,7 +955,7 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-    // run_tests();
+     //run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);
