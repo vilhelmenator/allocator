@@ -169,7 +169,7 @@ void arena_init_head_range(Arena *h, uintptr_t mask_offset)
         al2->L1_L2_Slots = 0;
         al2->L2_allocations = arena_empty_mask;
         al2->L2_ranges = 0;
-        al2->L2_zero = 1UL << 63;
+        al2->L2_zero = 1UL;
         al2->L0_L2_Slots = 0;
     }
     else if (mask_offset == (uintptr_t)al1)
@@ -201,6 +201,8 @@ Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
     h->num_allocations = 0;
     h->active_l0_offset = -1;
     h->active_l1_offset = -1;
+    h->previous_size = 0;
+    h->previous_level = -1;
     for(int i = 0; i < 6; i++)
     {
         h->L0_lists[i] = (Queue32){-1, -1};
@@ -344,8 +346,6 @@ void *arena_get_block_L0(Arena *h, uintptr_t base, size_t range, Arena_L0* al0, 
 
 void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
 {
-    const arena_size_table *stable = get_size_table(h);
-    Arena_L2* al2 = (Arena_L2*)base;
     if (h->active_l0_offset != -1) {
         Arena_L0* al0 = (Arena_L0*)(base + h->active_l0_offset);
         int32_t idx = find_first_nzeros(al0->L0_allocations, range);
@@ -355,7 +355,8 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
         add_to_size_list_l0(h, al0);
         h->active_l0_offset = -1;
     }
-
+    const arena_size_table *stable = get_size_table(h);
+    Arena_L2* al2 = (Arena_L2*)base;
     uint32_t midx = -1;
     while ((midx = get_next_mask_idx(~al2->L0_L2_Slots, midx + 1)) != -1) {
 
@@ -398,44 +399,57 @@ void *arena_get_block_at(Arena *h, size_t l3idx, size_t l2idx, size_t l1idx)
 
 void *arena_get_block(Arena *h, size_t size)
 {
-    const arena_size_table *stable = get_size_table(h);
-
-    uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
-    Arena_L2* al2 = (Arena_L2*)base;
-
-    uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
-    uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
-    if (al2->L0_L2_Slots == UINT64_MAX) {
-        // we don't even have room for the smallest allocation.
-        return NULL;
-    }
-
-    size_t limit = end_offset - data_offset;
-    if ((al2->L1_L2_Slots == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
-        // there is no room for anything more than a small multiple of the smallest
-        // size. new requests will be rejected. Only resize requests will be permitted.
-        if ((al2->L1_L2_Slots == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
-            limit = stable->sizes[0];
-        } else if (al2->L2_allocations == UINT64_MAX) {
-            limit = stable->sizes[1];
-        } else {
-            limit = stable->sizes[2];
-        }
-    }
-
-    if (size > limit) {
-        return NULL;
-    }
-    int32_t level_idx = 2;
-    if (size < stable->sizes[1]) {
-        level_idx = 0;
-    } else if (size < stable->sizes[2]) {
-        level_idx = 1;
-    }
-
-    size_t range = size >> stable->exponents[level_idx];
-    range += (size & (stable->sizes[level_idx] - 1)) ? 1 : 0;
     void *res = NULL;
+    uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
+    size_t range = 0;
+    uint32_t level_idx = 2;
+    if(h->previous_size == (uint32_t)size)
+    {
+        level_idx = h->previous_level;
+        range = h->previous_range;
+    }
+    else
+    {
+        const arena_size_table *stable = get_size_table(h);
+        Arena_L2* al2 = (Arena_L2*)base;
+
+        uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
+        uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
+        if (al2->L0_L2_Slots == UINT64_MAX) {
+            // we don't even have room for the smallest allocation.
+            return NULL;
+        }
+
+        size_t limit = end_offset - data_offset;
+        if ((al2->L1_L2_Slots == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
+            // there is no room for anything more than a small multiple of the smallest
+            // size. new requests will be rejected. Only resize requests will be permitted.
+            if ((al2->L1_L2_Slots == UINT64_MAX) && (al2->L2_allocations == UINT64_MAX)) {
+                limit = stable->sizes[0];
+            } else if (al2->L2_allocations == UINT64_MAX) {
+                limit = stable->sizes[1];
+            } else {
+                limit = stable->sizes[2];
+            }
+        }
+
+        if (size > limit) {
+            return NULL;
+        }
+        
+        if (size < stable->sizes[1]) {
+            level_idx = 0;
+        } else if (size < stable->sizes[2]) {
+            level_idx = 1;
+        }
+
+        range = size >> stable->exponents[level_idx];
+        range += (size & (stable->sizes[level_idx] - 1)) ? 1 : 0;
+        h->previous_size = (uint32_t)size;
+        h->previous_level = level_idx;
+        h->previous_range = (uint32_t)range;
+    }
+    
     switch (level_idx) {
     case 0: {
         res = arena_find_block_L0(h, base, range);
@@ -450,7 +464,8 @@ void *arena_get_block(Arena *h, size_t size)
         break;
     }
     }
-    //print_header(h, (uintptr_t)res);
+    
+    print_header(h, (uintptr_t)res);
     return res;
 }
 
@@ -578,7 +593,7 @@ void arena_free(Arena *h, void *p, bool dummy)
             break;
         }
     }
-    //print_header(h, (uintptr_t)p);
+    print_header(h, (uintptr_t)p);
 }
 
 size_t arena_get_block_size(Arena *h, void *p)

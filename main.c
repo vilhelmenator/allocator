@@ -882,15 +882,17 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     Arena *nh = arena_init((uintptr_t)mem, 0, a_exp);
     char **variables = (char **)malloc(num_items * size);
     size_t current_count = 0;
-    for(int i = 0; i < num_items_l0; i++)
+    
+    for(int i = 0; i < num_items_l2; i++)
     {
-        void* all = arena_get_block(nh, size_l0);
+        void* all = arena_get_block(nh, size_l2);
         if(all == NULL)
         {
             err_count++;
         }
         variables[current_count++] = all;
     }
+    
     for(int i = 0; i < num_items_l1; i++)
     {
         void* all = arena_get_block(nh, size_l1);
@@ -900,9 +902,10 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
         }
         variables[current_count++] = all;
     }
-    for(int i = 0; i < num_items_l2; i++)
+    
+    for(int i = 0; i < num_items_l0; i++)
     {
-        void* all = arena_get_block(nh, size_l2);
+        void* all = arena_get_block(nh, size_l0);
         if(all == NULL)
         {
             err_count++;
@@ -928,16 +931,18 @@ int main()
     int l0_count =  c1 + c2 + c3;
     int l1_count = 63 * 64;
     int l2_count = 63;
+    test_new_heap(22, 22, 0, 0, 3);
     //test_new_heap(63, 1024*64);
     //test_new_heap(63, 1024);
     //test_new_heap(55, 16);
+    /*
     test_new_heap(22, 48, 0, 0, 2);
     test_new_heap(22, 48, 63, 63, 1);
     test_new_heap(22, 48, 63, 63, 1);
     test_new_heap(22, l0_count, 0, 0, 1);
     test_new_heap(22, 0, l1_count, 0, 1);
     test_new_heap(22, 0, 0, l2_count, 1);
-    
+    */
     /*
     printf("Arena :%llu\n", sizeof(Arena));
     printf("Arena :%llu\n", sizeof(Arena_L0));

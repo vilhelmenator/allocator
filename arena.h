@@ -314,7 +314,7 @@ static inline uint32_t get_range(uint32_t at, uint64_t mask)
     {
         return 1;
     }
-    return __builtin_ctzll(mask >> at) + 1;
+    return __builtin_ctzll(mask >> (at + 1)) + 2;
 }
 
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);

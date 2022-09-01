@@ -189,6 +189,10 @@ typedef struct Arena_t
     uint32_t container_exponent;
     int32_t active_l0_offset;
     int32_t active_l1_offset;
+    uint32_t previous_size;
+    uint32_t previous_level;
+    uint32_t previous_range;
+    uint32_t previuos_padding;
     Queue32   L0_lists[6]; // 1,2,4,8,16,32
     uint64_t  L1_lists[6]; // 1,2,4,8,16,32
     struct Arena_t *prev;
@@ -215,7 +219,7 @@ typedef struct Arena_L2_t
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     // 96
     uint64_t  L0_L2_Slots;      // are l0 size slots available at each 64th part.
-    uint64_t  padding[3];
+    uint64_t  padding[1];
 } Arena_L2; // 128 bytes
 // root header 256 bytes .. 64,64,64,64 .. 256
 
