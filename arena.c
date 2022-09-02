@@ -53,18 +53,6 @@ uint32_t num_consecutive_zeros(uint64_t test)
     return mz;
 }
 
-uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j)
-{
-    uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
-    return base + new_arena_level_offset[i] + new_arena_level_size[i] * j;
-}
-
-uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k)
-{
-    uintptr_t base = ((uintptr_t)h & ~(os_page_size - 1));
-    return base + (1 << (h->container_exponent - 6)) * i + (1 << ((h->container_exponent - 12))) * j +
-           (1 << (h->container_exponent - 18)) * k;
-}
 void printBits(size_t const size, void const *const ptr)
 {
     unsigned char *b = (unsigned char *)ptr;
@@ -299,7 +287,22 @@ void *arena_find_block_L1(Arena *h, uintptr_t base, size_t range)
         add_to_size_list_l1(h, al1, pidx);
         h->active_l1_offset = -1;
     }
-
+    
+    uint32_t lindex = get_list_index_for_range((uint32_t)range);
+    uint64_t al1_offset = h->L1_lists[lindex];
+    if(al1_offset != 0)
+    {
+        int32_t pidx = find_first_nzeros(al1_offset, 1);
+        Arena_L1* al1 = (Arena_L1*)((uintptr_t)al2 + (pidx * stable->sizes[2]));
+        int32_t idx = find_first_nzeros(al1->L1_allocations, range);
+        if(idx != -1)
+        {
+            h->active_l1_offset = (int32_t)((uintptr_t)al1 - (uintptr_t)base);
+            remove_from_size_list_l1(h, al1, pidx);
+            return arena_get_block_L1(h, base, range, al1, idx);
+        }
+    }
+    
     uint32_t midx = -1;
     while ((midx = get_next_mask_idx(~(al2->L1_L2_Slots|(al2->L2_allocations ^ arena_empty_mask)), midx + 1)) != -1) {
 
@@ -354,6 +357,20 @@ void *arena_find_block_L0(Arena *h, uintptr_t base, size_t range)
         }
         add_to_size_list_l0(h, al0);
         h->active_l0_offset = -1;
+    }
+    
+    uint32_t lindex = get_list_index_for_range((uint32_t)range);
+    uint32_t al0_offset = h->L0_lists[lindex].head;
+    if(al0_offset != -1)
+    {
+        Arena_L0* al0 = (Arena_L0*)(base + al0_offset);
+        int32_t idx = find_first_nzeros(al0->L0_allocations, range);
+        if(idx != -1)
+        {
+            h->active_l0_offset = al0_offset;
+            remove_from_size_list_l0(h, al0);
+            return arena_get_block_L0(h, base, range, al0, idx);
+        }
     }
     const arena_size_table *stable = get_size_table(h);
     Arena_L2* al2 = (Arena_L2*)base;
@@ -412,14 +429,12 @@ void *arena_get_block(Arena *h, size_t size)
     {
         const arena_size_table *stable = get_size_table(h);
         Arena_L2* al2 = (Arena_L2*)base;
-
-        uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
-        uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
         if (al2->L0_L2_Slots == UINT64_MAX) {
             // we don't even have room for the smallest allocation.
             return NULL;
         }
-
+        uintptr_t data_offset = (uintptr_t)h + sizeof(Arena);
+        uintptr_t end_offset = (data_offset + (stable->sizes[3] - 1)) & ~(stable->sizes[3] - 1);
         size_t limit = end_offset - data_offset;
         if ((al2->L1_L2_Slots == UINT64_MAX) || (al2->L2_allocations == UINT64_MAX)) {
             // there is no room for anything more than a small multiple of the smallest

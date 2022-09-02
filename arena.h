@@ -199,19 +199,24 @@ void print_header(Arena *h, uintptr_t ptr);
 
 uint32_t num_consecutive_zeros(uint64_t test);
 
+static inline int32_t get_list_index_for_range(uint32_t range)
+{
+    if((range & (range - 1)) == 0)
+    {
+        return __builtin_ctz(range);
+    }
+    else
+    {
+        return 64 - __builtin_clz(range);
+    }
+}
+
 static inline int32_t get_list_index(uint64_t alloc_mask)
 {
     uint32_t nz = num_consecutive_zeros(alloc_mask);
     if(nz != 0)
     {
-        if((nz & (nz - 1)) == 0)
-        {
-            return __builtin_ctz(nz);
-        }
-        else
-        {
-            return 64 - __builtin_clz(nz);
-        }
+        return get_list_index_for_range(nz);
     }
     return -1;
 }
@@ -407,6 +412,5 @@ inline uint8_t size_to_arena(const size_t as)
         return 4; // 256Mb pages
     }
 }
-inline bool arena_is_connected(const Arena *h) { return h->prev != NULL || h->next != NULL; }
 
 #endif // ARENA_H

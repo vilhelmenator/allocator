@@ -73,16 +73,16 @@ void list_remove32(void *queue, void *node, void* base)
     
     if(tq->head == tq->tail)
     {
-        tq->head = 0;
-        tq->tail = 0;
+        tq->head = -1;
+        tq->tail = -1;
     }
     else
     {
-        if (tn->prev != 0) {
+        if (tn->prev != -1) {
             QNode32 *temp = (QNode32 *)((uint8_t *)base + tn->prev);
             temp->next = tn->next;
         }
-        if (tn->next != 0) {
+        if (tn->next != -1) {
             QNode32 *temp = (QNode32 *)((uint8_t *)base + tn->next);
             temp->prev = tn->prev;
         }
@@ -94,8 +94,8 @@ void list_remove32(void *queue, void *node, void* base)
         }
     }
     
-    tn->next = 0;
-    tn->prev = 0;
+    tn->next = -1;
+    tn->prev = -1;
 }
 
 static inline bool is_main_thread(void)

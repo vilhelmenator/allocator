@@ -185,6 +185,7 @@ typedef struct QNode32_t
 
 typedef struct Arena_t
 {
+    uint32_t partition_id;
     uint32_t num_allocations;
     uint32_t container_exponent;
     int32_t active_l0_offset;
@@ -192,11 +193,8 @@ typedef struct Arena_t
     uint32_t previous_size;
     uint32_t previous_level;
     uint32_t previous_range;
-    uint32_t previuos_padding;
     Queue32   L0_lists[6]; // 1,2,4,8,16,32
     uint64_t  L1_lists[6]; // 1,2,4,8,16,32
-    struct Arena_t *prev;
-    struct Arena_t *next;
 } Arena; // 128 bytes
 
 typedef struct Arena_L2_t
@@ -219,6 +217,8 @@ typedef struct Arena_L2_t
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     // 96
     uint64_t  L0_L2_Slots;      // are l0 size slots available at each 64th part.
+    uint64_t  L2_Pool_Slots;    // which of the high level slots have been initilized as pool containers
+    uint64_t  L2_Pool_Slots_Active; // which of the high level slots are active pool containers
     uint64_t  padding[1];
 } Arena_L2; // 128 bytes
 // root header 256 bytes .. 64,64,64,64 .. 256
@@ -336,10 +336,10 @@ void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offse
 static inline void list_enqueue32(void *queue, void *node, void*base)
 {
     Queue32 *tq = (Queue32 *)queue;
-    if (tq->head != 0) {
+    if (tq->head != -1) {
         QNode32 *tn = (QNode32 *)node;
         tn->next = tq->head;
-        tn->prev = 0;
+        tn->prev = -1;
         QNode32 *temp = (QNode32 *)((uint8_t *)base + tq->head);
         temp->prev = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
     } else {

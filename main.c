@@ -708,7 +708,15 @@ uint32_t numConsecutiveZeros(uint64_t test)
     {
         return 64;
     }
-    
+    if((test & (test - 1)) == 0)
+    {
+        return MAX(__builtin_clzll(test), __builtin_ctzll(test));
+    }
+
+    if((~test & (~test >> 1)) == 0)
+    {
+        return 1;
+    }
     uint32_t lz = __builtin_clzll(test);
     uint32_t tz = __builtin_ctzll(test);
     if(lz == 0)
@@ -931,7 +939,11 @@ int main()
     int l0_count =  c1 + c2 + c3;
     int l1_count = 63 * 64;
     int l2_count = 63;
-    test_new_heap(22, 22, 0, 0, 3);
+    printf("Arena :%llu\n", sizeof(Arena));
+    printf("Arena :%llu\n", sizeof(Arena_L0));
+    printf("Arena :%llu\n", sizeof(Arena_L1));
+    printf("Arena :%llu\n", sizeof(Arena_L2));
+    //test_new_heap(22, 5, 0, 0, 11);
     //test_new_heap(63, 1024*64);
     //test_new_heap(63, 1024);
     //test_new_heap(55, 16);
@@ -949,7 +961,7 @@ int main()
     printf("Arena :%llu\n", sizeof(Arena_L1));
     printf("Arena :%llu\n", sizeof(Arena_L2));
      */
-    //minor_test();
+    minor_test();
     // intermittently allocate a block
     //
     
