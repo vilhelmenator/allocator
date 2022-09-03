@@ -14,5 +14,9 @@ Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaTy
 AreaType get_area_type_for_heap(const size_t size);
 Section *partition_allocator_alloc_section(PartitionAllocator *pa, const size_t size);
 
-
+static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, Partition *queue)
+{
+    const ptrdiff_t diff = (uint8_t *)area - (uint8_t *)queue->start_addr;
+    return (uint32_t)(((size_t)diff) >> area_type_to_exponent[area_get_type(area)]);
+}
 #endif

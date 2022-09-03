@@ -254,6 +254,7 @@ typedef struct Partition_t
     uintptr_t end_addr;
     AreaType type;
     uint64_t area_mask;
+    uint64_t range_mask;
     Area *previous_area;
 } Partition;
 
@@ -372,6 +373,27 @@ static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
     }
     return __builtin_ctzll(msk_cpy) + cidx;
 }
+static inline uint64_t apply_range(uint32_t range, uint32_t at)
+{
+    if(range == 1)
+    {
+        return 0;
+    }
+    
+    return (1UL << at) | (1UL << (at + (range - 1)));
+}
 
+static inline uint32_t get_range(uint32_t at, uint64_t mask)
+{
+    if(mask == 0)
+    {
+        return 1;
+    }
+    if((mask & (1UL << at)) == 0)
+    {
+        return 1;
+    }
+    return __builtin_ctzll(mask >> (at + 1)) + 2;
+}
 
 #endif /* callocator_inl */

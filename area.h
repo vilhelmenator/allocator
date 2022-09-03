@@ -26,10 +26,9 @@ static inline ContainerType area_get_container_type(const Area *a)
     return (ContainerType)((a->partition_mask >> 32) & 0xf0);
 }
 
-static inline size_t area_get_range(const Area *a) { return (AreaType)((a->partition_mask >> 48)); }
 static inline size_t area_get_size(const Area *a)
 {
-    return (1 << area_get_type(a)) * BASE_AREA_SIZE * area_get_range(a);
+    return (1 << area_get_type(a)) * BASE_AREA_SIZE;
 }
 
 static inline void area_set_container_type(Area *a, ContainerType ct)
@@ -37,11 +36,11 @@ static inline void area_set_container_type(Area *a, ContainerType ct)
     a->partition_mask = (a->partition_mask & 0xffff00fffffffff) | (((uint64_t)ct) << 32);
 }
 
-static inline void area_init(Area *a, size_t pid, AreaType at, size_t range)
+static inline void area_init(Area *a, size_t pid, AreaType at)
 {
     a->active_mask.whole = 0;
     a->constr_mask.whole = 0;
-    a->partition_mask = pid | ((uint64_t)at << 32) | (range << 48);
+    a->partition_mask = pid | ((uint64_t)at << 32);
 }
 
 static inline bool area_is_empty(const Area *a) { return bitmask_is_empty_hi(&a->active_mask); }

@@ -287,40 +287,6 @@ static inline void remove_from_size_list_l0(Arena* a, Arena_L0* l0)
     }
 }
 
-static inline uint64_t apply_range(uint32_t range, uint32_t at)
-{
-    // range == 1 -> nop
-    // set bit at (at)
-    // set bit at at + (range - 1).
-    //
-    // 111110011
-    if(range == 1)
-    {
-        return 0;
-    }
-    
-    return (1UL << at) | (1UL << (at + (range - 1)));
-}
-
-static inline uint32_t get_range(uint32_t at, uint64_t mask)
-{
-    //  at == 7
-    //  00001000111
-    //  00000111111 &
-    //  00000000111 tz8 - at == 3
-    //  lz8 - at == 3
-    //  3 + 2 == 5
-    // zero all bits from at to the highest bit.
-    if(mask == 0)
-    {
-        return 1;
-    }
-    if((mask & (1UL << at)) == 0)
-    {
-        return 1;
-    }
-    return __builtin_ctzll(mask >> (at + 1)) + 2;
-}
 
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
 uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k);

@@ -939,10 +939,10 @@ int main()
     int l0_count =  c1 + c2 + c3;
     int l1_count = 63 * 64;
     int l2_count = 63;
-    printf("Arena :%llu\n", sizeof(Arena));
-    printf("Arena :%llu\n", sizeof(Arena_L0));
-    printf("Arena :%llu\n", sizeof(Arena_L1));
-    printf("Arena :%llu\n", sizeof(Arena_L2));
+    //printf("Arena :%llu\n", sizeof(Arena));
+    //printf("Arena :%llu\n", sizeof(Arena_L0));
+    //printf("Arena :%llu\n", sizeof(Arena_L1));
+    //aprintf("Arena :%llu\n", sizeof(Arena_L2));
     //test_new_heap(22, 5, 0, 0, 11);
     //test_new_heap(63, 1024*64);
     //test_new_heap(63, 1024);
@@ -961,7 +961,7 @@ int main()
     printf("Arena :%llu\n", sizeof(Arena_L1));
     printf("Arena :%llu\n", sizeof(Arena_L2));
      */
-    minor_test();
+    //minor_test();
     // intermittently allocate a block
     //
     

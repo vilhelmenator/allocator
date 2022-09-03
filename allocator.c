@@ -271,7 +271,10 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
         return NULL;
     }
 
-    uint64_t area_size = area_get_size(new_area);
+    Partition* partition = &a->part_alloc->area[at];
+    uint32_t idx = partition_allocator_get_area_idx_from_queue(a->part_alloc, new_area, partition);
+    uint32_t range = get_range(idx, partition->range_mask);
+    uint64_t area_size = area_get_size(new_area)*range;
     area_set_container_type(new_area, CT_HEAP);
     area_reserve_all(new_area);
     start = (Heap *)((uintptr_t)new_area + sizeof(Area));
@@ -567,7 +570,11 @@ size_t allocator_get_allocation_size(Allocator *a, void *p)
             return heap_get_block_size(heap, p);
         }
         default: {
-            return area_get_size(area);
+            AreaType at = area_get_type(area);
+            Partition* partition = &a->part_alloc->area[at];
+            uint32_t idx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+            uint32_t range = get_range(idx, partition->range_mask);
+            return area_get_size(area)*range;
         }
         }
     } else {

@@ -93,11 +93,11 @@ void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
     pa->message_count++;
 }
 
-Area *partition_allocator_get_next_area(Partition *area_queue, uint64_t size, uint64_t alignment)
+void *partition_allocator_get_next_area(Partition *area_queue, uint64_t size, uint64_t alignment)
 {
     size_t type_exponent = area_type_to_exponent[area_queue->type];
     size_t type_size = area_type_to_size[area_queue->type];
-    size_t range = size >> type_exponent;
+    uint32_t range = (uint32_t)(size >> type_exponent);
     range += (size & (1 << type_exponent) - 1) ? 1 : 0;
     size = type_size * range;
     int32_t idx = find_first_nzeros(area_queue->area_mask, range);
@@ -106,15 +106,9 @@ Area *partition_allocator_get_next_area(Partition *area_queue, uint64_t size, ui
     }
     uint64_t new_mask = (1UL << range) - 1UL;
     area_queue->area_mask |= (new_mask << idx);
-    
+    area_queue->range_mask |= apply_range(range, idx);
     uintptr_t aligned_addr = area_queue->start_addr + (type_size * idx);
-
-    Area *new_area = (Area *)alloc_memory_aligned((void *)aligned_addr, area_queue->end_addr, size, alignment);
-    if (new_area == NULL) {
-        return NULL;
-    }
-    area_init(new_area, area_queue->partition_id, area_queue->type, range);
-    return new_area;
+    return alloc_memory_aligned((void *)aligned_addr, area_queue->end_addr, size, alignment);;
 }
 
 bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *area)
@@ -167,25 +161,20 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
 
 void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Partition *list, size_t idx)
 {
-    size_t range = area_get_range(a);
+    size_t range = get_range(idx, list->range_mask);
     uint64_t new_mask = ((1UL << range) - 1UL) << idx;
     list->area_mask = list->area_mask & ~new_mask;
+    list->range_mask = list->range_mask & ~new_mask;
     if ((a == list->previous_area) || (list->area_mask == 0)) {
         list->previous_area = NULL;
     }
-    free_memory(a, area_get_size(a));
+    free_memory(a, area_get_size(a)*range);
 }
 
 static inline Partition *partition_allocator_get_area_list(PartitionAllocator *pa, Area *area)
 {
     const AreaType at = area_get_type(area);
     return &pa->area[at];
-}
-
-static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, Partition *queue)
-{
-    const ptrdiff_t diff = (uint8_t *)area - (uint8_t *)queue->start_addr;
-    return (uint32_t)(((size_t)diff) >> area_type_to_exponent[area_get_type(area)]);
 }
 
 void partition_allocator_free_area(PartitionAllocator *pa, Area *area)
@@ -397,6 +386,7 @@ Area *partition_allocator_alloc_area(Partition *area_queue, const uint64_t size,
     if (new_area == NULL) {
         return NULL;
     }
+    area_init(new_area, area_queue->partition_id, area_queue->type);
     area_queue->previous_area = new_area;
     return new_area;
 }
