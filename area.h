@@ -67,6 +67,7 @@ static inline int8_t area_claim_section(Area *a)
     area_claim_idx(a, idx);
     return idx;
 }
+
 static inline Area *area_from_addr(uintptr_t p)
 {
     static const uint64_t masks[] = {~((AREA_SIZE_SMALL>>3) - 1),
@@ -85,6 +86,12 @@ static inline Area *area_from_addr(uintptr_t p)
         return NULL;
     }
     return (Area *)(p & masks[pidx]);
+}
+
+static inline Area *area_at_idx(Partition* p, size_t idx)
+{
+    size_t s = (1 << area_type_to_exponent[p->type]);
+    return (Area *)(p->start_addr + (s * idx));
 }
 
 static inline bool area_is_full(const Area *a)

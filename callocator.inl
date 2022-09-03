@@ -252,10 +252,10 @@ typedef struct Partition_t
     uint64_t partition_id;
     uintptr_t start_addr;
     uintptr_t end_addr;
-    AreaType type;
     uint64_t area_mask;
     uint64_t range_mask;
-    Area *previous_area;
+    AreaType type;
+    uint32_t previous_area;
 } Partition;
 
 // lockless message queue
