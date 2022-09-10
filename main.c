@@ -4,7 +4,7 @@
 #include "area.h"
 #include "arena.h"
 #include "callocator.inl"
-//#include "mimalloc.h"
+#include "mimalloc.h"
 //#include "cthread.h"
 //#include <iostream>
 
