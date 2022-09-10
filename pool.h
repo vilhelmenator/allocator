@@ -3,7 +3,7 @@
 #define POOL_H
 
 #include "section.h"
-static const cache_align int32_t pool_sizes[] = {
+static const int32_t pool_sizes[] = {
     8,       16,      24,      32,      40,      48,      56,      64,      72,      80,      88,      96,      104,
     112,     120,     128,     144,     160,     176,     192,     208,     224,     240,     256,     288,     320,
     352,     384,     416,     448,     480,     512,     576,     640,     704,     768,     832,     896,     960,
@@ -16,7 +16,7 @@ static const cache_align int32_t pool_sizes[] = {
     917504,  983040,  1048576, 1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152, 2359296, 2621440,
     2883584, 3145728, 3407872, 3670016, 3932160, 4194304, 4718592};
 
-static const cache_align int32_t pool_recips[] = {
+static const int32_t pool_recips[] = {
     536870912, 268435456, 178956971, 134217728, 107374183, 89478486, 76695845,
     67108864,  59652324,  53687092,  48806447,  44739243,  41297763, 38347923,
     35791395,  33554432,  29826162,  26843546,  24403224,  22369622, 20648882,
@@ -87,7 +87,7 @@ static inline void pool_free_block(Pool *p, void *block)
     }
     const ptrdiff_t diff = (uint8_t *)block - base_addr;
     *(uint32_t *)block = p->free;
-    p->free = (uint32_t)(((size_t)diff * pool_recips[p->block_idx]) >> 32);
+    p->free = (uint32_t)(((size_t)diff * p->block_recip) >> 32);
 }
 
 static inline void *pool_get_free_block(Pool *p)
@@ -131,7 +131,8 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->idx = pidx;
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
-    p->num_available = (int32_t)((MIN(remaining_size, block_memory) * pool_recips[p->block_idx]) >> 32);
+    p->block_recip = pool_recips[p->block_idx];
+    p->num_available = (int32_t)((MIN(remaining_size, block_memory) * p->block_recip) >> 32);
     p->num_committed = 1;
     p->num_used = 0;
     p->next = NULL;

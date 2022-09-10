@@ -127,6 +127,7 @@ typedef struct Pool_t
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     uint32_t block_size;
+    uint32_t block_recip;
     int32_t num_available;
     int32_t num_committed;
     int32_t num_used;
