@@ -11,7 +11,7 @@
 extern PartitionAllocator **partition_allocators;
 int64_t *partition_owners = NULL;
 Allocator **allocator_list = NULL;
-
+int32_t multi_threaded = 0;
 static const int32_t thread_message_imit = 100;
 
 static spinlock partition_lock = {0};
@@ -306,7 +306,7 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     const unsigned int coll_idx = section_reserve_next(sfree_section);
     int32_t psize = (1 << size_clss_to_exponent[sfree_section->type]);
     Pool *p = (Pool *)section_get_collection(sfree_section, coll_idx, psize);
-    pool_init(p, coll_idx, idx, s, psize);
+    pool_init(p, coll_idx, idx, psize);
     section_claim_idx(sfree_section, coll_idx);
     return p;
 }
@@ -319,7 +319,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
 
     while (start != NULL) {
         Pool *next = start->next;
-        if (start->free == NULL) {
+        if (start->free == -1) {
             if (!pool_is_fully_commited(start)) {
                 allocator_set_cached_pool(a, start);
                 return pool_extend(start);
@@ -341,13 +341,12 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     return pool_get_free_block(start);
 }
 
-void _free_extended_part(size_t pid, void *p)
+void free_extended_part(size_t pid, void *p)
 {
     if (((uintptr_t)p & (os_page_size - 1)) != 0) {
         return;
     }
 
-    // the first extended partition will prevent you from
     uintptr_t header = (uintptr_t)p - CACHE_LINE;
     uint64_t size = 0;
     uint64_t addr = *(uint64_t *)header;
@@ -367,7 +366,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
         if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
             allocator_free_from_container(a, p, area_size_from_partition_id(pid));
         } else {
-            _free_extended_part(pid, p);
+            free_extended_part(pid, p);
         }
     }
 }
@@ -391,6 +390,8 @@ void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 
 static inline void allocator_flush_thread_free_queue(Allocator *a)
 {
+    if(!multi_threaded)
+        return;
     message_queue *q = a->part_alloc->thread_free_queue;
     if (q->head != q->tail) {
         allocator_thread_dequeue_all(a, q);
@@ -503,15 +504,11 @@ bool allocator_release_local_areas(Allocator *a)
 
 void allocator_free(Allocator *a, void *p)
 {
-    if (p == NULL)
-        return;
     _allocator_free(a, p);
 }
 
 void allocator_free_th(Allocator *a, void *p)
 {
-    if (p == NULL)
-        return;
     if (a->idx == -1) {
         // free is being called before anythiing has been allocated for this thread.
         // the address is either bogus or belong to some other thread.

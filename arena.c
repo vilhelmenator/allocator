@@ -480,7 +480,7 @@ void *arena_get_block(Arena *h, size_t size)
     }
     }
     
-    print_header(h, (uintptr_t)res);
+    //print_header(h, (uintptr_t)res);
     return res;
 }
 
@@ -608,7 +608,7 @@ void arena_free(Arena *h, void *p, bool dummy)
             break;
         }
     }
-    print_header(h, (uintptr_t)p);
+    //print_header(h, (uintptr_t)p);
 }
 
 size_t arena_get_block_size(Arena *h, void *p)

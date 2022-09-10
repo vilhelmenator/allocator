@@ -5,6 +5,7 @@
 #include "arena.h"
 #include "callocator.inl"
 #include "mimalloc.h"
+#include <stdlib.h>
 //#include "cthread.h"
 //#include <iostream>
 
@@ -927,6 +928,7 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     print_header(nh,(uintptr_t)variables[0]);
     free(variables);
     printf("error count: %lu\n", err_count);
+    cfree_arena(mem);
 }
 
 
@@ -958,7 +960,6 @@ int main()
     test_new_heap(22, 0, l1_count, 0, 1);
     test_new_heap(22, 0, 0, l2_count, 1);
     */
-    
     //minor_test();
     // intermittently allocate a block
     //
@@ -970,7 +971,7 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-     //run_tests();
+    // run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);

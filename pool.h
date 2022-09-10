@@ -3,6 +3,40 @@
 #define POOL_H
 
 #include "section.h"
+static const cache_align int32_t pool_sizes[] = {
+    8,       16,      24,      32,      40,      48,      56,      64,      72,      80,      88,      96,      104,
+    112,     120,     128,     144,     160,     176,     192,     208,     224,     240,     256,     288,     320,
+    352,     384,     416,     448,     480,     512,     576,     640,     704,     768,     832,     896,     960,
+    1024,    1152,    1280,    1408,    1536,    1664,    1792,    1920,    2048,    2304,    2560,    2816,    3072,
+    3328,    3584,    3840,    4096,    4608,    5120,    5632,    6144,    6656,    7168,    7680,    8192,    9216,
+    10240,   11264,   12288,   13312,   14336,   15360,   16384,   18432,   20480,   22528,   24576,   26624,   28672,
+    30720,   32768,   36864,   40960,   45056,   49152,   53248,   57344,   61440,   65536,   73728,   81920,   90112,
+    98304,   106496,  114688,  122880,  131072,  147456,  163840,  180224,  196608,  212992,  229376,  245760,  262144,
+    294912,  327680,  360448,  393216,  425984,  458752,  491520,  524288,  589824,  655360,  720896,  786432,  851968,
+    917504,  983040,  1048576, 1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152, 2359296, 2621440,
+    2883584, 3145728, 3407872, 3670016, 3932160, 4194304, 4718592};
+
+static const cache_align int32_t pool_recips[] = {
+    536870912, 268435456, 178956971, 134217728, 107374183, 89478486, 76695845,
+    67108864,  59652324,  53687092,  48806447,  44739243,  41297763, 38347923,
+    35791395,  33554432,  29826162,  26843546,  24403224,  22369622, 20648882,
+    19173962,  17895698,  16777216,  14913081,  13421773,  12201612, 11184811,
+    10324441,  9586981,   8947849,   8388608,   7456541,   6710887,  6100806,
+    5592406,   5162221,   4793491,   4473925,   4194304,   3728271,  3355444,
+    3050403,   2796203,   2581111,   2396746,   2236963,   2097152,  1864136,
+    1677722,   1525202,   1398102,   1290556,   1198373,   1118482,  1048576,
+    932068,    838861,    762601,    699051,    645278,    599187,   559241,
+    524288,    466034,    419431,    381301,    349526,    322639,   299594,
+    279621,    262144,    233017,    209716,    190651,    174763,   161320,
+    149797,    139811,    131072,    116509,    104858,    95326,    87382,
+    80660,     74899,     69906,     65536,     58255,     52429,    47663,
+    43691,     40330,     37450,     34953,     32768,     29128,    26215,
+    23832,     21846,     20165,     18725,     17477,     16384,    14564,
+    13108,     11916,     10923,     10083,     9363,      8739,     8192,
+    7282,      6554,      5958,      5462,      5042,      4682,     4370,
+    4096,      3641,      3277,      2979,      2731,      2521,     2341,
+    2185,      2048,      1821,      1639,      1490,      1366,     1261,
+    1171,      1093,      4194304,   4718592};
 
 static inline int32_t get_pool_size_class(size_t s)
 {
@@ -42,33 +76,42 @@ static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committ
 
 static inline void pool_free_block(Pool *p, void *block)
 {
-
+    uint8_t* base_addr = (uint8_t *)p + sizeof(Pool);
     if (--p->num_used == 0) {
         Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
         section_free_idx(section, p->idx);
 
-        p->free = (Block *)((uint8_t *)p + sizeof(Pool));
-        p->free->next = NULL;
+        p->free = 0;
+        *(int32_t*)base_addr = -1;
         return;
     }
-    *(uint64_t **)block = (uint64_t *)p->free;
-    p->free = (Block *)block;
+    const ptrdiff_t diff = (uint8_t *)block - base_addr;
+    *(uint32_t *)block = p->free;
+    p->free = (uint32_t)(((size_t)diff * pool_recips[p->block_idx]) >> 32);
 }
 
-static inline Block *pool_get_free_block(Pool *p)
+static inline void *pool_get_free_block(Pool *p)
 {
     if (p->num_used++ == 0) {
         Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
         section_reserve_idx(section, p->idx);
     }
-    Block *res = p->free;
-    p->free = res->next;
-    return res;
+    uint8_t* base_addr = (uint8_t *)p + sizeof(Pool);
+    int32_t next_idx = *(uint32_t*)(base_addr + (p->free * p->block_size));
+    if(next_idx > p->num_available)
+    {
+        // pool is currupt
+        p->free = -1;
+        return NULL;
+    }
+    int32_t cur_idx = p->free;
+    p->free = next_idx;
+    return (void*)(base_addr + (cur_idx * p->block_size));
 }
 
 static inline void *pool_aquire_block(Pool *p)
 {
-    if (p->free != NULL) {
+    if (p->free != -1) {
         return pool_get_free_block(p);
     }
 
@@ -79,8 +122,7 @@ static inline void *pool_aquire_block(Pool *p)
     return NULL;
 }
 
-static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const uint32_t block_size,
-                      const int32_t psize)
+static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize)
 {
     void *blocks = (uint8_t *)p + sizeof(Pool);
     const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
@@ -88,14 +130,15 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     const size_t remaining_size = section_end - (uintptr_t)blocks;
     p->idx = pidx;
     p->block_idx = block_idx;
-    p->block_size = block_size;
-    p->num_available = (int32_t)(MIN(remaining_size, block_memory) / block_size);
+    p->block_size = pool_sizes[block_idx];
+    p->num_available = (int32_t)((MIN(remaining_size, block_memory) * pool_recips[p->block_idx]) >> 32);
     p->num_committed = 1;
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;
-    p->free = (Block *)blocks;
-    p->free->next = NULL;
+    p->free = 0;
+    p->tail = -1;
+    *(int32_t*)((uint8_t *)p + sizeof(Pool)) = -1;
 }
 
 #endif

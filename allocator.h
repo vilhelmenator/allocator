@@ -15,3 +15,4 @@ bool allocator_release_local_areas(Allocator *a);
 void allocator_free(Allocator *a, void *p);
 void allocator_free_th(Allocator *a, void *p);
 size_t allocator_get_allocation_size(Allocator *a, void *p);
+void free_extended_part(size_t pid, void *p);
