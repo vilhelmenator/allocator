@@ -163,9 +163,9 @@ static inline uintptr_t get_thread_id(void)
     return (uintptr_t)NtCurrentTeb();
 #elif defined(__GNUC__)
     void *res;
-    const size_t ofs = 0;
 #if defined(__APPLE__)
 #if defined(__x86_64__)
+    const size_t ofs = 0;
     __asm__("movq %%gs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
 #elif defined(__aarch64__)
     void **tcb;
@@ -174,6 +174,7 @@ static inline uintptr_t get_thread_id(void)
     res = *tcb;
 #endif
 #elif defined(__x86_64__)
+    const size_t ofs = 0;
     __asm__("movq %%fs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
 #endif
     return (uintptr_t)res;
