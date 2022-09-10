@@ -932,6 +932,7 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
 
 int main()
 {
+    /*
     int c1 = (64 - 16) * 1;
     int c2 = (64 - 4) * 63;
     int c3 = (64 - 2) * 63*64;
@@ -939,16 +940,17 @@ int main()
     int l0_count =  c1 + c2 + c3;
     int l1_count = 63 * 64;
     int l2_count = 63;
-    printf("Arena :%llu\n", sizeof(Arena));
-    printf("Arena L0 :%llu\n", sizeof(Arena_L0));
-    printf("Arena L1 :%llu\n", sizeof(Arena_L1));
-    printf("Arena L2 :%llu\n", sizeof(Arena_L2));
-    printf("Partition :%llu\n", sizeof(Partition));
+    printf("Arena :%lu\n", sizeof(Arena));
+    printf("Arena L0 :%lu\n", sizeof(Arena_L0));
+    printf("Arena L1 :%lu\n", sizeof(Arena_L1));
+    printf("Arena L2 :%lu\n", sizeof(Arena_L2));
+    printf("Partition :%lu\n", sizeof(Partition));
+    printf("Partition Allocator :%lu\n", sizeof(PartitionAllocator));
     //test_new_heap(22, 5, 0, 0, 11);
     //test_new_heap(63, 1024*64);
     //test_new_heap(63, 1024);
     //test_new_heap(55, 16);
-    /*
+    
     test_new_heap(22, 48, 0, 0, 2);
     test_new_heap(22, 48, 63, 63, 1);
     test_new_heap(22, 48, 63, 63, 1);
@@ -956,12 +958,7 @@ int main()
     test_new_heap(22, 0, l1_count, 0, 1);
     test_new_heap(22, 0, 0, l2_count, 1);
     */
-    /*
-    printf("Arena :%llu\n", sizeof(Arena));
-    printf("Arena :%llu\n", sizeof(Arena_L0));
-    printf("Arena :%llu\n", sizeof(Arena_L1));
-    printf("Arena :%llu\n", sizeof(Arena_L2));
-     */
+    
     //minor_test();
     // intermittently allocate a block
     //

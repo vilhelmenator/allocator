@@ -307,6 +307,18 @@ static inline Partition *partition_allocator_promote_area(PartitionAllocator *pa
     }
 }
 
+Area *partition_allocator_alloc_area(Partition *area_queue, const uint64_t size, const uint64_t alignment)
+{
+    int32_t idx = partition_allocator_get_next_area(area_queue, size, alignment);
+    if (idx == -1) {
+        return NULL;
+    }
+    Area* new_area = area_at_idx(area_queue, idx);
+    area_init(new_area, area_queue->partition_id, area_queue->type);
+    area_queue->previous_area = idx;
+    return new_area;
+}
+
 Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaType t)
 {
     size_t area_size = AREA_SIZE_SMALL;
@@ -383,14 +395,4 @@ Section *partition_allocator_alloc_section(PartitionAllocator *pa, const size_t 
     return section;
 }
 
-Area *partition_allocator_alloc_area(Partition *area_queue, const uint64_t size, const uint64_t alignment)
-{
-    int32_t idx = partition_allocator_get_next_area(area_queue, size, alignment);
-    if (idx == -1) {
-        return NULL;
-    }
-    Area* new_area = area_at_idx(area_queue, idx);
-    area_init(new_area, area_queue->partition_id, area_queue->type);
-    area_queue->previous_area = idx;
-    return new_area;
-}
+

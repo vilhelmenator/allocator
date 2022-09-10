@@ -4,7 +4,6 @@
 #include "area.h"
 
 typedef void (*free_func)(void *);
-Area *partition_allocator_alloc_area(Partition *area_queue, uint64_t area_size, uint64_t alignment);
 PartitionAllocator *partition_allocator_aquire(size_t idx);
 message *partition_allocator_get_last_message(PartitionAllocator *pa);
 void partition_allocator_thread_free(PartitionAllocator *pa, void *p);

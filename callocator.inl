@@ -187,12 +187,14 @@ typedef struct Arena_t
 {
     uint32_t partition_id;
     uint32_t num_allocations;
-    uint32_t container_exponent;
+    
+    uint8_t container_exponent;
+    int8_t active_l1_offset;
+    uint8_t previous_level;
+    uint8_t previous_range;
+    
     int32_t active_l0_offset;
-    int32_t active_l1_offset;
     uint32_t previous_size;
-    uint32_t previous_level;
-    uint32_t previous_range;
     Queue32   L0_lists[6]; // 1,2,4,8,16,32
     uint64_t  L1_lists[6]; // 1,2,4,8,16,32
 } Arena; // 128 bytes
@@ -203,9 +205,11 @@ typedef struct Arena_L2_t
     uint32_t  next;
     uint64_t  L0_allocations;   // base allocations here at the root
     uint64_t  L0_ranges;        // size of allocations at the root.
-    uint32_t  L0_list_index;
+    uint8_t   L0_list_index;
+    uint8_t   L0_has_excess;    // does the lowest level have an excess pool
+    uint8_t   L1_has_excess;    // does the mid level have an excess pool
     // L0 - 32 bytes
-    uint32_t  L1_list_index;
+    uint8_t   L1_list_index;
     uint64_t  L0_L1_Slots;      // are l0 size slots available at root 64th part.
     uint64_t  L1_allocations;   // base allocations here at the root
     uint64_t  L1_ranges;        // sizes of allocations at the root
@@ -219,7 +223,6 @@ typedef struct Arena_L2_t
     uint64_t  L0_L2_Slots;      // are l0 size slots available at each 64th part.
     uint64_t  L2_Pool_Slots;    // which of the high level slots have been initilized as pool containers
     uint64_t  L2_Pool_Slots_Active; // which of the high level slots are active pool containers
-    uint64_t  padding[1];
 } Arena_L2; // 128 bytes
 // root header 256 bytes .. 64,64,64,64 .. 256
 
@@ -229,8 +232,10 @@ typedef struct Arena_L1_t
     uint32_t  next;
     uint64_t  L0_allocations;   
     uint64_t  L0_ranges;
-    uint32_t  L0_list_index;
-    uint32_t  L1_list_index;
+    uint8_t   L0_list_index;
+    uint8_t   L0_has_excess;    // does the lowest level have an excess pool
+    uint8_t   L1_has_excess;    // does the mid level have an excess pool
+    uint8_t   L1_list_index;
     uint64_t  L0_L1_Slots;
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
@@ -243,7 +248,9 @@ typedef struct Arena_L0_t
     uint32_t  next;
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
-    uint32_t  L0_list_index;
+    uint8_t   L0_list_index;
+    uint8_t   L0_has_excess;    // does the lowest level have an excess pool
+    uint8_t   L1_has_excess;    // does the mid level have an excess pool
 } Arena_L0;
 
 

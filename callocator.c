@@ -10,9 +10,22 @@ extern PartitionAllocator **partition_allocators;
 extern int64_t *partition_owners;
 extern Allocator **allocator_list;
 static uintptr_t main_thread_id;
+
+static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
+static inline size_t  get_thread_count(void) {
+    return atomic_load_explicit(&num_threads, memory_order_relaxed);
+}
+static inline void incr_thread_count(void)
+{
+    atomic_fetch_add_explicit(&num_threads,1,memory_order_relaxed);
+}
+static inline void decr_thread_count(void)
+{
+    atomic_fetch_sub_explicit(&num_threads,1,memory_order_relaxed);
+}
+
 static Allocator *main_instance = NULL;
 static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
-
 static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
@@ -20,6 +33,7 @@ static void thread_done(void *a)
     if (a != NULL) {
         Allocator *alloc = (Allocator *)a;
         release_partition_set((int32_t)alloc->idx);
+        decr_thread_count();
     }
 }
 
@@ -30,6 +44,7 @@ static Allocator *init_thread_instance(void)
     new_alloc->part_alloc = partition_allocators[idx];
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
+    incr_thread_count();
     return new_alloc;
 }
 
@@ -185,7 +200,16 @@ static void __attribute__((constructor)) library_init(void) { allocator_init(); 
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
 
-void __attribute__((malloc)) *cmalloc(size_t s) { return allocator_malloc(get_thread_instance(), s); }
+void __attribute__((malloc)) *cmalloc(size_t s) {
+    if(get_thread_count() == 1)
+    {
+        return allocator_malloc(main_instance, s);
+    }
+    else
+    {
+        return allocator_malloc(get_thread_instance(), s);
+    }
+}
 
 void cfree(void *p)
 {
