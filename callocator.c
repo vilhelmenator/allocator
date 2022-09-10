@@ -10,7 +10,7 @@ extern PartitionAllocator **partition_allocators;
 extern int64_t *partition_owners;
 extern Allocator **allocator_list;
 static uintptr_t main_thread_id;
-
+extern int32_t multi_threaded;
 static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
 static inline size_t  get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
@@ -45,6 +45,7 @@ static Allocator *init_thread_instance(void)
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
     incr_thread_count();
+    multi_threaded = 1;
     return new_alloc;
 }
 
@@ -88,16 +89,16 @@ void list_remove32(void *queue, void *node, void* base)
     
     if(tq->head == tq->tail)
     {
-        tq->head = -1;
-        tq->tail = -1;
+        tq->head = 0xFFFFFFFF;
+        tq->tail = 0xFFFFFFFF;
     }
     else
     {
-        if (tn->prev != -1) {
+        if (tn->prev != 0xFFFFFFFF) {
             QNode32 *temp = (QNode32 *)((uint8_t *)base + tn->prev);
             temp->next = tn->next;
         }
-        if (tn->next != -1) {
+        if (tn->next != 0xFFFFFFFF) {
             QNode32 *temp = (QNode32 *)((uint8_t *)base + tn->next);
             temp->prev = tn->prev;
         }
@@ -109,8 +110,8 @@ void list_remove32(void *queue, void *node, void* base)
         }
     }
     
-    tn->next = -1;
-    tn->prev = -1;
+    tn->next = 0xFFFFFFFF;
+    tn->prev = 0xFFFFFFFF;
 }
 
 static inline bool is_main_thread(void)
@@ -201,6 +202,7 @@ static void __attribute__((destructor)) library_destroy(void) { allocator_destro
 #endif
 
 void __attribute__((malloc)) *cmalloc(size_t s) {
+    
     if(get_thread_count() == 1)
     {
         return allocator_malloc(main_instance, s);
@@ -213,11 +215,115 @@ void __attribute__((malloc)) *cmalloc(size_t s) {
 
 void cfree(void *p)
 {
+    if(p == NULL)
+    {
+        return;
+    }
     if (is_main_thread()) {
         allocator_free(main_instance, p);
     } else {
         allocator_free_th(thread_instance, p);
     }
+}
+
+static inline ssize_t size_to_arena(size_t s)
+{
+    if(s < (1 << 10))
+    {
+        return 0;
+    }
+    static const int32_t lookup[] = {0,1,2,3,4,5,6,6,
+        6,6,6,6,0,1,2,3,
+        4,5,6,6,6,6,6,6
+    };
+    int32_t lz = __builtin_clzll(s);
+    if(lz < 31)
+    {
+        int64_t t = (64 - 8 - lz);
+        return lookup[t];
+    }
+    return -1;
+}
+
+typedef struct cache_struct_t
+{
+    uintptr_t block_offset;
+    uintptr_t block_rem_count;
+    uint32_t block_size;
+    uint32_t cache_type;
+} cache_struct;
+
+void release_cache_item(cache_struct* c)
+{
+    //
+    // contiguous pool block.
+    // contiguous arena block.
+    // sparse pool. which is it.
+    if(c->cache_type == 0)// pool
+    {
+        //
+    }
+    else // arena
+    {
+        // does the curent block have any more available blocks.
+        // just set to null and tell the system to find a new thing.
+    }
+}
+void __attribute__((malloc)) *test_cmalloc(size_t s) {
+    
+    Allocator* a = get_thread_instance();
+    if(a->prev_size == s)
+    {
+        //a->cached_pool
+        //cache
+        //{
+        //  block_offset;   // end address of cache block
+        //  block_count;    // number of remaining blocks
+        //  block_size;
+        //  cache_type;
+        //}
+        // if(!block_count--)
+        // { relese_cache_item(c);}
+        // return block_offset-(block_count*block_size);
+        
+        // try to use the cached struct
+        // cached struct ...
+        //
+        // how many items do we have left.
+        // get addr
+        // pool, can't say that it will be contiguous.
+        // if contiguous.. just get address and incrment counter.
+        // if pool free will put the free item to the back of the list.
+        // pool
+        //  number of contiguous blocks.
+        //
+        // on cache struct empty... check type.
+        // clear_cache_struct
+        //      pool or arena.
+        //
+        // increment counter return addr of offset + counter*size;
+        //
+    }
+    //
+    // clear cache.
+    //
+    a->prev_size = s;
+    ssize_t arena_idx = size_to_arena(s);
+    if(arena_idx < 0)
+    {
+        // allocate slab
+        return NULL;
+    }
+    else
+    {
+        //return allocate_from_arena(s);
+        return NULL;
+    }
+}
+
+void test_free(void *p)
+{
+    //
 }
 
 //
@@ -265,12 +371,28 @@ void *cmalloc_arena(size_t s, size_t partition_idx)
     }
     Allocator *alloc = get_thread_instance();
     void *arena = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx);
+    Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
+    Partition* partition = &alloc->part_alloc->area[partition_idx];
+    header->partition_id = (uint32_t)partition->partition_id;
     if (arena == NULL) {
         return NULL;
     }
     return arena;
 }
 
+void cfree_arena(void* p)
+{
+    int8_t pid = partition_from_addr((uintptr_t)p);
+    if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
+        Arena *arena = (Arena *)((uintptr_t)p + sizeof(Arena_L2));
+        const uint32_t part_id = arena->partition_id;
+        PartitionAllocator *_part_alloc = partition_allocators[part_id];
+        
+        partition_allocator_free_area(_part_alloc, (Area*)arena);
+    } else {
+        free_extended_part(pid, p);
+    }
+}
 
 void *cmalloc_area(size_t s, size_t partition_idx)
 {
@@ -327,7 +449,7 @@ void *crealloc(void *p, size_t s)
 // Allocating memory from the OS that will not conflict with any memory region
 // of the allocator.
 static spinlock os_alloc_lock = {0};
-static uintptr_t os_alloc_hint = (uintptr_t)64 << 40;
+static uintptr_t os_alloc_hint = 0;
 void *cmalloc_os(size_t size)
 {
     // align size to page size
@@ -337,10 +459,18 @@ void *cmalloc_os(size_t size)
     // look the counter while fetching our os memory.
     spinlock_lock(&os_alloc_lock);
     void *ptr = alloc_memory((void *)os_alloc_hint, size, true);
-    os_alloc_hint = (uintptr_t)ptr + size;
+    if((uintptr_t)ptr == os_alloc_hint)
+    {
+        os_alloc_hint = (uintptr_t)ptr + size;
+    }
+    else
+    {
+        os_alloc_hint = (uintptr_t)ptr;
+    }
+    
     if (os_alloc_hint >= (uintptr_t)127 << 40) {
         // something has been running for a very long time!
-        os_alloc_hint = (uintptr_t)64 << 40;
+        os_alloc_hint = 0;
     }
     spinlock_unlock(&os_alloc_lock);
 

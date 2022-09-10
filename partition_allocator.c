@@ -36,11 +36,7 @@ PartitionAllocator *partition_allocator_init(size_t idx)
 
     PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
     size = (SZ_MB * 256);
-    // 1 << 40 .... 1TB
-    // 1 << 39 .... 512GB
-    // 1 << 38 .... 256GB
-    //size_t offset = ((size_t)2 << 40);
-    size_t offset = ((size_t)1 << 38);
+    size_t offset = ((size_t)1 << 40);
     uint32_t area_type = 0;
     for (size_t j = 0; j < 7; j++) {
         palloc->area[j].partition_id = (uint32_t)idx;

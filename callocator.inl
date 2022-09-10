@@ -56,18 +56,6 @@ typedef enum AreaType_t {
     AT_VARIABLE = 7   //  not a fixed size area. found in extended partitions.
 } AreaType;
 
-static const uintptr_t partitions_offsets[] = {
-    ((uintptr_t)1 << 38),
-    ((uintptr_t)1 << 39),
-    ((uintptr_t)1 << 40),
-    ((uintptr_t)2 << 40), // allocations smaller than SECTION_MAX_MEMORY
-    ((uintptr_t)4 << 40),
-    ((uintptr_t)8 << 40),   // SECTION_MAX_MEMORY < x < AREA_MAX_MEMORY
-    ((uintptr_t)16 << 40),  // AREA_MAX_MEMORY < x < 1GB
-    ((uintptr_t)32 << 40),  // resource allocations.
-    ((uintptr_t)64 << 40),  // Huge allocations
-    ((uintptr_t)128 << 40), // end
-};
 
 static const uintptr_t area_type_to_size[] = {
     AREA_SIZE_SMALL>>3, AREA_SIZE_SMALL>>2, AREA_SIZE_SMALL>>1,
@@ -79,7 +67,7 @@ static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_ty
 static inline int8_t partition_from_addr(uintptr_t p)
 {
     static const uint8_t partition_count = 9;
-    const int lz = 25 - __builtin_clz(p >> 32);
+    const int lz = 23 - __builtin_clz(p >> 32);
     if (lz < 0 || lz > partition_count) {
         return -1;
     } else {
@@ -99,10 +87,6 @@ typedef union Bitmask_u
     uint32_t _w32[2];
 } Bitmask;
 
-typedef struct Block_t
-{
-    struct Block_t *next;
-} Block;
 
 typedef struct Queue_t
 {
@@ -146,7 +130,8 @@ typedef struct Pool_t
     int32_t num_available;
     int32_t num_committed;
     int32_t num_used;
-    Block *free;
+    int32_t free;
+    int32_t tail;
     struct Pool_t *prev;
     struct Pool_t *next;
 } Pool;
@@ -344,10 +329,10 @@ void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offse
 static inline void list_enqueue32(void *queue, void *node, void*base)
 {
     Queue32 *tq = (Queue32 *)queue;
-    if (tq->head != -1) {
+    if (tq->head != 0xFFFFFFFF) {
         QNode32 *tn = (QNode32 *)node;
         tn->next = tq->head;
-        tn->prev = -1;
+        tn->prev = 0xFFFFFFFF;
         QNode32 *temp = (QNode32 *)((uint8_t *)base + tq->head);
         temp->prev = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
     } else {
