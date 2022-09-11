@@ -126,14 +126,20 @@ typedef struct Pool_t
 {
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
+    
     uint32_t block_size;
     uint32_t block_recip;
-    int32_t num_available;
-    int32_t num_committed;
+    
     int32_t num_used;
+    int32_t num_committed;
+    
+    int32_t num_available;
+
     int32_t free;
     int32_t tail;
+    
     struct Pool_t *prev;
+    
     struct Pool_t *next;
 } Pool;
 
@@ -285,6 +291,20 @@ typedef struct PartitionAllocator_t
     struct PartitionAllocator_t *next;
 
 } PartitionAllocator;
+typedef enum cache_type_t
+{
+    CACHE_POOL,
+    CACHE_ARENA,
+} cache_type;
+typedef struct cache_entry_t
+{
+    uintptr_t start;
+    uintptr_t end;
+    int32_t rem_blocks;
+    int32_t block_size;
+    int32_t queue_idx;
+    cache_type cache_type;
+} cache_entry;
 
 typedef struct Allocator_t
 {
@@ -292,10 +312,8 @@ typedef struct Allocator_t
     PartitionAllocator *part_alloc;
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
-    Pool *cached_pool;
     size_t prev_size;
-    uintptr_t cached_pool_start;
-    uintptr_t cached_pool_end;
+    cache_entry cache;
 } Allocator;
 
 // list utilities

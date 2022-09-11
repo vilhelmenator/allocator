@@ -21,6 +21,7 @@ PartitionAllocator *partition_allocator_init(size_t idx)
     // the allocator is at 4k alignment
     Allocator *alloc = (Allocator *)thr_mem;
     alloc->idx = (int32_t)idx;
+    alloc->prev_size = -1;
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Allocator));
     // next come the partition allocator structs.
     Queue *pool_queue = (Queue *)thr_mem;

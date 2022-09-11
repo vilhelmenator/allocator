@@ -4,8 +4,8 @@
 #include "area.h"
 #include "arena.h"
 #include "callocator.inl"
-#include "mimalloc.h"
 #include <stdlib.h>
+//#include "mimalloc.h"
 //#include "cthread.h"
 //#include <iostream>
 
@@ -931,9 +931,21 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     cfree_arena(mem);
 }
 
-
 int main()
 {
+    /*
+    for(int i = 0; i < (1 << 22); i++)
+    {
+        int32_t lz;
+        int32_t ss = (int32_t)size_to_pool_size(i, &lz);
+        int32_t sp = (int32_t)size_to_pool(i);
+        if(pool_sizes[sp] != ss )
+        {
+            int32_t a = size_to_pool_size(i, &lz);
+            int32_t b = size_to_pool(i);
+        }
+    }
+    */
     /*
     int c1 = (64 - 16) * 1;
     int c2 = (64 - 4) * 63;
@@ -971,7 +983,7 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-    // run_tests();
+    //run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);
