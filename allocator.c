@@ -11,7 +11,6 @@
 extern PartitionAllocator **partition_allocators;
 int64_t *partition_owners = NULL;
 Allocator **allocator_list = NULL;
-int32_t multi_threaded = 0;
 static const int32_t thread_message_imit = 100;
 
 static spinlock partition_lock = {0};
@@ -76,14 +75,16 @@ Allocator *allocator_aquire(size_t idx)
 void allocator_set_cached_pool(Allocator *a, Pool *p)
 {
     uintptr_t start_addr = (uintptr_t)p;
-    if (start_addr == a->cache.start) {
+    if (start_addr == a->cache.header) {
         return;
     }
     
-    a->cache.start = start_addr;
-    a->cache.end = (uintptr_t)((uint8_t *)p + sizeof(Pool) + (p->num_available * p->block_size));
+    a->cache.header = (uintptr_t)p;
+    a->cache.start = a->cache.header + sizeof(Pool);
+    a->cache.end = a->cache.start + (p->num_available * p->block_size);
     a->cache.queue_idx = p->block_idx;
     a->cache.block_size = p->block_size;
+    a->cache.block_recip = p->block_recip;
     a->cache.cache_type = CACHE_POOL;
 }
 
@@ -97,29 +98,31 @@ void allocator_set_cached_arena(Allocator *a, Arena *p)
     a->cache.start = start_addr;
     a->cache.cache_type = CACHE_ARENA;
 }
+
 static inline bool allocator_check_cache(const Allocator *a, const void *p)
 {
-    if (a->cache.start) {
-        return ((uintptr_t)p >= (a->cache.start + sizeof(Pool))) && ((uintptr_t)p < a->cache.end);
+    if (a->cache.header) {
+        return ((uintptr_t)p >= a->cache.start) && ((uintptr_t)p < a->cache.end);
     } else {
         return false;
     }
 }
 
+
 static inline void allocator_release_cache(Allocator *a)
 {
-    if (a->cache.start) {
+    if (a->cache.header) {
         if(a->cache.cache_type == CACHE_POOL)
         {
-            Pool* p = (Pool*)a->cache.start;
-            if (!pool_is_full(p)) {
+            Pool* p = (Pool*)a->cache.header;
+            if (!pool_is_empty(p)) {
                 Queue *queue = &a->part_alloc->pools[a->cache.queue_idx];
                 list_enqueue(queue, p);
             }
         }
         
     }
-    a->cache.start = 0;
+    a->cache.header = 0;
 }
 
 void allocator_thread_enqueue(message_queue *queue, message *first, message *last)
@@ -336,25 +339,12 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     Queue *queue = &a->part_alloc->pools[pool_idx];
     Pool *start = queue->head;
 
-    while (start != NULL) {
-        Pool *next = start->next;
-        if (start->free == -1) {
-            if (!pool_is_fully_commited(start)) {
-                allocator_set_cached_pool(a, start);
-                return pool_extend(start);
-            }
-            if(start->tail != -1)
-            {
-                allocator_set_cached_pool(a, start);
-                start->free = start->tail;
-                return pool_get_free_block(start);
-            }
-            list_remove(queue, start);
-        } else {
-            allocator_set_cached_pool(a, start);
-            return pool_get_free_block(start);
-        }
-        start = next;
+    if (start != NULL) {
+        // there are no empty pools in the queue.
+        list_remove(queue, start);
+        
+        allocator_set_cached_pool(a, start);
+        return pool_aquire_block(start);
     }
 
     start = allocator_alloc_pool(a, pool_idx, (uint32_t)s);
@@ -383,16 +373,20 @@ void free_extended_part(size_t pid, void *p)
 
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
-    if (allocator_check_cache(a, p)) {
-        pool_free_block((Pool*)a->cache.start, p);
-    } else {
-        a->cache.start = 0;
-        int8_t pid = partition_from_addr((uintptr_t)p);
-        if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
-            allocator_free_from_container(a, p, area_size_from_partition_id(pid));
-        } else {
-            free_extended_part(pid, p);
+    if(a->cache.header != 0)
+    {
+        if (allocator_check_cache(a, p)) {
+            Pool* pool = (Pool*)a->cache.header;
+            pool_free_block(pool, p);
+            return;
         }
+    }
+    a->cache.header = 0;
+    int8_t pid = partition_from_addr((uintptr_t)p);
+    if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
+        allocator_free_from_container(a, p, area_size_from_partition_id(pid));
+    } else {
+        free_extended_part(pid, p);
     }
 }
 
@@ -415,8 +409,6 @@ void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 
 static inline void allocator_flush_thread_free_queue(Allocator *a)
 {
-    if(!multi_threaded)
-        return;
     message_queue *q = a->part_alloc->thread_free_queue;
     if (q->head != q->tail) {
         allocator_thread_dequeue_all(a, q);
@@ -458,9 +450,9 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
     if (s == a->prev_size) {
         if(a->cache.cache_type == CACHE_POOL)
         {
-            Pool* p = (Pool*)a->cache.start;
+            Pool* p = (Pool*)a->cache.header;
             void *block = pool_aquire_block(p);
-            if(pool_is_full(p))
+            if(pool_is_empty(p))
             {
                 allocator_release_cache(a);
             }
@@ -475,7 +467,7 @@ static inline void *allocator_malloc_fallback(Allocator *a, size_t as)
 {
     void* ptr = NULL;
     // reset caching structs
-    a->cache.start = 0;
+    a->cache.header = 0;
     // try again by fetching a new partition set to use
     const int8_t new_partition_set_idx = reserve_any_partition_set_for((int32_t)a->idx);
     if (new_partition_set_idx != -1) {
@@ -495,7 +487,7 @@ void *allocator_malloc(Allocator *a, size_t s)
 {
     // do we have  cached pool to use of a fitting size?
     void *ptr = NULL;
-    if (a->cache.start != 0) {
+    if (a->cache.header != 0) {
         ptr = allocator_malloc_from_cache(a, s);
         if(ptr != NULL)
         {
@@ -521,7 +513,7 @@ void *allocator_malloc(Allocator *a, size_t s)
 void *allocator_malloc_heap(Allocator *a, size_t s)
 {
     const size_t size = ALIGN4(s);
-    a->cache.start = 0;
+    a->cache.header = 0;
     allocator_flush_thread_free_queue(a);
     if (s <= AREA_SIZE_LARGE) {
         // allocate form the large page
@@ -533,7 +525,7 @@ void *allocator_malloc_heap(Allocator *a, size_t s)
 
 bool allocator_release_local_areas(Allocator *a)
 {
-    a->cache.start = 0;
+    a->cache.header = 0;
     bool result = false;
     PartitionAllocator *palloc = a->partition_allocators.head;
     while (palloc != NULL) {

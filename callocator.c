@@ -10,7 +10,6 @@ extern PartitionAllocator **partition_allocators;
 extern int64_t *partition_owners;
 extern Allocator **allocator_list;
 static uintptr_t main_thread_id;
-extern int32_t multi_threaded;
 static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
 static inline size_t  get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
@@ -45,7 +44,6 @@ static Allocator *init_thread_instance(void)
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
     incr_thread_count();
-    multi_threaded = 1;
     return new_alloc;
 }
 

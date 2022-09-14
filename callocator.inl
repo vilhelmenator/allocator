@@ -139,7 +139,6 @@ typedef struct Pool_t
     int32_t tail;
     
     struct Pool_t *prev;
-    
     struct Pool_t *next;
 } Pool;
 
@@ -298,10 +297,12 @@ typedef enum cache_type_t
 } cache_type;
 typedef struct cache_entry_t
 {
+    uintptr_t header;
     uintptr_t start;
     uintptr_t end;
     int32_t rem_blocks;
     int32_t block_size;
+    int32_t block_recip;
     int32_t queue_idx;
     cache_type cache_type;
 } cache_entry;
