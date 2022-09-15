@@ -3,6 +3,7 @@
 #define POOL_H
 
 #include "section.h"
+
 static const int32_t pool_sizes[] = {
     8,       16,      24,      32,      40,      48,      56,      64,      72,      80,      88,      96,      104,
     112,     120,     128,     144,     160,     176,     192,     208,     224,     240,     256,     288,     320,
@@ -38,65 +39,6 @@ static const int32_t pool_recips[] = {
     2185,      2048,      1821,      1639,      1490,      1366,     1261,
     1171,      1093,      4194304,   4718592};
 
-/*
- 
- typedef struct Pool_t
- {
-    int32_t  size_idx;
-    uint64_t section_mask;
-    uint64_t section_counters[64];
- };
- 
- typedef struct Pool_t
- {
-     int32_t idx;        // index in the parent section
-     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
-     
-     uint32_t block_size;
-     uint32_t block_recip;
-     
-     int32_t num_used;
-     int32_t num_committed;
-     
-     int32_t num_available;
-
-     int32_t free;
-     int32_t tail;
-     
-     struct Pool_t *prev;
-     struct Pool_t *next;
- } Pool; 56 + 8 + 64 == 128 bytes.
- 
-    pool. revamp.
-        - part mask
-            - 64 parts.
-            - a pool of 64k would have 64 1k parts. where ech part would at most be 128 pieces.
-                - when each block is 8 bytes. 128 pieces would fit into a chunk.
-                    - 16 - 64
-                    - 32 - 32
-                    - 64 - 16 etc
-                    - pool of 128k. 64 psrts. each part is 2k. each block is 256bytes or more. .. 8 parts per chunk.
-                    - counter 64bytes[,,,,] each part is 1 byte. can count 256 elements.
-            - freeing an item.
-                - item address. idx of chunk calculated. 0 - 63.
-                - free item count of that chunk is incremented.
-            - reserving an item.
-                - if number of free is not zero. get next item. increment counters and used.
-                    - if number of free is zero. check next free idx and return address of that. set start offset and counters to zero.
-            - if number of chunks is less than 64. an element per chunk.
-            - if number of chunks is less than 8x64 use counter as a bitmask.
-            - if pool is almost full, only use used counter. decr and incr.
-        - part counter
-            [pool]
-                - 2 flavours.
-                    if mask is empty when trying to allocate but there are a lot of free items.
-                        - start appending things to the tail.
-                            -
- 
- [
-            
-
- */
 static inline int32_t get_pool_size_class(size_t s)
 {
     if (s <= SMALL_OBJECT_SIZE) {         // 8 - 16k
@@ -135,47 +77,59 @@ static inline bool pool_has_returned_items(const Pool* p) { return p->tail != -1
 static inline bool pool_attach_tail(const Pool* p) { return p->free == p->tail;}
 
 static inline bool pool_is_empty(const Pool *p) { return p->num_used >= p->num_available; }
+static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
-static inline void pool_free_block(Pool *p, void *block)
+static inline void pool_post_free(Pool *p)
 {
-    uint8_t* base_addr = (uint8_t *)p + sizeof(Pool);
+    Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+    section_free_idx(section, p->idx);
+}
+
+static inline void pool_post_reserved(Pool *p)
+{
+    Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+    section_reserve_idx(section, p->idx);
+}
+
+static inline bool pool_free_block(Pool *p, void *block)
+{
+    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
+    if((uintptr_t)block < base_addr)
+    {
+        return false;
+    }
+    if((uintptr_t)block >= (base_addr + p->num_available*p->block_size))
+    {
+        return false;
+    }
+    
     if (--p->num_used == 0) {
-        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-        section_free_idx(section, p->idx);
+        pool_post_free(p);
         // the last piece was returned so make the first item the start of the free
         p->free = 0;
-        *(int32_t*)base_addr = -1;
+        *(int32_t*)((uintptr_t)p + sizeof(Pool)) = -1;
         p->tail = -1;
         p->num_committed = 1;
-        return;
+        return true;
     }
     
     uint32_t idx = (uint32_t)(((size_t)((uint8_t *)block - base_addr) * p->block_recip) >> 32);
-    
-    // the item being freed does not belong in this spot.
-    if(idx > p->num_available)
-    {
-        // pool is currupt
-        p->free = -1;
-        p->tail = -1;
-        return;
-    }
     *(uint32_t *)block = p->tail;
     p->tail = idx;
+    return true;
 }
 
 static inline void *pool_get_free_block(Pool *p)
 {
     uint8_t* base_addr = (uint8_t *)p + sizeof(Pool);
     if (p->num_used++ == 0) {
-        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-        section_reserve_idx(section, p->idx);
+        pool_post_reserved(p);
         p->free = -1;
         return base_addr;
     }
     
     int32_t next_idx = *(uint32_t*)(base_addr + (p->free * p->block_size));
-    if(next_idx > p->num_available)
+    if(next_idx >= p->num_available)
     {
         // pool is currupt
         // the index stored at that address is out of range.

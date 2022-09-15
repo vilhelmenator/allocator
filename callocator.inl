@@ -293,6 +293,7 @@ typedef struct PartitionAllocator_t
 typedef enum cache_type_t
 {
     CACHE_POOL,
+    CACHE_POOL_CONTIGUOUS,
     CACHE_ARENA,
 } cache_type;
 typedef struct cache_entry_t
@@ -302,7 +303,6 @@ typedef struct cache_entry_t
     uintptr_t end;
     int32_t rem_blocks;
     int32_t block_size;
-    int32_t block_recip;
     int32_t queue_idx;
     cache_type cache_type;
 } cache_entry;
