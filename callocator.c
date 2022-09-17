@@ -144,17 +144,18 @@ static Allocator *reserve_allocator()
     return new_alloc;
 }
 
-static void allocator_destroy()
+static int allocator_destroy()
 {
     tls_set(_thread_key, NULL);
     tls_delete(_thread_key);
+    return 0;
 }
 
-static void allocator_init()
+static int allocator_init()
 {
     static bool init = false;
     if (init)
-        return;
+        return 0;
     init = true;
 
     for(int32_t i = 0; i < MAX_THREADS; i++)
@@ -181,6 +182,7 @@ static void allocator_init()
     
     main_instance = new_alloc;
     thread_instance = main_instance;
+    return 0;
 }
 
 #if defined(__cplusplus)
@@ -192,16 +194,22 @@ struct thread_init
 static thread_init init;
 #elif defined(WINDOWS)
 // set section property.
-typedef void cb(void);
-
+typedef int cb(void);
+#if defined(_M_X64) || defined(_M_ARM64)
+__pragma(comment(linker, "/include:" "autostart"))
+__pragma(comment(linker, "/include:" "autoexit"))
 #pragma section(".CRT$XIU", long, read)
+#else
+__pragma(comment(linker, "/include:"
+                         "autostart"))
+#endif
 #pragma data_seg(".CRT$XIU")
-static cb *autostart[] = {allocator_init};
-
+cb *autostart[] = {&allocator_init};
+#pragma data_seg() 
 #pragma data_seg(".CRT$XPU")
-static cb *autoexit[] = {allocator_destroy};
-
+cb *autoexit[] = {&allocator_destroy};
 #pragma data_seg() // reset data-segment
+
 #elif defined(__GNUC__) || defined(__clang__)
 static void __attribute__((constructor)) library_init(void) { allocator_init(); }
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }

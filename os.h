@@ -13,9 +13,10 @@
 #define WINDOWS
 #endif
 #if defined(WINDOWS)
+#include <windows.h>
 #include <intrin.h>
 #include <memoryapi.h>
-#include <windows.h>
+
 #elif defined(__APPLE__)
 #include <errno.h>
 #include <mach/mach.h>
