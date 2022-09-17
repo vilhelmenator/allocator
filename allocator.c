@@ -8,7 +8,7 @@
 
 #include "../cthread/cthread.h"
 
-extern PartitionAllocator **partition_allocators;
+extern PartitionAllocator *partition_allocators[MAX_THREADS];
 cache_align int64_t partition_owners[MAX_THREADS];
 cache_align Allocator *allocator_list[MAX_THREADS];
 static const int32_t thread_message_imit = 100;

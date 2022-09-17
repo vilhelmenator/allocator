@@ -56,10 +56,6 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
 
 PartitionAllocator* partition_allocator_init_default(void)
 {
-    for(int i = 0; i < DEFAULT_OS_PAGE_SIZE; i++)
-    {
-        default_allocator_buffer[i] = 0;
-    }
     PartitionAllocator *part_alloc = partition_allocator_init(0, (uintptr_t)&default_allocator_buffer[0]);
     partition_allocators[0] = part_alloc;
     return part_alloc;

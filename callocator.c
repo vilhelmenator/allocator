@@ -175,7 +175,7 @@ static void allocator_init()
     uintptr_t alloc_addr = end - DEFAULT_OS_PAGE_SIZE;
     Allocator *new_alloc = (Allocator *)alloc_addr;
     allocator_list[0] = new_alloc;
-    
+    partition_owners[0] = 0;
     new_alloc->part_alloc = part_alloc;
     list_enqueue(&new_alloc->partition_allocators, part_alloc);
     
