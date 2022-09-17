@@ -31,10 +31,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#if defined(_MSC_VER)
-#include <BaseTsd.h>
-typedef SSIZE_T ssize_t;
-#endif
+
 // DONE
 void *cmalloc(size_t s);
 void cfree(void *p);
