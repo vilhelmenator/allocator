@@ -6,9 +6,9 @@
 #include "os.h"
 #include "partition_allocator.h"
 
-extern PartitionAllocator **partition_allocators;
-extern int64_t *partition_owners;
-extern Allocator **allocator_list;
+extern PartitionAllocator *partition_allocators[MAX_THREADS];
+extern int64_t partition_owners[MAX_THREADS];
+extern Allocator *allocator_list[MAX_THREADS];
 static uintptr_t main_thread_id;
 static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
 static inline size_t  get_thread_count(void) {
@@ -22,6 +22,7 @@ static inline void decr_thread_count(void)
 {
     atomic_fetch_sub_explicit(&num_threads,1,memory_order_relaxed);
 }
+
 
 static Allocator *main_instance = NULL;
 static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
@@ -156,22 +157,29 @@ static void allocator_init()
         return;
     init = true;
 
-    size_t size = sizeof(void *) * MAX_THREADS * 3;
-    uintptr_t thr_mem = (uintptr_t)cmalloc_os(size);
-    partition_allocators = (PartitionAllocator **)thr_mem;
-    thr_mem += ALIGN_CACHE(sizeof(PartitionAllocator *) * MAX_THREADS);
-    partition_owners = (int64_t *)thr_mem;
-    for (int i = 0; i < MAX_THREADS; i++) {
+    for(int32_t i = 0; i < MAX_THREADS; i++)
+    {
+        partition_allocators[i] = NULL;
+        allocator_list[i] = NULL;
         partition_owners[i] = -1;
     }
-    thr_mem += ALIGN_CACHE(sizeof(int64_t *) * MAX_THREADS);
-    allocator_list = (Allocator **)thr_mem;
 
     // reserve the first allocator for the main thread.
     main_thread_id = get_thread_id();
     os_page_size = get_os_page_size();
     tls_create(&_thread_key, &thread_done);
-    main_instance = reserve_allocator();
+    
+    
+    PartitionAllocator* part_alloc = partition_allocator_init_default();
+    uintptr_t end = ((uintptr_t)part_alloc + ALIGN_CACHE(sizeof(PartitionAllocator)));
+    uintptr_t alloc_addr = end - DEFAULT_OS_PAGE_SIZE;
+    Allocator *new_alloc = (Allocator *)alloc_addr;
+    allocator_list[0] = new_alloc;
+    
+    new_alloc->part_alloc = part_alloc;
+    list_enqueue(&new_alloc->partition_allocators, part_alloc);
+    
+    main_instance = new_alloc;
     thread_instance = main_instance;
 }
 

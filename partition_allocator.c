@@ -3,21 +3,13 @@
 #include "os.h"
 #include "section.h"
 
-PartitionAllocator **partition_allocators = NULL;
-
+cache_align PartitionAllocator *partition_allocators[MAX_THREADS];
+cache_align uint8_t default_allocator_buffer[DEFAULT_OS_PAGE_SIZE];
 typedef void (*free_func)(void *);
-PartitionAllocator *partition_allocator_init(size_t idx)
+
+PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
 {
     // partition owners
-    // message sentinels
-    size_t parts[] = {ALIGN_CACHE(sizeof(Allocator)),
-                      ALIGN_CACHE(sizeof(Queue) * (POOL_BIN_COUNT + HEAP_TYPE_COUNT + 1)),
-                      ALIGN_CACHE(sizeof(message_queue)), ALIGN_CACHE(sizeof(PartitionAllocator))};
-    size_t size = 0;
-    for (int i = 0; i < sizeof(parts) / sizeof(size_t); i++) {
-        size += parts[i];
-    }
-    uintptr_t thr_mem = (uintptr_t)cmalloc_os(size);
     // the allocator is at 4k alignment
     Allocator *alloc = (Allocator *)thr_mem;
     alloc->idx = (int32_t)idx;
@@ -33,10 +25,11 @@ PartitionAllocator *partition_allocator_init(size_t idx)
     message_queue *mqueue = (message_queue *)thr_mem;
     mqueue->head = (uintptr_t)thr_mem;
     mqueue->tail = (uintptr_t)thr_mem;
-    thr_mem += CACHE_LINE;
-
+    thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
+    thr_mem -= ALIGN_CACHE(sizeof(PartitionAllocator));
+    
     PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
-    size = (SZ_MB * 256);
+    size_t size = (SZ_MB * 256);
     size_t offset = ((size_t)1 << 40);
     uint32_t area_type = 0;
     for (size_t j = 0; j < 7; j++) {
@@ -61,10 +54,22 @@ PartitionAllocator *partition_allocator_init(size_t idx)
     return palloc;
 }
 
+PartitionAllocator* partition_allocator_init_default(void)
+{
+    for(int i = 0; i < DEFAULT_OS_PAGE_SIZE; i++)
+    {
+        default_allocator_buffer[i] = 0;
+    }
+    PartitionAllocator *part_alloc = partition_allocator_init(0, (uintptr_t)&default_allocator_buffer[0]);
+    partition_allocators[0] = part_alloc;
+    return part_alloc;
+}
+
 PartitionAllocator *partition_allocator_aquire(size_t idx)
 {
     if (partition_allocators[idx] == NULL) {
-        PartitionAllocator *part_alloc = partition_allocator_init(idx);
+        uintptr_t thread_mem = (uintptr_t)cmalloc_os(os_page_size);
+        PartitionAllocator *part_alloc = partition_allocator_init(idx, thread_mem);
         partition_allocators[idx] = part_alloc;
     }
     return partition_allocators[idx];

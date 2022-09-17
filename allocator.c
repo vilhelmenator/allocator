@@ -9,8 +9,8 @@
 #include "../cthread/cthread.h"
 
 extern PartitionAllocator **partition_allocators;
-int64_t *partition_owners = NULL;
-Allocator **allocator_list = NULL;
+cache_align int64_t partition_owners[MAX_THREADS];
+cache_align Allocator *allocator_list[MAX_THREADS];
 static const int32_t thread_message_imit = 100;
 
 static spinlock partition_lock = {0};
@@ -66,7 +66,7 @@ Allocator *allocator_aquire(size_t idx)
 {
     if (allocator_list[idx] == NULL) {
         PartitionAllocator *part_alloc = partition_allocator_aquire(idx);
-        Allocator *new_alloc = (Allocator *)(((uintptr_t)part_alloc & ~(os_page_size - 1)) + CACHE_LINE);
+        Allocator *new_alloc = (Allocator *)((uintptr_t)part_alloc - ALIGN_CACHE(sizeof(Allocator)));
         allocator_list[idx] = new_alloc;
     }
     return allocator_list[idx];
