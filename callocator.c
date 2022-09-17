@@ -353,7 +353,7 @@ void *crealloc(void *p, size_t s)
     // heap can grow.
     size_t min_size = MIN(csize, s);
     void *new_ptr = cmalloc(s);
-    memcpy(p, new_ptr, min_size);
+    memcpy(new_ptr, p, min_size);
     cfree(p);
 
     return new_ptr;
