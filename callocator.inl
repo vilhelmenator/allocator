@@ -2,10 +2,10 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-#if defined(_MSC_VER)
-#include <BaseTsd.h>
-typedef SSIZE_T ssize_t;
-#endif
+//#if defined(_MSC_VER)
+//#include <BaseTsd.h>
+//typedef SSIZE_T ssize_t;
+//#endif
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
 #define SZ_GB (SZ_MB * SZ_KB)
@@ -395,7 +395,7 @@ static inline uint64_t apply_range(uint32_t range, uint32_t at)
         return 0;
     }
     
-    return (1UL << at) | (1UL << (at + (range - 1)));
+    return (1ULL << at) | (1ULL << (at + (range - 1)));
 }
 
 static inline uint32_t get_range(uint32_t at, uint64_t mask)
@@ -404,7 +404,7 @@ static inline uint32_t get_range(uint32_t at, uint64_t mask)
     {
         return 1;
     }
-    if((mask & (1UL << at)) == 0)
+    if ((mask & (1ULL << at)) == 0)
     {
         return 1;
     }

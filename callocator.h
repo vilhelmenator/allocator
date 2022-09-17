@@ -28,10 +28,10 @@
 #ifndef _callocator_h_
 #define _callocator_h_
 
-#include <stdbool.h>
+
 #include <stddef.h>
 #include <stdint.h>
-
+#include <stdbool.h>
 // DONE
 void *cmalloc(size_t s);
 void cfree(void *p);

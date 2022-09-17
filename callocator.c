@@ -364,7 +364,7 @@ void *crealloc(void *p, size_t s)
 // Allocating memory from the OS that will not conflict with any memory region
 // of the allocator.
 static spinlock os_alloc_lock = {0};
-static uintptr_t os_alloc_hint = 0;
+static uintptr_t os_alloc_hint = 1ULL << 39;
 void *cmalloc_os(size_t size)
 {
     // align size to page size

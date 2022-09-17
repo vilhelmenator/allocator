@@ -102,7 +102,7 @@ int32_t partition_allocator_get_next_area(Partition *area_queue, uint64_t size, 
     if (idx == -1) {
         return -1; // no room.
     }
-    uint64_t new_mask = (1UL << range) - 1UL;
+    uint64_t new_mask = (1ULL << range) - 1ULL;
     area_queue->area_mask |= (new_mask << idx);
     area_queue->range_mask |= apply_range(range, idx);
     uintptr_t aligned_addr = area_queue->start_addr + (type_size * idx);
@@ -160,8 +160,8 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
 
 void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Partition *list, size_t idx)
 {
-    size_t range = get_range((uint32_t)idx, list->range_mask);
-    uint64_t new_mask = ((1UL << range) - 1UL) << idx;
+    uint64_t range = get_range((uint32_t)idx, list->range_mask);
+    uint64_t new_mask = ((1ULL << range) - 1UL) << idx;
     list->area_mask = list->area_mask & ~new_mask;
     list->range_mask = list->range_mask & ~new_mask;
     if ((idx == list->previous_area) || (list->area_mask == 0)) {

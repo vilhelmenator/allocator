@@ -165,14 +165,14 @@ static const arena_size_table arena_tables[7] = {
 
 static const uint64_t arena_L2_size = sizeof(Arena_L2) + sizeof(Arena);
 static const uint64_t arena_L2_range = (arena_L2_size >> 4) + ((arena_L2_size & ((1 << 4) - 1))?1:0);
-static const uint64_t arena_L2_mask = ((1UL << arena_L2_range) - 1UL);
+static const uint64_t arena_L2_mask = ((1ULL << arena_L2_range) - 1ULL);
 static const uint64_t arena_L1_size = sizeof(Arena_L1);
 static const uint64_t arena_L1_range = (arena_L1_size >> 4) + ((arena_L1_size & ((1 << 4) - 1))?1:0);
-static const uint64_t arena_L1_mask = ((1UL << arena_L1_range) - 1UL);
+static const uint64_t arena_L1_mask = ((1ULL << arena_L1_range) - 1ULL);
 static const uint64_t arena_L0_size = sizeof(Arena_L0);
 static const uint64_t arena_L0_range = (arena_L0_size >> 4) + ((arena_L0_size & ((1 << 4) - 1))?1:0);
-static const uint64_t arena_L0_mask = ((1UL << arena_L0_range) - 1UL);
-static const uint64_t arena_empty_mask = 1UL;
+static const uint64_t arena_L0_mask = ((1ULL << arena_L0_range) - 1ULL);
+static const uint64_t arena_empty_mask = 1ULL;
 static const arena_empty_mask_table empty_masks[7] = {
     {arena_L0_mask, arena_L1_mask, arena_L2_mask},
     {(arena_L0_mask << 2) | arena_empty_mask,(arena_L1_mask << 2) | arena_empty_mask, (arena_L2_mask << 2) | arena_empty_mask},
@@ -225,7 +225,7 @@ static inline void add_to_size_list_l1(Arena* a, Arena_L1* l1, int32_t l1_idx)
 {
     // get index of l1 [0 - 63]
     int32_t idx = get_list_index(l1->L1_allocations);
-    uint64_t add_mask = (1UL << l1_idx);
+    uint64_t add_mask = (1ULL << l1_idx);
     if(l1->L1_list_index != -1)
     {
         if(idx != l1->L1_list_index)
@@ -249,7 +249,7 @@ static inline void remove_from_size_list_l1(Arena* a, Arena_L1* l1, int32_t l1_i
 {
     if(l1->L1_list_index != -1)
     {
-        a->L1_lists[l1->L1_list_index] &= ~(1UL << l1_idx);
+        a->L1_lists[l1->L1_list_index] &= ~(1ULL << l1_idx);
         l1->L1_list_index = -1;
     }
 }
@@ -291,14 +291,11 @@ static inline void remove_from_size_list_l0(Arena* a, Arena_L0* l0)
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
 uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k);
 
-static inline uintptr_t reserve_range_idx(size_t range, size_t idx)
-{
-    return ((1UL << range) - 1UL) << idx;
-}
+static inline uintptr_t reserve_range_idx(size_t range, size_t idx) { return ((1ULL << range) - 1ULL) << idx; }
 
 static inline void arena_init_zero(uintptr_t baseptr)
 {
-    *(uint64_t *)baseptr = 1UL;
+    *(uint64_t *)baseptr = 1ULL;
     *(uint64_t *)(baseptr + sizeof(uint64_t)) = 0;
     *(uint64_t *)(baseptr + sizeof(uint64_t) * 2) = 0;
 }

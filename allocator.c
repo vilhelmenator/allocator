@@ -454,7 +454,7 @@ static inline void *allocator_try_malloc(Allocator *a, size_t as)
     }
 }
 
-static inline ssize_t size_to_arena(size_t s)
+static inline int64_t size_to_arena(size_t s)
 {
     if(s < (1 << 10))
     {

@@ -727,7 +727,7 @@ uint32_t numConsecutiveZeros(uint64_t test)
         {
             return tz;
         }
-        test &= (1UL << (64 - (l1 - 1))) - 1;
+        test &= (1ULL << (64 - (l1 - 1))) - 1;
     }
     
     uint32_t mz = MAX(lz, tz);
@@ -745,7 +745,7 @@ uint32_t numConsecutiveZeros(uint64_t test)
         test = test >> (tz + 1);
     }
     
-    while(test >= (1UL << mz))
+    while(test >= (1ULL << mz))
     {
         tz = __builtin_ctzll(test);
         mz = mz ^ ((mz ^ tz) & -(mz < tz));
@@ -761,7 +761,7 @@ uint32_t _numConsecutiveZeros(uint64_t test)
     int32_t result = 0;
     for(int i = 0; i < 64; i++)
     {
-        if(!(test & (1UL << i)))
+        if(!(test & (1ULL << i)))
         {
             count++;
         }
@@ -983,7 +983,7 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-    run_tests();
+    //run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);
