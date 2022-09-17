@@ -310,8 +310,8 @@ typedef struct Allocator_t
 {
     int32_t idx;
     uint32_t prev_size;
-    int32_t part_alloc;
-    int32_t thread_free_part_alloc;
+    PartitionAllocator *part_alloc;
+    PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
     cache_entry cache;
 } Allocator;
