@@ -80,10 +80,9 @@ void allocator_set_cached_pool(Allocator *a, Pool *p)
     }
     
     a->cache.header = (uintptr_t)p;
-    a->cache.start = a->cache.header + sizeof(Pool);
-    a->cache.end = a->cache.start + (p->num_available * p->block_size);
+    a->cache.start = sizeof(Pool);
+    a->cache.end = (p->num_available * p->block_size);
     a->cache.rem_blocks = p->num_available - p->num_committed;
-    a->cache.queue_idx = p->block_idx;
     a->cache.block_size = p->block_size;
     a->cache.cache_type = CACHE_POOL;
     if(a->cache.rem_blocks)
@@ -97,11 +96,11 @@ void allocator_set_cached_pool(Allocator *a, Pool *p)
 void allocator_set_cached_arena(Allocator *a, Arena *p)
 {
     uintptr_t start_addr = (uintptr_t)p;
-    if (start_addr == a->cache.start) {
+    if (start_addr == a->cache.header) {
         return;
     }
     
-    a->cache.start = start_addr;
+    a->cache.header = start_addr;
     a->cache.cache_type = CACHE_ARENA;
 }
 
@@ -115,7 +114,8 @@ static inline void allocator_release_cache(Allocator *a)
             p->num_used -= a->cache.rem_blocks;
             p->num_committed -= a->cache.rem_blocks;
             if (!pool_is_empty(p)) {
-                Queue *queue = &a->part_alloc->pools[a->cache.queue_idx];
+                PartitionAllocator* part_alloc = partition_allocators[a->part_alloc];
+                Queue *queue = &part_alloc->pools[p->block_idx];
                 list_enqueue(queue, p);
             }
             // 
@@ -133,7 +133,7 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
     if (s == a->prev_size) {
         if(a->cache.rem_blocks)
         {
-            return (void*)(uintptr_t)a->cache.end - (a->cache.rem_blocks-- * a->cache.block_size);
+            return (void*)(uintptr_t)(a->cache.header + a->cache.start + a->cache.end) - (a->cache.rem_blocks-- * a->cache.block_size);
         }
         
         if(a->cache.cache_type == CACHE_POOL)
@@ -163,12 +163,14 @@ void allocator_thread_enqueue(message_queue *queue, message *first, message *las
 
 static inline void allocator_flush_thread_free(Allocator *a)
 {
-    if (a->thread_free_part_alloc != NULL) {
+    if (a->thread_free_part_alloc != -1) {
         // get the first and last item of the tf queue
-        message *lm = partition_allocator_get_last_message(a->part_alloc);
+        PartitionAllocator * part_alloc = partition_allocators[a->part_alloc];
+        message *lm = partition_allocator_get_last_message(part_alloc);
         if (lm != NULL) {
-            allocator_thread_enqueue(a->thread_free_part_alloc->thread_free_queue, a->part_alloc->thread_messages, lm);
-            a->part_alloc->message_count = 0;
+            PartitionAllocator * th_part_alloc = partition_allocators[a->thread_free_part_alloc];
+            allocator_thread_enqueue(th_part_alloc->thread_free_queue, part_alloc->thread_messages, lm);
+            part_alloc->message_count = 0;
         }
     }
 }
@@ -176,12 +178,13 @@ static inline void allocator_flush_thread_free(Allocator *a)
 void allocator_thread_free(Allocator *a, void *p, const uint64_t pid)
 {
     PartitionAllocator *_part_alloc = partition_allocators[pid];
-    if (_part_alloc != a->thread_free_part_alloc) {
+    PartitionAllocator *_th_part_alloc = partition_allocators[a->thread_free_part_alloc];
+    if (_part_alloc != _th_part_alloc) {
         allocator_flush_thread_free(a);
-        a->thread_free_part_alloc = _part_alloc;
+        a->thread_free_part_alloc = (int32_t)pid;
     }
-    partition_allocator_thread_free(a->part_alloc, p);
-    if (a->part_alloc->message_count > thread_message_imit) {
+    partition_allocator_thread_free(_part_alloc, p);
+    if (_part_alloc->message_count > thread_message_imit) {
         allocator_flush_thread_free(a);
     }
 }
@@ -253,7 +256,8 @@ void allocator_free_from_container(Allocator *a, void *p, const size_t area_size
 
 Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st)
 {
-    Section *free_section = (Section *)a->part_alloc->sections->head;
+    PartitionAllocator* part_alloc = partition_allocators[a->part_alloc];
+    Section *free_section = (Section *)part_alloc->sections->head;
 
     // find free section.
     while (free_section != NULL) {
@@ -262,14 +266,14 @@ Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st
             if (!section_is_full(free_section)) {
                 break;
             } else {
-                list_remove(a->part_alloc->sections, free_section);
+                list_remove(part_alloc->sections, free_section);
             }
         }
         free_section = next;
     }
 
     if (free_section == NULL) {
-        Section *new_section = partition_allocator_alloc_section(a->part_alloc, s);
+        Section *new_section = partition_allocator_alloc_section(part_alloc, s);
         if (new_section == NULL) {
             return NULL;
         }
@@ -277,7 +281,7 @@ Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st
 
         new_section->next = NULL;
         new_section->prev = NULL;
-        list_enqueue(a->part_alloc->sections, new_section);
+        list_enqueue(part_alloc->sections, new_section);
 
         free_section = new_section;
     }
@@ -288,7 +292,8 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
 {
     const uint32_t heap_sizes[] = {1 << HT_4M, 1 << HT_32M, 1 << HT_64M, 1 << HT_128M, 1 << HT_256M};
     const uint32_t heap_size_cls = size_to_heap(s);
-    Queue *queue = &a->part_alloc->heaps[heap_size_cls];
+    PartitionAllocator* part_alloc = partition_allocators[a->part_alloc];
+    Queue *queue = &part_alloc->heaps[heap_size_cls];
     Heap *start = (Heap *)queue->head;
     while (start != NULL) {
         Heap *next = start->next;
@@ -314,13 +319,13 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
     }
 
     AreaType at = get_area_type_for_heap(s);
-    Area *new_area = partition_allocator_get_free_area(a->part_alloc, s, at);
+    Area *new_area = partition_allocator_get_free_area(part_alloc, s, at);
     if (new_area == NULL) {
         return NULL;
     }
 
-    Partition* partition = &a->part_alloc->area[at];
-    uint32_t idx = partition_allocator_get_area_idx_from_queue(a->part_alloc, new_area, partition);
+    Partition* partition = &part_alloc->area[at];
+    uint32_t idx = partition_allocator_get_area_idx_from_queue(part_alloc, new_area, partition);
     uint32_t range = get_range(idx, partition->range_mask);
     uint64_t area_size = area_get_size(new_area)*range;
     area_set_container_type(new_area, CT_HEAP);
@@ -335,7 +340,8 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
 void *allocator_alloc_slab(Allocator *a, const size_t s)
 {
     const size_t totalSize = sizeof(Area) + s;
-    Area *area = partition_allocator_get_free_area(a->part_alloc, totalSize, AT_FIXED_256);
+    PartitionAllocator* part_alloc = partition_allocators[a->part_alloc];
+    Area *area = partition_allocator_get_free_area(part_alloc, totalSize, AT_FIXED_256);
     if (area == NULL) {
         return NULL;
     }
@@ -362,7 +368,8 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
 void *allocator_alloc_from_pool(Allocator *a, const size_t s)
 {
     const int32_t pool_idx = size_to_pool(s);
-    Queue *queue = &a->part_alloc->pools[pool_idx];
+    PartitionAllocator* part_alloc = partition_allocators[a->part_alloc];
+    Queue *queue = &part_alloc->pools[pool_idx];
     Pool *start = queue->head;
     void*res = NULL;
     if (start != NULL) {
@@ -436,7 +443,8 @@ void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 
 static inline void allocator_flush_thread_free_queue(Allocator *a)
 {
-    message_queue *q = a->part_alloc->thread_free_queue;
+    PartitionAllocator * part_alloc = partition_allocators[a->part_alloc];
+    message_queue *q = part_alloc->thread_free_queue;
     if (q->head != q->tail) {
         allocator_thread_dequeue_all(a, q);
     }
@@ -486,7 +494,7 @@ static inline void *allocator_malloc_fallback(Allocator *a, size_t as)
         // move our default partition allocator to the new slot and try again.
         PartitionAllocator *part_alloc = partition_allocator_aquire(new_partition_set_idx);
         list_enqueue(&a->partition_allocators, part_alloc);
-        a->part_alloc = part_alloc;
+        a->part_alloc = new_partition_set_idx;
         ptr = allocator_try_malloc(a, as);
     }
     // hopefully this is not NULL
@@ -505,7 +513,7 @@ void *allocator_malloc(Allocator *a, size_t s)
         }
     }
     
-    a->prev_size = s;
+    a->prev_size = (uint32_t)s;
     
     const size_t as = ALIGN(s);
     // if we have some memory waiting in our thread free queue.
@@ -566,7 +574,7 @@ bool allocator_release_local_areas(Allocator *a)
         result |= !was_released;
         palloc = next;
     }
-    a->part_alloc = partition_allocators[a->idx];
+    a->part_alloc = a->idx;
     return !result;
 }
 
@@ -636,8 +644,9 @@ size_t allocator_get_allocation_size(Allocator *a, void *p)
         }
         default: {
             AreaType at = area_get_type(area);
-            Partition* partition = &a->part_alloc->area[at];
-            uint32_t idx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+            PartitionAllocator * part_alloc = partition_allocators[a->part_alloc];
+            Partition* partition = &part_alloc->area[at];
+            uint32_t idx = partition_allocator_get_area_idx_from_queue(part_alloc, area, partition);
             uint32_t range = get_range(idx, partition->range_mask);
             return area_get_size(area)*range;
         }

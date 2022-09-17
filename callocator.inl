@@ -2,10 +2,12 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-//#if defined(_MSC_VER)
-//#include <BaseTsd.h>
-//typedef SSIZE_T ssize_t;
-//#endif
+
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
 #define SZ_GB (SZ_MB * SZ_KB)
@@ -250,13 +252,8 @@ typedef struct Arena_L0_t
 
 typedef struct Partition_t
 {
-    uint64_t partition_id;
-    uintptr_t start_addr;
-    uintptr_t end_addr;
     uint64_t area_mask;
     uint64_t range_mask;
-    AreaType type;
-    uint32_t previous_area;
 } Partition;
 
 // lockless message queue
@@ -276,7 +273,7 @@ typedef struct PartitionAllocator_t
 {
     int64_t idx;
     Partition area[7];
-
+    uint64_t previous_partitions;
     // sections local to this thread with free heaps or pools
     Queue *sections;
     // free pages that have room for various size allocations.
@@ -302,21 +299,20 @@ typedef enum cache_type_t
 typedef struct cache_entry_t
 {
     uintptr_t header;
-    uintptr_t start;
-    uintptr_t end;
+    int32_t start;
+    uint32_t end;
     int32_t rem_blocks;
     int32_t block_size;
-    int32_t queue_idx;
     cache_type cache_type;
 } cache_entry;
 
 typedef struct Allocator_t
 {
-    int64_t idx;
-    PartitionAllocator *part_alloc;
-    PartitionAllocator *thread_free_part_alloc;
+    int32_t idx;
+    uint32_t prev_size;
+    int32_t part_alloc;
+    int32_t thread_free_part_alloc;
     Queue partition_allocators;
-    size_t prev_size;
     cache_entry cache;
 } Allocator;
 

@@ -25,7 +25,7 @@ static inline void decr_thread_count(void)
 
 
 static Allocator *main_instance = NULL;
-static const Allocator default_alloc = {-1, NULL, NULL, {NULL, NULL}, 0, 0, 0};
+static const Allocator default_alloc = {-1, 0, -1, -1, {NULL, NULL}, 0, 0};
 static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
@@ -41,7 +41,7 @@ static Allocator *init_thread_instance(void)
 {
     int32_t idx = reserve_any_partition_set();
     Allocator *new_alloc = allocator_list[idx];
-    new_alloc->part_alloc = partition_allocators[idx];
+    new_alloc->part_alloc = idx;
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
     incr_thread_count();
@@ -139,8 +139,8 @@ static Allocator *reserve_allocator()
 {
     int32_t idx = reserve_any_partition_set();
     Allocator *new_alloc = allocator_aquire(idx);
-    new_alloc->part_alloc = partition_allocators[idx];
-    list_enqueue(&new_alloc->partition_allocators, new_alloc->part_alloc);
+    new_alloc->part_alloc = idx;
+    list_enqueue(&new_alloc->partition_allocators, partition_allocators[idx]);
     return new_alloc;
 }
 
@@ -177,7 +177,7 @@ static int allocator_init()
     Allocator *new_alloc = (Allocator *)alloc_addr;
     allocator_list[0] = new_alloc;
     partition_owners[0] = 0;
-    new_alloc->part_alloc = part_alloc;
+    new_alloc->part_alloc = 0;
     list_enqueue(&new_alloc->partition_allocators, part_alloc);
     
     main_instance = new_alloc;
@@ -283,10 +283,10 @@ void *cmalloc_arena(size_t s, size_t partition_idx)
         return NULL;
     }
     Allocator *alloc = get_thread_instance();
-    void *arena = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx);
+    PartitionAllocator* part_alloc = partition_allocators[alloc->part_alloc];
+    void *arena = partition_allocator_get_free_area(part_alloc, s, (AreaType)partition_idx);
     Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
-    Partition* partition = &alloc->part_alloc->area[partition_idx];
-    header->partition_id = (uint32_t)partition->partition_id;
+    header->partition_id = (uint32_t)part_alloc->idx;
     if (arena == NULL) {
         return NULL;
     }
