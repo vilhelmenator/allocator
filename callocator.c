@@ -205,10 +205,8 @@ __pragma(comment(linker, "/include:"
 #endif
 #pragma data_seg(".CRT$XIU")
 cb *autostart[] = {&allocator_init};
-#pragma data_seg() 
-#pragma data_seg(".CRT$XPU")
 cb *autoexit[] = {&allocator_destroy};
-#pragma data_seg() // reset data-segment
+#pragma data_seg() 
 
 #elif defined(__GNUC__) || defined(__clang__)
 static void __attribute__((constructor)) library_init(void) { allocator_init(); }
