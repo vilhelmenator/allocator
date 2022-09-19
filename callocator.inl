@@ -299,10 +299,14 @@ typedef enum cache_type_t
 typedef struct cache_entry_t
 {
     uintptr_t header;
-    int32_t start;
     uint32_t end;
-    int32_t rem_blocks;
+    
+    // contiguous block
     int32_t block_size;
+    int32_t remaining_blocks;
+    
+    // freed blocks.
+    int32_t freed_blocks;
     cache_type cache_type;
 } cache_entry;
 

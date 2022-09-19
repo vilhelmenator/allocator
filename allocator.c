@@ -80,12 +80,12 @@ void allocator_set_cached_pool(Allocator *a, Pool *p)
     }
     
     a->cache.header = (uintptr_t)p;
-    a->cache.start = sizeof(Pool);
-    a->cache.end = (p->num_available * p->block_size);
-    a->cache.rem_blocks = p->num_available - p->num_committed;
+    a->cache.end = sizeof(Pool) + (p->num_available * p->block_size);
+    a->cache.remaining_blocks = p->num_available - p->num_committed;
     a->cache.block_size = p->block_size;
     a->cache.cache_type = CACHE_POOL;
-    if(a->cache.rem_blocks)
+    a->cache.freed_blocks = 0;
+    if(a->cache.remaining_blocks)
     {
         // reserve all memory from the pool
         p->num_used = p->num_available;
@@ -111,16 +111,21 @@ static inline void allocator_release_cache(Allocator *a)
         if(a->cache.cache_type == CACHE_POOL)
         {
             Pool* p = (Pool*)a->cache.header;
-            p->num_used -= a->cache.rem_blocks;
-            p->num_committed -= a->cache.rem_blocks;
+            p->num_used -= a->cache.remaining_blocks;
+            p->num_committed -= a->cache.remaining_blocks;
             if (!pool_is_empty(p)) {
                 Queue *queue = &a->part_alloc->pools[p->block_idx];
                 list_enqueue(queue, p);
             }
-            // 
+            
+            //p->num_used -= a->cache.freed_blocks;
             if(pool_is_full(p))
             {
                 pool_post_free(p);
+            }
+            else
+            {
+                //pool_post_reserved(p);
             }
         }
     }
@@ -130,9 +135,9 @@ static inline void allocator_release_cache(Allocator *a)
 static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
 {
     if (s == a->prev_size) {
-        if(a->cache.rem_blocks)
+        if(a->cache.remaining_blocks)
         {
-            return (void*)(uintptr_t)(a->cache.header + a->cache.start + a->cache.end) - (a->cache.rem_blocks-- * a->cache.block_size);
+            return (void*)(uintptr_t)(a->cache.header + a->cache.end) - (a->cache.remaining_blocks-- * a->cache.block_size);
         }
         
         if(a->cache.cache_type == CACHE_POOL)
@@ -143,6 +148,7 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
             {
                 allocator_release_cache(a);
             }
+            
             return block;
         }
     }
@@ -189,6 +195,7 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
 {
     if (section->type != ST_HEAP_4M) {
         Pool *pool = (Pool *)section_find_collection(section, p);
+        //pool->num_used--;
         pool_free_block(pool, p);
         allocator_set_cached_pool(a, pool);
     } else {
@@ -402,6 +409,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
     {
         if(pool_free_block((Pool*)a->cache.header, p))
         {
+            //a->cache.freed_blocks++;
             return;
         }
         allocator_release_cache(a);

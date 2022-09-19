@@ -74,7 +74,16 @@ static inline void *pool_extend(Pool *p)
 
 static inline bool pool_is_maybe_empty(const Pool* p) { return p->free == -1;}
 static inline bool pool_has_returned_items(const Pool* p) { return p->tail != -1;}
-static inline bool pool_attach_tail(const Pool* p) { return p->free == p->tail;}
+static inline void pool_attach_tail(Pool* p) {
+    p->free = p->tail;
+    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
+    int32_t idx = p->free;
+    while(idx != -1)
+    {
+        idx = *(uint32_t*)(base_addr + (idx * p->block_size));
+        p->num_used--;
+    }
+}
 
 static inline bool pool_is_empty(const Pool *p) { return p->num_used >= p->num_available; }
 static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
@@ -146,7 +155,7 @@ static inline void *pool_aquire_block(Pool *p)
 {
     
     if (p->free != -1) {
-       return pool_get_free_block(p);
+        return pool_get_free_block(p);
     }
     if (!pool_is_fully_commited(p)) {
         return pool_extend(p);
@@ -156,6 +165,7 @@ static inline void *pool_aquire_block(Pool *p)
         if(p->tail != -1)
         {
             p->free = p->tail;
+            p->tail = -1;
             return pool_get_free_block(p);
         }
     }
