@@ -88,11 +88,6 @@ static inline Area *area_from_addr(uintptr_t p)
     return (Area *)(p & masks[pidx]);
 }
 
-static inline Area *area_at_idx(Partition* p, size_t idx)
-{
-    size_t s = (1 << area_type_to_exponent[p->type]);
-    return (Area *)(p->start_addr + (s * idx));
-}
 
 static inline bool area_is_full(const Area *a)
 {

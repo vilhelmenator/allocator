@@ -80,10 +80,8 @@ void allocator_set_cached_pool(Allocator *a, Pool *p)
     }
     
     a->cache.header = (uintptr_t)p;
-    a->cache.start = a->cache.header + sizeof(Pool);
-    a->cache.end = a->cache.start + (p->num_available * p->block_size);
+    a->cache.end = sizeof(Pool) + (p->num_available * p->block_size);
     a->cache.rem_blocks = p->num_available - p->num_committed;
-    a->cache.queue_idx = p->block_idx;
     a->cache.block_size = p->block_size;
     a->cache.cache_type = CACHE_POOL;
     if(a->cache.rem_blocks)
@@ -97,11 +95,11 @@ void allocator_set_cached_pool(Allocator *a, Pool *p)
 void allocator_set_cached_arena(Allocator *a, Arena *p)
 {
     uintptr_t start_addr = (uintptr_t)p;
-    if (start_addr == a->cache.start) {
+    if (start_addr == a->cache.header) {
         return;
     }
     
-    a->cache.start = start_addr;
+    a->cache.header = start_addr;
     a->cache.cache_type = CACHE_ARENA;
 }
 
@@ -115,7 +113,7 @@ static inline void allocator_release_cache(Allocator *a)
             p->num_used -= a->cache.rem_blocks;
             p->num_committed -= a->cache.rem_blocks;
             if (!pool_is_empty(p)) {
-                Queue *queue = &a->part_alloc->pools[a->cache.queue_idx];
+                Queue *queue = &a->part_alloc->pools[p->block_idx];
                 list_enqueue(queue, p);
             }
             // 
@@ -133,7 +131,7 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
     if (s == a->prev_size) {
         if(a->cache.rem_blocks)
         {
-            return (void*)(uintptr_t)a->cache.end - (a->cache.rem_blocks-- * a->cache.block_size);
+            return (void*)(uintptr_t)(a->cache.header + a->cache.end) - (a->cache.rem_blocks-- * a->cache.block_size);
         }
         
         if(a->cache.cache_type == CACHE_POOL)
