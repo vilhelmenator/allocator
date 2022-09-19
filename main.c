@@ -983,7 +983,7 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-    run_tests();
+    //run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);
