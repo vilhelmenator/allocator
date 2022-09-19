@@ -88,7 +88,6 @@ static inline Area *area_from_addr(uintptr_t p)
     return (Area *)(p & masks[pidx]);
 }
 
-
 static inline bool area_is_full(const Area *a)
 {
     if (bitmask_is_full_hi(&a->active_mask)) {

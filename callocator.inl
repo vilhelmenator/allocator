@@ -2,10 +2,12 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
+
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
 #endif
+
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
 #define SZ_GB (SZ_MB * SZ_KB)
@@ -272,7 +274,6 @@ typedef struct PartitionAllocator_t
     int64_t idx;
     Partition area[7];
     uint64_t previous_partitions;
-    
     // sections local to this thread with free heaps or pools
     Queue *sections;
     // free pages that have room for various size allocations.

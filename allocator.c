@@ -503,7 +503,7 @@ void *allocator_malloc(Allocator *a, size_t s)
         }
     }
     
-    a->prev_size = s;
+    a->prev_size = (uint32_t)s;
     
     const size_t as = ALIGN(s);
     // if we have some memory waiting in our thread free queue.
