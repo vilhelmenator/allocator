@@ -157,9 +157,9 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     uint64_t new_mask = ((1ULL << range) - 1UL) << idx;
     list->area_mask = list->area_mask & ~new_mask;
     list->range_mask = list->range_mask & ~new_mask;
-    int8_t previous_area = ((int8_t*)pa->previous_partitions)[at];
+    int8_t previous_area = ((int8_t*)&pa->previous_partitions)[at];
     if ((idx == previous_area) || (list->area_mask == 0)) {
-        ((int8_t*)pa->previous_partitions)[at] = -1;
+        ((int8_t*)&pa->previous_partitions)[at] = -1;
     }
     free_memory(a, area_get_size(a)*range);
 }
