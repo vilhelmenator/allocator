@@ -27,7 +27,7 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     mqueue->tail = (uintptr_t)thr_mem;
     thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
     thr_mem -= ALIGN_CACHE(sizeof(PartitionAllocator));
-    
+
     PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
     palloc->idx = idx;
     palloc->previous_partitions = UINT64_MAX;
@@ -81,7 +81,7 @@ int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *are
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, area_queue);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40);
+    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
     size_t start_addr = (pa->idx)*base_size + offset;
     size_t end_addr = start_addr + base_size;
     
@@ -197,7 +197,7 @@ static inline Area *area_at_idx(PartitionAllocator* pa, Partition* p, size_t idx
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, p);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40);
+    size_t offset = ((size_t)1 << 40)<< (uint64_t)at;
     size_t start_addr = (pa->idx)*base_size + offset;
     size_t s = (1 << area_type_to_exponent[at]);
     return (Area *)(start_addr + (s * idx));
@@ -207,7 +207,7 @@ Area *area_list_get_area(PartitionAllocator* pa, Partition *queue, uint32_t cidx
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40);
+    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
     size_t start_addr = (pa->idx)*base_size + offset;
     uintptr_t area_addr = start_addr + ((1 << at) * BASE_AREA_SIZE) * cidx;
     return (Area *)area_addr;
@@ -263,10 +263,10 @@ Area *partition_allocator_get_free_area_from_queue(PartitionAllocator*pa, Partit
 {
     // the areas are empty
     Area *new_area = NULL;
-    uint32_t at = partition_allocator_get_partition_idx(pa, current_queue);
-    Area *previous_area = NULL;
-    if (((int8_t*)&pa->previous_partitions)[at] != -1) {
-        previous_area = area_at_idx(pa, current_queue, ((int8_t*)&pa->previous_partitions)[at]);
+   uint32_t at = partition_allocator_get_partition_idx(pa, current_queue);
+   Area *previous_area = NULL;
+   if (((int8_t*)&pa->previous_partitions)[at] != -1) {
+       previous_area = area_at_idx(pa, current_queue, ((int8_t*)&pa->previous_partitions)[at]);
         if (!area_is_full(previous_area)) {
             new_area = previous_area;
         }
@@ -325,7 +325,6 @@ Area *partition_allocator_alloc_area(PartitionAllocator* pa, Partition *area_que
     ((int8_t*)&pa->previous_partitions)[at] = idx;
     return new_area;
 }
-
 Area *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaType t)
 {
     size_t area_size = AREA_SIZE_SMALL;

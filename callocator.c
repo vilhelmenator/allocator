@@ -25,7 +25,7 @@ static inline void decr_thread_count(void)
 
 
 static Allocator *main_instance = NULL;
-static const Allocator default_alloc = {-1, -1, NULL, NULL, {NULL, NULL}, 0, 0};
+static const Allocator default_alloc = {-1, 0, NULL,NULL, {NULL, NULL},{0,0,0,0,0,0}};
 static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
@@ -284,8 +284,8 @@ void *cmalloc_arena(size_t s, size_t partition_idx)
     }
     Allocator *alloc = get_thread_instance();
     void *arena = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx);
+
     Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
-    Partition* partition = &alloc->part_alloc->area[partition_idx];
     header->partition_id = (uint32_t)alloc->part_alloc->idx;
     if (arena == NULL) {
         return NULL;
