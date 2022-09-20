@@ -74,11 +74,6 @@ Allocator *allocator_aquire(size_t idx)
 
 void allocator_set_cached_pool(Allocator *a, Pool *p)
 {
-    uintptr_t start_addr = (uintptr_t)p;
-    if (start_addr == a->cache.header) {
-        return;
-    }
-    
     a->cache.header = (uintptr_t)p;
     a->cache.end = sizeof(Pool) + (p->num_available * p->block_size);
     a->cache.rem_blocks = p->num_available - p->num_committed;
@@ -103,24 +98,29 @@ void allocator_set_cached_arena(Allocator *a, Arena *p)
     a->cache.cache_type = CACHE_ARENA;
 }
 
+static inline void allocator_release_cached_pool(Allocator *a)
+{
+    Pool* p = (Pool*)a->cache.header;
+    p->num_used -= a->cache.rem_blocks;
+    p->num_committed -= a->cache.rem_blocks;
+    if (!pool_is_empty(p)) {
+        Queue *queue = &a->part_alloc->pools[p->block_idx];
+        list_enqueue(queue, p);
+    }
+    //
+    if(pool_is_full(p))
+    {
+        pool_post_free(p);
+    }
+    a->cache.header = 0;
+}
 
 static inline void allocator_release_cache(Allocator *a)
 {
     if (a->cache.header) {
         if(a->cache.cache_type == CACHE_POOL)
         {
-            Pool* p = (Pool*)a->cache.header;
-            p->num_used -= a->cache.rem_blocks;
-            p->num_committed -= a->cache.rem_blocks;
-            if (!pool_is_empty(p)) {
-                Queue *queue = &a->part_alloc->pools[p->block_idx];
-                list_enqueue(queue, p);
-            }
-            // 
-            if(pool_is_full(p))
-            {
-                pool_post_free(p);
-            }
+            allocator_release_cached_pool(a);
         }
     }
     a->cache.header = 0;
@@ -128,24 +128,22 @@ static inline void allocator_release_cache(Allocator *a)
 
 static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
 {
-    if (s == a->prev_size) {
-        if(a->cache.rem_blocks)
-        {
-            return (void*)(uintptr_t)(a->cache.header + a->cache.end) - (a->cache.rem_blocks-- * a->cache.block_size);
-        }
-        
+    if(a->cache.rem_blocks)
+    {
+        return (void*)(uintptr_t)(a->cache.header + a->cache.end) - (a->cache.rem_blocks-- * a->cache.block_size);
+    }
+    else
+    {
         if(a->cache.cache_type == CACHE_POOL)
         {
             Pool* p = (Pool*)a->cache.header;
-            void *block = pool_aquire_block(p);
-            if(pool_is_empty(p))
+            if(!pool_is_empty(p))
             {
-                allocator_release_cache(a);
+                return pool_aquire_block(p);
             }
-            return block;
+            allocator_release_cached_pool(a);
         }
     }
-    allocator_release_cache(a);
     return NULL;
 }
 

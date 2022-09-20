@@ -128,17 +128,9 @@ static inline void *pool_get_free_block(Pool *p)
         return base_addr;
     }
     
-    int32_t next_idx = *(uint32_t*)(base_addr + (p->free * p->block_size));
-    if(next_idx >= p->num_available)
-    {
-        // pool is currupt
-        // the index stored at that address is out of range.
-        p->free = -1;
-        p->tail = -1;
-        return NULL;
-    }
+    uint32_t next_idx = *(uint32_t*)(base_addr + (p->free * p->block_size));
     int32_t cur_idx = p->free;
-    p->free = next_idx;
+    p->free = next_idx >= p->num_available? -1: next_idx;
     return (void*)(base_addr + (cur_idx * p->block_size));
 }
 
