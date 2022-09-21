@@ -22,7 +22,7 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * HEAP_TYPE_COUNT);
     Queue *section_queue = (Queue *)thr_mem;
     thr_mem += CACHE_LINE;
-    message_queue *mqueue = (message_queue *)thr_mem;
+    AtomicQueue *mqueue = (AtomicQueue *)thr_mem;
     mqueue->head = (uintptr_t)thr_mem;
     mqueue->tail = (uintptr_t)thr_mem;
     thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
@@ -57,21 +57,21 @@ PartitionAllocator *partition_allocator_aquire(size_t idx)
     return partition_allocators[idx];
 }
 
-message *partition_allocator_get_last_message(PartitionAllocator *pa)
+AtomicMessage *partition_allocator_get_last_message(PartitionAllocator *pa)
 {
-    message *msg = pa->thread_messages;
+    AtomicMessage *msg = pa->thread_messages;
     if (msg == NULL) {
         return NULL;
     }
     while ((uintptr_t)msg->next != 0) {
-        msg = (message *)(uintptr_t)msg->next;
+        msg = (AtomicMessage *)(uintptr_t)msg->next;
     }
     return msg;
 }
 
 void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
 {
-    message *new_free = (message *)p;
+    AtomicMessage *new_free = (AtomicMessage *)p;
     new_free->next = (uintptr_t)pa->thread_messages;
     pa->thread_messages = new_free;
     pa->message_count++;

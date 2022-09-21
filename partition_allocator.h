@@ -11,7 +11,7 @@ ALIGN_CACHE(sizeof(PartitionAllocator))
 typedef void (*free_func)(void *);
 PartitionAllocator* partition_allocator_init_default(void);
 PartitionAllocator *partition_allocator_aquire(size_t idx);
-message *partition_allocator_get_last_message(PartitionAllocator *pa);
+AtomicMessage *partition_allocator_get_last_message(PartitionAllocator *pa);
 void partition_allocator_thread_free(PartitionAllocator *pa, void *p);
 void partition_allocator_free_area(PartitionAllocator *pa, Area *area);
 bool partition_allocator_release_local_areas(PartitionAllocator *pa);

@@ -83,8 +83,8 @@ void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offse
 
 void list_remove32(void *queue, void *node, void* base)
 {
-    Queue32 *tq = (Queue32 *)queue;
-    QNode32 *tn = (QNode32 *)node;
+    IndexQueue *tq = (IndexQueue *)queue;
+    QIndexNode *tn = (QIndexNode *)node;
     
     if(tq->head == tq->tail)
     {
@@ -94,11 +94,11 @@ void list_remove32(void *queue, void *node, void* base)
     else
     {
         if (tn->prev != 0xFFFFFFFF) {
-            QNode32 *temp = (QNode32 *)((uint8_t *)base + tn->prev);
+            QIndexNode *temp = (QIndexNode *)((uint8_t *)base + tn->prev);
             temp->next = tn->next;
         }
         if (tn->next != 0xFFFFFFFF) {
-            QNode32 *temp = (QNode32 *)((uint8_t *)base + tn->next);
+            QIndexNode *temp = (QIndexNode *)((uint8_t *)base + tn->next);
             temp->prev = tn->prev;
         }
         if (node == (void*)((uint8_t *)base + tq->head)) {

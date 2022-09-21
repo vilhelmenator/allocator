@@ -147,11 +147,11 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
     return NULL;
 }
 
-void allocator_thread_enqueue(message_queue *queue, message *first, message *last)
+void allocator_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last)
 {
     atomic_store_explicit(&last->next, (uintptr_t)NULL,
                           memory_order_release); // last.next = null
-    message *prev = (message *)atomic_exchange_explicit(&queue->tail, (uintptr_t)last,
+    AtomicMessage *prev = (AtomicMessage *)atomic_exchange_explicit(&queue->tail, (uintptr_t)last,
                                                         memory_order_release); // swap back and last
     atomic_store_explicit(&prev->next, (uintptr_t)first,
                           memory_order_release); // prev.next = first
@@ -161,7 +161,7 @@ static inline void allocator_flush_thread_free(Allocator *a)
 {
     if (a->thread_free_part_alloc != NULL) {
         // get the first and last item of the tf queue
-        message *lm = partition_allocator_get_last_message(a->part_alloc);
+        AtomicMessage *lm = partition_allocator_get_last_message(a->part_alloc);
         if (lm != NULL) {
             allocator_thread_enqueue(a->thread_free_part_alloc->thread_free_queue, a->part_alloc->thread_messages, lm);
             a->part_alloc->message_count = 0;
@@ -415,13 +415,13 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
 
 
 
-void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
+void allocator_thread_dequeue_all(Allocator *a, AtomicQueue *queue)
 {
-    message *back = (message *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    message *curr = (message *)(uintptr_t)queue->head;
+    AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    AtomicMessage *curr = (AtomicMessage *)(uintptr_t)queue->head;
     // loop between start and end addres
     while (curr != back) {
-        message *next = (message *)atomic_load_explicit(&curr->next, memory_order_acquire);
+        AtomicMessage *next = (AtomicMessage *)atomic_load_explicit(&curr->next, memory_order_acquire);
         if (next == NULL)
             break;
         _allocator_free(a, curr);
@@ -432,7 +432,7 @@ void allocator_thread_dequeue_all(Allocator *a, message_queue *queue)
 
 static inline void allocator_flush_thread_free_queue(Allocator *a)
 {
-    message_queue *q = a->part_alloc->thread_free_queue;
+    AtomicQueue *q = a->part_alloc->thread_free_queue;
     if (q->head != q->tail) {
         allocator_thread_dequeue_all(a, q);
     }
@@ -598,7 +598,7 @@ void allocator_free_th(Allocator *a, void *p)
                     PartitionAllocator *_part_alloc = partition_allocators[part_id];
                     // if there is a partition allocator that owns this, we can just
                     // push it on to its queue.
-                    message *new_free = (message *)p;
+                    AtomicMessage *new_free = (AtomicMessage *)p;
                     new_free->next = (uintptr_t)0;
                     allocator_thread_enqueue(_part_alloc->thread_free_queue, new_free, new_free);
                 }

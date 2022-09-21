@@ -99,11 +99,34 @@ typedef struct Queue_t
     void* tail;
 } Queue;
 
-typedef struct Queue32_t
+typedef struct IndexQueue_t
 {
     uint32_t head;
     uint32_t tail;
-} Queue32;
+} IndexQueue;
+
+// lockless message queue
+typedef struct AtomicMessage_t
+{
+    _Atomic(uintptr_t) next;
+} AtomicMessage;
+
+typedef struct AtomicQueue_t
+{
+    uintptr_t head;
+    _Atomic(uintptr_t) tail;
+} AtomicQueue;
+
+typedef struct AtomicIndexMessage_t
+{
+    _Atomic(int32_t) next;
+} AtomicIndexMessage;
+
+typedef struct AtomicIndexQueue_t
+{
+    int32_t head;
+    _Atomic(int32_t) tail;
+} AtomicIndexQueue;
 
 typedef struct Area_t
 {
@@ -143,6 +166,8 @@ typedef struct Pool_t
     int32_t free;
     int32_t tail;
     
+    AtomicIndexQueue thread_free;
+    
     struct Pool_t *prev;
     struct Pool_t *next;
 } Pool;
@@ -173,11 +198,11 @@ typedef struct QNode_t
     void* next;
 } QNode;
 
-typedef struct QNode32_t
+typedef struct QIndexNode_t
 {
     uint32_t prev;
     uint32_t next;
-} QNode32;
+} QIndexNode;
 
 typedef struct Arena_t
 {
@@ -191,7 +216,7 @@ typedef struct Arena_t
     
     int32_t active_l0_offset;
     uint32_t previous_size;
-    Queue32   L0_lists[6]; // 1,2,4,8,16,32
+    IndexQueue   L0_lists[6]; // 1,2,4,8,16,32
     uint64_t  L1_lists[6]; // 1,2,4,8,16,32
 } Arena; // 128 bytes
 
@@ -256,18 +281,6 @@ typedef struct Partition_t
     uint64_t range_mask;
 } Partition;
 
-// lockless message queue
-typedef struct message_t
-{
-    _Atomic(uintptr_t) next;
-} message;
-
-typedef struct message_queue_t
-{
-    uintptr_t head;
-    _Atomic(uintptr_t) tail;
-} message_queue;
-
 typedef void (*free_func)(void *);
 typedef struct PartitionAllocator_t
 {
@@ -282,10 +295,10 @@ typedef struct PartitionAllocator_t
     Queue *pools;
 
     // collection of messages for other threads
-    message *thread_messages;
+    AtomicMessage *thread_messages;
     uint32_t message_count; // how many threaded message have we acccumuated for passing out
     // a queue of messages from other threads.
-    message_queue *thread_free_queue;
+    AtomicQueue *thread_free_queue;
     struct PartitionAllocator_t *prev;
     struct PartitionAllocator_t *next;
 
@@ -321,7 +334,7 @@ static inline bool qnode_is_connected(QNode* n)
     return (n->prev != 0) || (n->next != 0);
 }
 // list utilities
-static inline bool qnode32_is_connected(QNode32* n)
+static inline bool qnode_indsex_is_connected(QIndexNode* n)
 {
     return (n->prev != 0) || (n->next != 0);
 }
@@ -344,14 +357,14 @@ void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offse
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 
-static inline void list_enqueue32(void *queue, void *node, void*base)
+static inline void list_enqueueIndex(void *queue, void *node, void*base)
 {
-    Queue32 *tq = (Queue32 *)queue;
+    IndexQueue *tq = (IndexQueue *)queue;
     if (tq->head != 0xFFFFFFFF) {
-        QNode32 *tn = (QNode32 *)node;
+        QIndexNode *tn = (QIndexNode *)node;
         tn->next = tq->head;
         tn->prev = 0xFFFFFFFF;
-        QNode32 *temp = (QNode32 *)((uint8_t *)base + tq->head);
+        QIndexNode *temp = (QIndexNode *)((uint8_t *)base + tq->head);
         temp->prev = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
     } else {
         tq->tail = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);

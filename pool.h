@@ -2,6 +2,7 @@
 #ifndef POOL_H
 #define POOL_H
 
+#include "../cthread/cthread.h"
 #include "section.h"
 
 static const int32_t pool_sizes[] = {
@@ -66,6 +67,96 @@ static inline uint8_t size_to_pool(const size_t as)
     }
 }
 
+static inline void pool_post_free(Pool *p)
+{
+    Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+    section_free_idx(section, p->idx);
+}
+
+static inline void pool_post_reserved(Pool *p)
+{
+    Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+    section_reserve_idx(section, p->idx);
+}
+
+bool pool_thread_free_block(Pool* p, void* block)
+{
+    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
+    if((uintptr_t)block < base_addr)
+    {
+        return false;
+    }
+    if((uintptr_t)block >= (base_addr + p->num_available*p->block_size))
+    {
+        return false;
+    }
+    uint32_t idx = (uint32_t)(((size_t)((uint8_t *)block - base_addr) * p->block_recip) >> 32);
+    *(int32_t*)block = -1;
+    // swap tail and new memory
+    int32_t prev = atomic_exchange_explicit(&p->thread_free.tail, idx, memory_order_release);
+    if(prev == -1)
+    {
+        // there was no previous message
+        return true;
+    }
+    AtomicIndexMessage* msg_prev = (AtomicIndexMessage*)(void*)(base_addr + (prev * p->block_size));
+    // connect the new memory to the queue
+    atomic_store_explicit(&msg_prev->next, idx, memory_order_release); // prev.next = first
+    return true;
+}
+
+void pool_move_thread_free(Pool* p)
+{
+    int32_t back = (int32_t )atomic_load_explicit(&p->thread_free.tail, memory_order_relaxed);
+    int32_t curr = (int32_t )p->thread_free.head;
+    if(curr == back)
+    {
+        return;
+    }
+    if(curr == -1)
+    {
+        // only one item in the queue.
+        p->thread_free.head = back;
+        return;
+    }
+    int32_t tail = -1;
+    uint8_t* base_addr = (uint8_t *)p + sizeof(Pool);
+    int32_t count = 0;
+    // loop between start and end addres
+    while (curr != back) {
+        int32_t next_idx = *(int32_t*)(base_addr + (curr * p->block_size));
+        if (next_idx == -1)
+            break;
+        tail = curr;
+        curr = next_idx;
+        count++;
+    }
+    
+    *(int32_t*)(base_addr + (tail * p->block_size)) = p->free;
+    p->free = p->thread_free.head;
+    p->thread_free.head = back;
+    p->num_used -= count;
+}
+
+void pool_collect_thread_free(Pool* p)
+{
+    if(p->num_used > 0)
+    {
+        pool_move_thread_free(p);
+        if(p->num_used == 1)
+        {
+            // the thread free collection always leaves one behind
+            p->num_used = 0;
+            pool_post_free(p);
+            // the last piece was returned so make the first item the start of the free
+            p->free = 0;
+            *(int32_t*)((uintptr_t)p + sizeof(Pool)) = -1;
+            p->tail = -1;
+            p->thread_free = (AtomicIndexQueue){-1, -1};
+            p->num_committed = 1;
+        }
+    }
+}
 static inline void *pool_extend(Pool *p)
 {
     p->num_used++;
@@ -79,17 +170,7 @@ static inline bool pool_attach_tail(const Pool* p) { return p->free == p->tail;}
 static inline bool pool_is_empty(const Pool *p) { return p->num_used >= p->num_available; }
 static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
-static inline void pool_post_free(Pool *p)
-{
-    Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-    section_free_idx(section, p->idx);
-}
 
-static inline void pool_post_reserved(Pool *p)
-{
-    Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-    section_reserve_idx(section, p->idx);
-}
 
 static inline bool pool_free_block(Pool *p, void *block)
 {
@@ -148,6 +229,13 @@ static inline void *pool_aquire_block(Pool *p)
         if(p->tail != -1)
         {
             p->free = p->tail;
+        }
+        else
+        {
+            pool_move_thread_free(p);
+        }
+        if(p->free != -1)
+        {
             return pool_get_free_block(p);
         }
     }
@@ -172,8 +260,9 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->prev = NULL;
     p->free = 0;
     p->tail = -1;
-    
+    p->thread_free = (AtomicIndexQueue){-1, -1};
     *(int32_t*)((uint8_t *)p + sizeof(Pool)) = -1;
 }
+
 
 #endif

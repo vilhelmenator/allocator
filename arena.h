@@ -271,8 +271,8 @@ static inline void add_to_size_list_l0(Arena* a, Arena_L0* l0)
     }
     if(idx != -1)
     {
-        Queue32* q = &a->L0_lists[idx];
-        list_enqueue32(q, l0, al2);
+        IndexQueue* q = &a->L0_lists[idx];
+        list_enqueueIndex(q, l0, al2);
     }
     l0->L0_list_index = idx;
 }

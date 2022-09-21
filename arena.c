@@ -193,7 +193,7 @@ Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
     h->previous_level = -1;
     for(int i = 0; i < 6; i++)
     {
-        h->L0_lists[i] = (Queue32){-1, -1};
+        h->L0_lists[i] = (IndexQueue){-1, -1};
         h->L1_lists[i] = 0;
     }
     // high allocations
