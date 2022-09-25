@@ -172,18 +172,8 @@ static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
 
 
-static inline bool pool_free_block(Pool *p, void *block)
+static inline void pool_free_block(Pool *p, void *block)
 {
-    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
-    if((uintptr_t)block < base_addr)
-    {
-        return false;
-    }
-    if((uintptr_t)block >= (base_addr + p->num_available*p->block_size))
-    {
-        return false;
-    }
-    
     if (--p->num_used == 0) {
         pool_post_free(p);
         // the last piece was returned so make the first item the start of the free
@@ -191,13 +181,12 @@ static inline bool pool_free_block(Pool *p, void *block)
         *(int32_t*)((uintptr_t)p + sizeof(Pool)) = -1;
         p->tail = -1;
         p->num_committed = 1;
-        return true;
+        return;
     }
-    
+    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
     uint32_t idx = (uint32_t)(((size_t)((uint8_t *)block - base_addr) * p->block_recip) >> 32);
     *(uint32_t *)block = p->tail;
     p->tail = idx;
-    return true;
 }
 
 static inline void *pool_get_free_block(Pool *p)
@@ -217,7 +206,6 @@ static inline void *pool_get_free_block(Pool *p)
 
 static inline void *pool_aquire_block(Pool *p)
 {
-    
     if (p->free != -1) {
        return pool_get_free_block(p);
     }
@@ -245,7 +233,7 @@ static inline void *pool_aquire_block(Pool *p)
 static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize, size_t ps)
 {
     void *blocks = (uint8_t *)p + sizeof(Pool);
-    const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
+    const size_t block_memory = psize - sizeof(Pool);
     const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
     p->idx = pidx;

@@ -394,24 +394,60 @@ void free_extended_part(size_t pid, void *p)
         free_memory((void *)header, size);
     }
 }
-
-static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
+static inline void _allocator_free_ex(Allocator *a, void *p)
 {
-    if(a->cache.header != 0)
-    {
-        if(pool_free_block((Pool*)a->cache.header, p))
-        {
-            return;
-        }
-        allocator_release_cache(a);
-    }
-    
-    
     int8_t pid = partition_from_addr((uintptr_t)p);
     if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
         allocator_free_from_container(a, p, area_size_from_partition_id(pid));
     } else {
         free_extended_part(pid, p);
+    }
+}
+
+static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
+{
+    // cache free.
+    //  what range of memory does it accept.
+    //  how many memory blocks does it have left.
+    // cached item.
+    //  - allocation bounds. min/max.
+    //  - remaining number of items.
+    //  - if ptr is at end or start.
+    //      - decrese bounds.
+    //      - contiguous start --- [sparse center ] --- contiguous end.
+    //      - free                                      tail
+    //      - 
+    // ptr in a deferred list.
+    // min max bounds on deferred list.
+    // counter for deferred entries.
+    // if bound is broken
+    //      insert deferred list to owner. where it gets eaten, one item at a time.
+    // else if num reaches zero.
+    //      set pool as full.
+    
+    if(a->cache.header == 0)
+    {
+        _allocator_free_ex(a, p);
+    }
+    else
+    {
+        if((uintptr_t)p < a->cache.header)
+        {
+            allocator_release_cache(a);
+            _allocator_free_ex(a, p);
+        }
+        else
+        {
+            if((uintptr_t)p >= (a->cache.header + a->cache.end))
+            {
+                allocator_release_cache(a);
+                _allocator_free_ex(a, p);
+            }
+            else
+            {
+                pool_free_block((Pool*)a->cache.header, p);
+            }
+        }
     }
 }
 

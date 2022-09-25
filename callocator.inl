@@ -92,6 +92,10 @@ typedef union Bitmask_u
     uint32_t _w32[2];
 } Bitmask;
 
+typedef struct Block_t
+{
+    struct Block_t* next;
+} Block;
 
 typedef struct Queue_t
 {
@@ -163,8 +167,8 @@ typedef struct Pool_t
     
     int32_t num_available;
 
-    int32_t free;
     int32_t tail;
+    int32_t free;
     
     AtomicIndexQueue thread_free;
     
@@ -323,9 +327,10 @@ typedef struct Allocator_t
     int32_t idx;
     uint32_t prev_size;
     PartitionAllocator *part_alloc;
+    Block* local_deferred;
+    cache_entry cache;
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
-    cache_entry cache;
 } Allocator;
 
 // list utilities
