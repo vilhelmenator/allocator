@@ -103,15 +103,17 @@ static inline void allocator_release_cached_pool(Allocator *a)
     Pool* p = (Pool*)a->cache.header;
     p->num_used -= a->cache.rem_blocks;
     p->num_committed -= a->cache.rem_blocks;
+    
     if (!pool_is_empty(p)) {
         Queue *queue = &a->part_alloc->pools[p->block_idx];
         list_enqueue(queue, p);
+        if(pool_is_full(p))
+        {
+            pool_post_free(p);
+        }
     }
     //
-    if(pool_is_full(p))
-    {
-        pool_post_free(p);
-    }
+    
     a->cache.header = 0;
 }
 
@@ -506,7 +508,7 @@ void *allocator_malloc(Allocator *a, size_t s)
     const size_t as = ALIGN(s);
     // if we have some memory waiting in our thread free queue.
     // lets make it available.
-    allocator_flush_thread_free_queue(a);
+    //allocator_flush_thread_free_queue(a);
     // attempt to get the memory requested
     ptr = allocator_try_malloc(a, as);
     if(ptr == NULL)
