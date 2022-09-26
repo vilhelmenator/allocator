@@ -167,10 +167,9 @@ typedef struct Pool_t
     
     int32_t num_available;
 
-    int32_t tail;
-    int32_t free;
+    int32_t free;   // curated indexed list
     
-    AtomicIndexQueue thread_free;
+    AtomicIndexQueue thread_free;   // thread free queue.
     
     struct Pool_t *prev;
     struct Pool_t *next;
@@ -327,7 +326,6 @@ typedef struct Allocator_t
     int32_t idx;
     uint32_t prev_size;
     PartitionAllocator *part_alloc;
-    Block* local_deferred;
     cache_entry cache;
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;

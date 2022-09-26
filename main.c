@@ -66,7 +66,7 @@
 
 //#include "include/mimalloc-override.h"  // redefines malloc etc.
 const uint64_t NUMBER_OF_ITEMS = 800000L;
-const uint64_t NUMBER_OF_ITERATIONS = 100UL;
+const uint64_t NUMBER_OF_ITERATIONS = 10UL;
 const uint64_t OBJECT_SIZE = (1 << 3UL);
 
 const uint64_t sz_kb = 1024;
@@ -1067,7 +1067,7 @@ int main()
     //   cfree(m);
     
     int test_local = 1;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     //test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS*10, test_local);

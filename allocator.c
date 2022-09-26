@@ -103,7 +103,6 @@ static inline void allocator_release_cached_pool(Allocator *a)
     Pool* p = (Pool*)a->cache.header;
     p->num_used -= a->cache.rem_blocks;
     p->num_committed -= a->cache.rem_blocks;
-    
     if (!pool_is_empty(p)) {
         Queue *queue = &a->part_alloc->pools[p->block_idx];
         list_enqueue(queue, p);
