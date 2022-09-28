@@ -5,6 +5,7 @@
 #include "arena.h"
 #include "callocator.inl"
 #include <stdlib.h>
+
 //#include "mimalloc.h"
 void* mi_malloc(size_t s)
 {
@@ -14,6 +15,7 @@ void mi_free(void* p)
 {
     
 }
+
 //#include "cthread.h"
 //#include <iostream>
 
@@ -1068,7 +1070,7 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-    run_tests();
+    //run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);
