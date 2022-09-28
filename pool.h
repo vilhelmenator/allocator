@@ -326,9 +326,9 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->block_recip = pool_recips[p->block_idx];
     p->num_available = (int32_t)((MIN(remaining_size, block_memory) * p->block_recip) >> 32);
     p->num_committed = 1;
-    p->free_fn = &pool_free_block_c;
-    p->alloc_fn = &pool_aquire_block_c;
-    p->type = PT_COUNTER;
+    p->free_fn = &pool_free_block;
+    p->alloc_fn = &pool_aquire_block;
+    p->type = PT_INDEXED;
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;

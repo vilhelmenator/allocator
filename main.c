@@ -509,6 +509,13 @@ bool test_areas(void)
         state = false;
         goto end;
     }
+    else
+    {
+        if(nll != NULL)
+        {
+            cfree(nll);
+        }
+    }
     variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
 end:
     for (uint32_t i = 0; i < num_alloc; i++) {
@@ -660,7 +667,10 @@ void run_tests(void)
     TEST(Allocator, fillAnArea, { EXPECT(fillAnArea()); });
     TEST(Allocator, fillAPage, { EXPECT(fillAPage()); });
     END_TEST(Allocator, {});
-    callocator_release();
+    if(!callocator_release())
+    {
+        printf("leak at end of test\n");
+    }
 }
 
 bool testAreaFail(void)
@@ -1014,65 +1024,19 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     cfree_arena(mem);
 }
 
+
 int main()
 {
-    /*
-    for(int i = 0; i < (1 << 22); i++)
-    {
-        int32_t lz;
-        int32_t ss = (int32_t)size_to_pool_size(i, &lz);
-        int32_t sp = (int32_t)size_to_pool(i);
-        if(pool_sizes[sp] != ss )
-        {
-            int32_t a = size_to_pool_size(i, &lz);
-            int32_t b = size_to_pool(i);
-        }
-    }
-    */
-    /*
-    int c1 = (64 - 16) * 1;
-    int c2 = (64 - 4) * 63;
-    int c3 = (64 - 2) * 63*64;
-    
-    int l0_count =  c1 + c2 + c3;
-    int l1_count = 63 * 64;
-    int l2_count = 63;
-    printf("Arena :%lu\n", sizeof(Arena));
-    printf("Arena L0 :%lu\n", sizeof(Arena_L0));
-    printf("Arena L1 :%lu\n", sizeof(Arena_L1));
-    printf("Arena L2 :%lu\n", sizeof(Arena_L2));
-    printf("Partition :%lu\n", sizeof(Partition));
-    printf("Partition Allocator :%lu\n", sizeof(PartitionAllocator));
-    //test_new_heap(22, 5, 0, 0, 11);
-    //test_new_heap(63, 1024*64);
-    //test_new_heap(63, 1024);
-    //test_new_heap(55, 16);
-    
-    test_new_heap(22, 48, 0, 0, 2);
-    test_new_heap(22, 48, 63, 63, 1);
-    test_new_heap(22, 48, 63, 63, 1);
-    test_new_heap(22, l0_count, 0, 0, 1);
-    test_new_heap(22, 0, l1_count, 0, 1);
-    test_new_heap(22, 0, 0, l2_count, 1);
-    */
-    //minor_test();
-    // intermittently allocate a block
-    //
-    
-    // size lists for the smallest and medium
-    //  - sort by remaining size per block.
-    //  - 2, 4, 8, 16, 32
-    
-    //   thrd_t trd;
-    //   thrd_create(&trd, &test, NULL);
-    //   blach();
+    // test_new_heap();
+    //  thrd_t trd;
+    //  thrd_create(&trd, &test, NULL);
+    //  blach();
     run_tests();
-    //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
-    //   cfree(m);
-    //   m = cmalloc_os(123);
-    //   cfree(m);
-    
-    //printf("%d\n",  sizeof(Pool));
+    //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
+    //  cfree(m);
+    //  m = cmalloc_os(123);
+    //  cfree(m);
+
     int test_local = 1;
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
