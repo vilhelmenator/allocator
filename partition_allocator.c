@@ -278,6 +278,7 @@ Area *partition_allocator_get_free_area_from_queue(PartitionAllocator*pa, Partit
                 Area *start = area_list_get_area(pa, current_queue, area_idx);
                 if (!area_is_full(start)) {
                     new_area = start;
+                    area_init(new_area, pa->idx, at);
                     break;
                 }
                 area_idx = area_list_get_next_area_idx(current_queue, area_idx + 1);
