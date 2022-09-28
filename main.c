@@ -495,7 +495,6 @@ bool test_areas(void)
         goto end;
     }
     int32_t pid = partition_from_addr((uintptr_t)new_addr);
-    int32_t paidx = partition_allocator_from_addr((uintptr_t)new_addr);
     cfree((void *)new_addr);
     variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
     variables[num_alloc - 3] = (uint64_t *)cmalloc(allocation_size);
@@ -503,12 +502,19 @@ bool test_areas(void)
     variables[num_alloc - 5] = (uint64_t *)cmalloc(allocation_size);
     cfree(variables[num_alloc - 2]);
     nll = cmalloc(256 * sz_mb);
-    if (partition_from_addr((uintptr_t)nll) != pid || partition_allocator_from_addr((uintptr_t)nll) != paidx) {
+    if (partition_from_addr((uintptr_t)nll) != pid) {
         cfree(nll);
         cfree(variables[num_alloc - 1]);
         num_alloc -= 2;
         state = false;
         goto end;
+    }
+    else
+    {
+        if(nll != NULL)
+        {
+            cfree(nll);
+        }
     }
     variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
 end:
@@ -661,7 +667,10 @@ void run_tests(void)
     TEST(Allocator, fillAnArea, { EXPECT(fillAnArea()); });
     TEST(Allocator, fillAPage, { EXPECT(fillAPage()); });
     END_TEST(Allocator, {});
-    callocator_release();
+    if(!callocator_release())
+    {
+        printf("leak at end of test\n");
+    }
 }
 
 bool testAreaFail(void)

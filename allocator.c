@@ -72,19 +72,24 @@ Allocator *allocator_aquire(size_t idx)
     return allocator_list[idx];
 }
 
-void allocator_set_cached_pool(Allocator *a, Pool *p)
+void allocator_set_cached_pool(Allocator *a, Pool *p, bool alloc)
 {
     a->cache.header = (uintptr_t)p;
     a->cache.end = sizeof(Pool) + (p->num_available * p->block_size);
-    a->cache.rem_blocks = p->num_available - p->num_committed;
     a->cache.block_size = p->block_size;
     a->cache.cache_type = CACHE_POOL;
-    if(a->cache.rem_blocks)
+    a->cache.rem_blocks = 0;
+    if(alloc)
     {
-        // reserve all memory from the pool
-        p->num_used = p->num_available;
-        p->num_committed = p->num_available;
+        a->cache.rem_blocks = p->num_available - p->num_committed;
+        if(a->cache.rem_blocks)
+        {
+            // reserve all memory from the pool
+            p->num_used = p->num_available;
+            p->num_committed = p->num_available;
+        }
     }
+    
 }
 
 void allocator_set_cached_arena(Allocator *a, Arena *p)
@@ -138,10 +143,19 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
         if(a->cache.cache_type == CACHE_POOL)
         {
             Pool* p = (Pool*)a->cache.header;
-            if(!pool_is_empty(p))
+            if(pool_is_full(p))
             {
+                allocator_set_cached_pool(a, p, true);
                 return pool_aquire_block(p);
             }
+            else
+            {
+                if(!pool_is_empty(p))
+                {
+                    return pool_aquire_block(p);
+                }
+            }
+            
             allocator_release_cached_pool(a);
         }
     }
@@ -188,7 +202,7 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
     if (section->type != ST_HEAP_4M) {
         Pool *pool = (Pool *)section_find_collection(section, p);
         pool_free_block(pool, p);
-        allocator_set_cached_pool(a, pool);
+        allocator_set_cached_pool(a, pool, false);
     } else {
         Heap *heap = (Heap *)((uint8_t *)section + sizeof(Section));
         uint32_t heapIdx = area_get_type((Area *)section);
@@ -375,7 +389,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
         }
         res = pool_get_free_block(start);
     }
-    allocator_set_cached_pool(a, start);
+    allocator_set_cached_pool(a, start, true);
     return res;
 }
 
@@ -405,25 +419,6 @@ static inline void _allocator_free_ex(Allocator *a, void *p)
 
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
-    // cache free.
-    //  what range of memory does it accept.
-    //  how many memory blocks does it have left.
-    // cached item.
-    //  - allocation bounds. min/max.
-    //  - remaining number of items.
-    //  - if ptr is at end or start.
-    //      - decrese bounds.
-    //      - contiguous start --- [sparse center ] --- contiguous end.
-    //      - free                                      tail
-    //      - 
-    // ptr in a deferred list.
-    // min max bounds on deferred list.
-    // counter for deferred entries.
-    // if bound is broken
-    //      insert deferred list to owner. where it gets eaten, one item at a time.
-    // else if num reaches zero.
-    //      set pool as full.
-    
     if(a->cache.header == 0)
     {
         _allocator_free_ex(a, p);
@@ -444,7 +439,15 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
             }
             else
             {
-                pool_free_block((Pool*)a->cache.header, p);
+                Pool* pool = (Pool*)a->cache.header;
+                
+                if(a->cache.rem_blocks != 0)
+                {
+                    pool->num_used -= a->cache.rem_blocks;
+                    pool->num_committed -= a->cache.rem_blocks;
+                    a->cache.rem_blocks = 0;
+                }
+                pool_free_block(pool, p);
             }
         }
     }
@@ -556,7 +559,7 @@ void *allocator_malloc(Allocator *a, size_t s)
 void *allocator_malloc_heap(Allocator *a, size_t s)
 {
     const size_t size = ALIGN4(s);
-    a->cache.header = 0;
+    allocator_release_cache(a);
     allocator_flush_thread_free_queue(a);
     if (s <= AREA_SIZE_LARGE) {
         // allocate form the large page
