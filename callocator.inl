@@ -186,7 +186,6 @@ typedef struct Pool_t
     
     int32_t num_available;
 
-    int32_t tail;
     int32_t free;   // curated indexed list
     
     AtomicIndexQueue thread_free;   // thread free queue.

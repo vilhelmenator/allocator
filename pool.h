@@ -153,7 +153,6 @@ void pool_collect_thread_free(Pool* p)
             *(int32_t*)((uintptr_t)p + sizeof(Pool)) = -1;
             p->thread_free = (AtomicIndexQueue){-1, -1};
             p->num_committed = 1;
-            p->tail = -1;
         }
     }
 }
@@ -177,14 +176,13 @@ static inline void pool_free_block(Pool *p, void *block)
         p->free = 0;
         *(int32_t*)((uintptr_t)p + sizeof(Pool)) = -1;
         p->num_committed = 1;
-        p->tail = -1;
         return;
     }
     
     uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
     uint32_t idx = (uint32_t)(((size_t)((uint8_t *)block - base_addr) * p->block_recip) >> 32);
-    *(uint32_t *)block = p->tail;
-    p->tail = idx;
+    *(uint32_t *)block = p->free;
+    p->free = idx;
 }
 
 static inline void *pool_get_free_block(Pool *p)
@@ -212,14 +210,7 @@ static inline void *pool_aquire_block(Pool *p)
     }
     else
     {
-        if(p->tail != -1)
-        {
-            p->free = p->tail;
-        }
-        else
-        {
-            pool_move_thread_free(p);
-        }
+        pool_move_thread_free(p);
         if(p->free != -1)
         {
             return pool_get_free_block(p);
@@ -245,7 +236,6 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->next = NULL;
     p->prev = NULL;
     p->free = 0;
-    p->tail = -1;
     p->thread_free = (AtomicIndexQueue){-1, -1};
     *(int32_t*)((uint8_t *)p + sizeof(Pool)) = -1;
 }
