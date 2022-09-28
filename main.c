@@ -495,6 +495,7 @@ bool test_areas(void)
         goto end;
     }
     int32_t pid = partition_from_addr((uintptr_t)new_addr);
+    int32_t paidx = partition_allocator_from_addr((uintptr_t)new_addr);
     cfree((void *)new_addr);
     variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
     variables[num_alloc - 3] = (uint64_t *)cmalloc(allocation_size);
@@ -502,7 +503,7 @@ bool test_areas(void)
     variables[num_alloc - 5] = (uint64_t *)cmalloc(allocation_size);
     cfree(variables[num_alloc - 2]);
     nll = cmalloc(256 * sz_mb);
-    if (partition_from_addr((uintptr_t)nll) != pid) {
+    if (partition_from_addr((uintptr_t)nll) != pid || partition_allocator_from_addr((uintptr_t)nll) != paidx) {
         cfree(nll);
         cfree(variables[num_alloc - 1]);
         num_alloc -= 2;
