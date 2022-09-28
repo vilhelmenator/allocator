@@ -251,7 +251,7 @@ bool partition_allocator_release_single_area_from_queue(PartitionAllocator *pa, 
 bool partition_allocator_release_local_areas(PartitionAllocator *pa)
 {
     bool was_released = false;
-    for (size_t i = 0; i < 4; i++) {
+    for (size_t i = 0; i < 7; i++) {
         if (pa->area[i].area_mask != 0) {
             was_released |= !partition_allocator_release_areas_from_queue(pa, &pa->area[i]);
         }
