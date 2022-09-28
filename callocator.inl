@@ -61,15 +61,6 @@ typedef enum AreaType_t {
     AT_VARIABLE = 7   //  not a fixed size area. found in extended partitions.
 } AreaType;
 
-static const uintptr_t partition_type_to_exponent[] = {
-    28, // 256 MB
-    29, // 512 MB
-    30, // 1024 MB
-    31, // 2048 MB
-    32, // 4096 MB
-    33, // 8192 MB
-    34, // 16384 MB
-};
 
 static const uintptr_t area_type_to_size[] = {
     AREA_SIZE_SMALL>>3, AREA_SIZE_SMALL>>2, AREA_SIZE_SMALL>>1,
@@ -87,16 +78,6 @@ static inline int8_t partition_from_addr(uintptr_t p)
     } else {
         return lz;
     }
-}
-
-static inline int8_t partition_allocator_from_addr(uintptr_t p)
-{
-    int8_t at = partition_from_addr(p);
-    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
-    size_t start_addr = base_size + offset;
-    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)start_addr;
-    return (uint32_t)(((size_t)diff) >> partition_type_to_exponent[at]);
 }
 
 static inline uint64_t area_size_from_addr(uintptr_t p) { return area_size_from_partition_id(partition_from_addr(p)); }
@@ -206,7 +187,8 @@ typedef struct Pool_t
     
     int32_t num_committed;
     int32_t free;
-
+    
+    //
     AtomicIndexQueue thread_free;   // thread free queue.
 } Pool; // 64 bytes
 
