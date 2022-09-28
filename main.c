@@ -5,7 +5,7 @@
 #include "arena.h"
 #include "callocator.inl"
 #include <stdlib.h>
-//#include "mimalloc.h"
+#include "mimalloc.h"
 //#include "cthread.h"
 //#include <iostream>
 
@@ -837,12 +837,10 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int
         MEASURE_TIME(Allocator, mi_malloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
                 for (uint64_t i = 0; i < num_items; i++)
-                    //variables[i] = (char *)mi_malloc(alloc_size);
+                    variables[i] = (char *)mi_malloc(alloc_size);
 
                 for (uint64_t i = 0; i < num_items; i++)
-                {
-                    //mi_free(variables[i]);
-                }
+                    mi_free(variables[i]);
             }
         });
     }
@@ -876,12 +874,10 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
                 for (uint64_t i = 0; i < num_items; i++)
                 {
                     alloc_size += 8;
-                    //variables[i] = (char *)mi_malloc(alloc_size%1024);
+                    variables[i] = (char *)mi_malloc(alloc_size%1024);
                 }
                 for (uint64_t i = 0; i < num_items; i++)
-                {
-                    //mi_free(variables[i]);
-                }
+                    mi_free(variables[i]);
             }
         });
     }
@@ -917,12 +913,10 @@ void test_size_iter_sparse_reverse(size_t num_items, size_t num_loops,int t)
                 for (uint64_t i = 0; i < num_items; i++)
                 {
                     alloc_size += 8;
-                    //variables[i] = (char *)mi_malloc(alloc_size%1024);
+                    variables[i] = (char *)mi_malloc(alloc_size%1024);
                 }
                 for (uint64_t i = 0; i < num_items; i++)
-                {
-                    //mi_free(variables[i]);
-                }
+                    mi_free(variables[i]);
             }
         });
     }
@@ -1066,13 +1060,12 @@ int main()
     //   thrd_t trd;
     //   thrd_create(&trd, &test, NULL);
     //   blach();
-    run_tests();
+    //run_tests();
     //   void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //   cfree(m);
     //   m = cmalloc_os(123);
     //   cfree(m);
     
-    //printf("%d\n",  sizeof(Pool));
     int test_local = 1;
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
