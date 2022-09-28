@@ -162,14 +162,83 @@ static inline void *pool_extend(Pool *p)
     return ((uint8_t *)p + sizeof(Pool) + (p->num_committed++ * p->block_size));
 }
 
-static inline bool pool_is_maybe_empty(const Pool* p) { return p->free == -1;}
 static inline bool pool_is_empty(const Pool *p) { return p->num_used >= p->num_available; }
 static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
+static inline int32_t pool_get_remaining_contiguous_range(const Pool *p) {
+    switch(p->type)
+    {
+        case PT_INDEXED:
+        {
+            return p->num_available - p->num_committed;
+        }
+        case PT_MASKED:
+        {
+            PoolM* pm = (PoolM*)p;
+            return __builtin_ctzll(1|pm->allocation_mask);
+        }
+        default:
+        {
+            PoolC*pc = (PoolC*)p;
+            return pc->num_available - pc->num_used;
+        }
+    };
+}
 
+static inline void pool_alloc_remaining_contiguous_range(Pool *p) {
+    switch(p->type)
+    {
+        case PT_INDEXED:
+        {
+            p->num_used = p->num_available;
+            p->num_committed = p->num_available;
+            break;
+        }
+        case PT_MASKED:
+        {
+            PoolM* pm = (PoolM*)p;
+            pm->allocation_mask = UINT64_MAX;
+            break;
+        }
+        default:
+        {
+            PoolC*pc = (PoolC*)p;
+            p->num_used = p->num_available;
+            pc->allocation_counter = p->num_available;
+            break;
+        }
+    };
+}
 
-static inline void pool_free_block(Pool *p, void *block)
+static inline void pool_free_contiguous_range(Pool *p, int32_t range) {
+    switch(p->type)
+    {
+        case PT_INDEXED:
+        {
+            p->num_used -= range;
+            p->num_committed -= range;
+            break;
+        }
+        case PT_MASKED:
+        {
+            PoolM* pm = (PoolM*)p;
+            pm->allocation_mask &= ~((1ULL << (range + 1)) - 1);
+            break;
+        }
+        default:
+        {
+            PoolC*pc = (PoolC*)p;
+            size_t delta = pc->num_available - pc->allocation_counter;
+            pc->allocation_counter -= range;
+            pc->num_used -= (range + delta);
+            break;
+        }
+    };
+}
+
+static inline void pool_free_block(void *_p, void *block)
 {
+    Pool* p = (Pool*)_p;
     if (--p->num_used == 0) {
         pool_post_free(p);
         // the last piece was returned so make the first item the start of the free
@@ -200,8 +269,9 @@ static inline void *pool_get_free_block(Pool *p)
     return (void*)(base_addr + (cur_idx * p->block_size));
 }
 
-static inline void *pool_aquire_block(Pool *p)
+static inline void *pool_aquire_block(void *_p)
 {
+    Pool* p = (Pool*)_p;
     if (p->free != -1) {
        return pool_get_free_block(p);
     }
@@ -219,6 +289,31 @@ static inline void *pool_aquire_block(Pool *p)
     return NULL;
 }
 
+static inline void *pool_aquire_block_c(void *_p)
+{
+    if(!pool_is_empty((Pool*)_p))
+    {
+        PoolC* p = (PoolC*)_p;
+        if (p->num_used++ == 0) {
+            pool_post_reserved((Pool*)_p);
+            return (uint8_t *)p + sizeof(PoolC);
+        }
+        
+        return ((uint8_t *)p + sizeof(PoolC) + (p->allocation_counter++ * p->block_size));
+    }
+    return NULL;
+}
+
+static inline void pool_free_block_c(void *_p, void* b)
+{
+    PoolC* p = (PoolC*)_p;
+    if(--p->allocation_counter == 0)
+    {
+        pool_post_free((Pool*)_p);
+        p->num_used = 0;
+        p->allocation_counter = 1;
+    }
+}
 static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize, size_t ps)
 {
     void *blocks = (uint8_t *)p + sizeof(Pool);
@@ -231,7 +326,9 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->block_recip = pool_recips[p->block_idx];
     p->num_available = (int32_t)((MIN(remaining_size, block_memory) * p->block_recip) >> 32);
     p->num_committed = 1;
-    
+    p->free_fn = &pool_free_block_c;
+    p->alloc_fn = &pool_aquire_block_c;
+    p->type = PT_COUNTER;
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;

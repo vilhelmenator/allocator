@@ -154,26 +154,91 @@ typedef struct Section_t
 
 } Section;
 
+typedef enum pool_type_t
+{
+    PT_INDEXED,
+    PT_MASKED,
+    PT_COUNTER,
+} pool_type;
+
+typedef void (*pool_free_func)(void *p, void*b);
+typedef void* (*pool_alloc_func)(void *p);
+
 typedef struct Pool_t
 {
-    int32_t idx;        // index in the parent section
-    uint32_t block_idx; // index into the pool queue. What size class do you belong to.
+    void *prev;
     
-    uint32_t block_size;
+    void *next;
+    
+    pool_free_func free_fn;
+    pool_alloc_func alloc_fn;
+    
+    // index in the parent section
+    int16_t idx;
+    int16_t type;
+    
+    // index into the pool queue. What size class do you belong to.
+    uint16_t block_idx;
+    uint16_t block_size;
     uint32_t block_recip;
     
-    int32_t num_used;
+    int16_t num_used;
+    int16_t num_available;
+    
     int32_t num_committed;
+    int32_t free;
     
-    int32_t num_available;
-
-    int32_t free;   // curated indexed list
-    
+    //
     AtomicIndexQueue thread_free;   // thread free queue.
+} Pool; // 64 bytes
+
+typedef struct PoolM_t
+{
+    void *prev;
+    void *next;
     
-    struct Pool_t *prev;
-    struct Pool_t *next;
-} Pool;
+    pool_free_func free_fn;
+    pool_alloc_func alloc_fn;
+    
+    // index in the parent section
+    int16_t idx;
+    int16_t type;
+    
+    // index into the pool queue. What size class do you belong to.
+    uint16_t block_idx;
+    uint16_t block_size;
+    uint32_t block_recip;
+    //
+    int16_t num_used;
+    int16_t num_available;
+    
+    uint64_t allocation_mask;
+    _Atomic(uint64_t) thread_free_mask;
+} PoolM;
+
+typedef struct PoolC_t
+{
+    void *prev;
+    void *next;
+    
+    pool_free_func free_fn;
+    pool_alloc_func alloc_fn;
+    
+    // index in the parent section
+    int16_t idx;
+    int16_t type;
+    
+    // index into the pool queue. What size class do you belong to.
+    uint16_t block_idx;
+    uint16_t block_size;
+    uint32_t block_recip;
+    //
+    int16_t num_used;
+    int16_t num_available;
+    
+    uint64_t allocation_counter;
+    _Atomic(uint64_t) thread_free_counter;
+} PoolC;
 
 typedef struct Heap_t
 {

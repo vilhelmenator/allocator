@@ -76,14 +76,13 @@ void allocator_set_cached_pool(Allocator *a, Pool *p)
 {
     a->cache.header = (uintptr_t)p;
     a->cache.end = sizeof(Pool) + (p->num_available * p->block_size);
-    a->cache.rem_blocks = p->num_available - p->num_committed;
+    a->cache.rem_blocks = pool_get_remaining_contiguous_range(p);
     a->cache.block_size = p->block_size;
     a->cache.cache_type = CACHE_POOL;
     if(a->cache.rem_blocks)
     {
         // reserve all memory from the pool
-        p->num_used = p->num_available;
-        p->num_committed = p->num_available;
+        pool_alloc_remaining_contiguous_range(p);
     }
 }
 
@@ -101,8 +100,10 @@ void allocator_set_cached_arena(Allocator *a, Arena *p)
 static inline void allocator_release_cached_pool(Allocator *a)
 {
     Pool* p = (Pool*)a->cache.header;
-    p->num_used -= a->cache.rem_blocks;
-    p->num_committed -= a->cache.rem_blocks;
+    if( a->cache.rem_blocks)
+    {
+        pool_free_contiguous_range(p, a->cache.rem_blocks);
+    }
     if (!pool_is_empty(p)) {
         Queue *queue = &a->part_alloc->pools[p->block_idx];
         list_enqueue(queue, p);
@@ -140,7 +141,7 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
             Pool* p = (Pool*)a->cache.header;
             if(!pool_is_empty(p))
             {
-                return pool_aquire_block(p);
+                return p->alloc_fn(p);
             }
             allocator_release_cached_pool(a);
         }
@@ -187,7 +188,7 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
 {
     if (section->type != ST_HEAP_4M) {
         Pool *pool = (Pool *)section_find_collection(section, p);
-        pool_free_block(pool, p);
+        pool->free_fn(pool, p);
         allocator_set_cached_pool(a, pool);
     } else {
         Heap *heap = (Heap *)((uint8_t *)section + sizeof(Section));
@@ -365,7 +366,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     if (start != NULL) {
         // there are no empty pools in the queue.
         list_remove(queue, start);
-        res = pool_aquire_block(start);
+        res = start->alloc_fn(start);
     }
     else
     {
@@ -373,7 +374,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
         if (start == NULL) {
             return NULL;
         }
-        res = pool_get_free_block(start);
+        res = start->alloc_fn(start);
     }
     allocator_set_cached_pool(a, start);
     return res;
@@ -444,7 +445,8 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
             }
             else
             {
-                pool_free_block((Pool*)a->cache.header, p);
+                Pool* pool = (Pool*)a->cache.header;
+                pool->free_fn(pool, p);
             }
         }
     }

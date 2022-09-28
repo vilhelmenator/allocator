@@ -79,8 +79,9 @@ void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
 
 int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *area_queue, uint64_t size, uint64_t alignment)
 {
+    // a 256meg 512m 1g 2g 
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, area_queue);
-    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
+    size_t base_size = (BASE_AREA_SIZE * 64) << (uint64_t)at;
     size_t offset = ((size_t)1 << 40) << (uint64_t)at;
     size_t start_addr = (pa->idx)*base_size + offset;
     size_t end_addr = start_addr + base_size;
@@ -161,7 +162,9 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     if ((idx == previous_area) || (list->area_mask == 0)) {
         ((int8_t*)&pa->previous_partitions)[at] = -1;
     }
-    free_memory(a, area_get_size(a)*range);
+    
+    size_t s = area_get_size(a);
+    free_memory(a, s*range);
 }
 
 static inline Partition *partition_allocator_get_area_list(PartitionAllocator *pa, Area *area)
