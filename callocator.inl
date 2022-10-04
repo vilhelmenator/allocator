@@ -33,8 +33,9 @@ typedef SSIZE_T ssize_t;
 #define MAX_ARES 64
 #define MAX_THREADS 1024
 
-#define MAX(x, y) ((x) > (y) ? (x) : (y))
-#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+#define MAX(x, y) (x ^ ((x ^ y) & -(x < y)))
+#define MIN(x, y) (y ^ ((x ^ y) & -(x < y)))
 #define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
 
 #define CACHE_LINE 64
@@ -80,6 +81,7 @@ static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_ty
 
 static inline int8_t partition_from_addr(uintptr_t p)
 {
+    // 4, 8, 16, 32, 64, 128, 256
     static const uint8_t partition_count = 9;
     const int lz = 23 - __builtin_clz(p >> 32);
     if (lz < 0 || lz > partition_count) {
@@ -173,8 +175,28 @@ typedef struct Section_t
 
 } Section;
 
+typedef struct DeferredFree_t
+{
+    Block* deferred_free;
+    void* thread_free_initial_dummy;
+    AtomicQueue thread_free;
+} DeferredFree;
+
+static inline void init_deferred_free(void*d)
+{
+    DeferredFree* f = (DeferredFree*)d;
+    f->deferred_free = NULL;
+    f->thread_free_initial_dummy = NULL;
+    f->thread_free = (AtomicQueue){(uintptr_t)&f->thread_free_initial_dummy,(uintptr_t)&f->thread_free_initial_dummy};
+}
+
 typedef struct Pool_t
 {
+    union
+    {
+        DeferredFree base;
+    } base;
+    
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
@@ -187,8 +209,6 @@ typedef struct Pool_t
     int32_t num_available;
 
     int32_t free;   // curated indexed list
-    
-    AtomicIndexQueue thread_free;   // thread free queue.
     
     struct Pool_t *prev;
     struct Pool_t *next;
@@ -325,12 +345,14 @@ typedef struct PartitionAllocator_t
     struct PartitionAllocator_t *next;
 
 } PartitionAllocator;
+
 typedef enum cache_type_t
 {
     CACHE_POOL,
     CACHE_POOL_CONTIGUOUS,
     CACHE_ARENA,
 } cache_type;
+
 typedef struct cache_entry_t
 {
     uintptr_t header;
@@ -345,7 +367,8 @@ typedef struct Allocator_t
     int32_t idx;
     uint32_t prev_size;
     PartitionAllocator *part_alloc;
-    cache_entry cache;
+    cache_entry cache; // allocation cache structures.
+    
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
 } Allocator;

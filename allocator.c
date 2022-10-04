@@ -134,6 +134,11 @@ static inline void allocator_release_cache(Allocator *a)
 
 static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
 {
+    if(a->prev_size != s)
+    {
+        allocator_release_cached_pool(a);
+        return NULL;
+    }
     if(a->cache.rem_blocks)
     {
         return (void*)(uintptr_t)(a->cache.header + a->cache.end) - (a->cache.rem_blocks-- * a->cache.block_size);
@@ -439,8 +444,8 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
             }
             else
             {
-                Pool* pool = (Pool*)a->cache.header;
                 
+                Pool* pool = (Pool*)a->cache.header;
                 if(a->cache.rem_blocks != 0)
                 {
                     pool->num_used -= a->cache.rem_blocks;
@@ -546,7 +551,7 @@ void *allocator_malloc(Allocator *a, size_t s)
     const size_t as = ALIGN(s);
     // if we have some memory waiting in our thread free queue.
     // lets make it available.
-    //allocator_flush_thread_free_queue(a);
+    allocator_flush_thread_free_queue(a);
     // attempt to get the memory requested
     ptr = allocator_try_malloc(a, as);
     if(ptr == NULL)

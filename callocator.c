@@ -25,7 +25,7 @@ static inline void decr_thread_count(void)
 
 
 static Allocator *main_instance = NULL;
-static const Allocator default_alloc = {-1, 0, NULL,{0,0,0,0, 0}, NULL, {NULL, NULL}};
+static const Allocator default_alloc = {-1, 0, NULL, {0,0,0,0, 0}, NULL, {NULL, NULL}};
 static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
