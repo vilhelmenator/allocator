@@ -177,25 +177,25 @@ typedef struct Section_t
 
 typedef struct DeferredFree_t
 {
-    Block* deferred_free;
-    void* thread_free_initial_dummy;
+    Block* free;
+    void* _d;
     AtomicQueue thread_free;
 } DeferredFree;
 
-static inline void init_deferred_free(void*d)
+static inline void init_deferred_free(DeferredFree*f)
 {
-    DeferredFree* f = (DeferredFree*)d;
-    f->deferred_free = NULL;
-    f->thread_free_initial_dummy = NULL;
-    f->thread_free = (AtomicQueue){(uintptr_t)&f->thread_free_initial_dummy,(uintptr_t)&f->thread_free_initial_dummy};
+    f->free = NULL;
+    f->_d = NULL;
+    f->thread_free = (AtomicQueue){(uintptr_t)&f->_d,(uintptr_t)&f->_d};
 }
+
+
 
 typedef struct Pool_t
 {
-    union
-    {
-        DeferredFree base;
-    } base;
+    Block* deferred_free;
+    void* _d;
+    AtomicQueue thread_free;
     
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
@@ -208,7 +208,7 @@ typedef struct Pool_t
     
     int32_t num_available;
 
-    int32_t free;   // curated indexed list
+    Block* free;   
     
     struct Pool_t *prev;
     struct Pool_t *next;
@@ -353,21 +353,32 @@ typedef enum cache_type_t
     CACHE_ARENA,
 } cache_type;
 
-typedef struct cache_entry_t
+typedef struct alloc_cache_t
 {
     uintptr_t header;
     int32_t end;
     int32_t rem_blocks;
     int32_t block_size;
     cache_type cache_type;
-} cache_entry;
+} alloc_cache;
+
+typedef struct deferred_cache_t
+{
+    Queue items;
+    uintptr_t start;
+    uintptr_t end;
+    uint32_t owned;
+} deferred_cache;
 
 typedef struct Allocator_t
 {
     int32_t idx;
     uint32_t prev_size;
     PartitionAllocator *part_alloc;
-    cache_entry cache; // allocation cache structures.
+    
+    // per allocator lookup structures
+    alloc_cache c_cache;        // allocation cache structure.
+    deferred_cache c_deferred;  // release cache structure.
     
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
