@@ -67,22 +67,6 @@ static inline uint8_t size_to_pool(const size_t as)
     }
 }
 
-static inline void move_thread_free(DeferredFree* d)
-{
-    AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
-    AtomicMessage *curr = (AtomicMessage *)(uintptr_t)d->thread_free.head;
-    // loop between start and end addres
-    while (curr != back) {
-        AtomicMessage *next = (AtomicMessage *)atomic_load_explicit(&curr->next, memory_order_acquire);
-        if (next == NULL)
-            break;
-        ((Block*)curr)->next = d->free;
-        d->free = (Block*)curr;
-        curr = next;
-    }
-    d->thread_free.head = (uintptr_t)curr;
-}
-
 static inline void pool_move_deferred(Pool* p)
 {
     // for every item in the deferred list.
@@ -172,7 +156,7 @@ static inline void *pool_aquire_block(Pool *p)
         AtomicQueue *q = &p->thread_free;
         if (q->head != q->tail)
         {
-            move_thread_free((DeferredFree*)p);
+            deferred_move_thread_free((DeferredFree*)p);
         }
         if(p->deferred_free != NULL)
         {

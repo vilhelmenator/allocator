@@ -475,14 +475,6 @@ void allocator_thread_dequeue_all(Allocator *a, AtomicQueue *queue)
     queue->head = (uintptr_t)curr;
 }
 
-static inline void allocator_flush_thread_free_queue(Allocator *a)
-{
-    AtomicQueue *q = a->part_alloc->thread_free_queue;
-    if (q->head != q->tail) {
-        allocator_thread_dequeue_all(a, q);
-    }
-}
-
 static inline void *allocator_try_malloc(Allocator *a, size_t as)
 {
     if (as <= LARGE_OBJECT_SIZE) {
@@ -551,7 +543,6 @@ void *allocator_malloc(Allocator *a, size_t s)
     const size_t as = ALIGN(s);
     // if we have some memory waiting in our thread free queue.
     // lets make it available.
-    allocator_flush_thread_free_queue(a);
     // attempt to get the memory requested
     ptr = allocator_try_malloc(a, as);
     if(ptr == NULL)
@@ -565,7 +556,6 @@ void *allocator_malloc_heap(Allocator *a, size_t s)
 {
     const size_t size = ALIGN4(s);
     allocator_release_cache(a);
-    allocator_flush_thread_free_queue(a);
     if (s <= AREA_SIZE_LARGE) {
         // allocate form the large page
         return allocator_alloc_from_heap(a, size);

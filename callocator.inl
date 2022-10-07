@@ -189,7 +189,8 @@ static inline void init_deferred_free(DeferredFree*f)
     f->thread_free = (AtomicQueue){(uintptr_t)&f->_d,(uintptr_t)&f->_d};
 }
 
-
+void deferred_move_thread_free(DeferredFree* d);
+void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last);
 
 typedef struct Pool_t
 {
@@ -369,6 +370,31 @@ typedef struct deferred_cache_t
     uintptr_t end;
     uint32_t owned;
 } deferred_cache;
+
+
+static inline void deferred_cache_enqueue( deferred_cache*c, DeferredFree* dl)
+{
+    if(c->owned)
+    {
+        ((Block*)c->items.tail)->next = dl->free;
+        dl->free = c->items.head;
+    }
+    else
+    {
+        deferred_thread_enqueue(&dl->thread_free, c->items.head, c->items.tail);
+    }
+    c->items.head = NULL;
+    c->items.tail = NULL;
+}
+
+static inline void deferred_cache_add(deferred_cache*c, void* p)
+{
+    ((Block*)p)->next = NULL;
+    ((Block*)(c->items.tail))->next =  p;
+}
+
+void deferred_cache_init(deferred_cache*c, void*p);
+void deferred_cache_release(deferred_cache*c, void* p);
 
 typedef struct Allocator_t
 {
