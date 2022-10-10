@@ -110,14 +110,22 @@ static inline void allocator_release_cached_pool(Allocator *a)
     p->num_committed -= a->c_cache.rem_blocks;
     if (!pool_is_empty(p)) {
         Queue *queue = &a->part_alloc->pools[p->block_idx];
-        list_enqueue(queue, p);
+        if(!pool_is_connected(p) && queue->head != p)
+        {
+            list_enqueue(queue, p);
+        }
+        else
+        {
+            list_remove(queue, p);
+            list_enqueue(queue, p);
+        }
         if(pool_is_full(p))
         {
             pool_post_free(p);
         }
     }
     //
-    
+    a->c_cache.rem_blocks = 0;
     a->c_cache.header = 0;
 }
 
@@ -157,7 +165,15 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
             {
                 if(!pool_is_empty(p))
                 {
-                    return pool_aquire_block(p);
+                    if(p->num_committed < p->num_available)
+                    {
+                        allocator_set_cached_pool(a, p, true);
+                        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
+                    }
+                    else
+                    {
+                        return pool_aquire_block(p);
+                    }
                 }
             }
             
@@ -424,6 +440,30 @@ static inline void _allocator_free_ex(Allocator *a, void *p)
 
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
+    /*
+    if(a->c_deferred.end == 0)
+    {
+        deferred_cache_init(a, p);
+    }
+    else
+    {
+        //
+        // is address within the current deferred 64th.
+        if((uintptr_t)p < a->c_deferred.start || (uintptr_t)p >= (a->c_deferred.end))
+        {
+            deferred_cache_release(a, p);
+        }
+        else
+        {
+            
+            if(a->c_cache.rem_blocks != 0)
+            {
+                allocator_release_cached_pool(a);
+            }
+            deferred_cache_add(&a->c_deferred, p);
+        }
+    }
+    */
     if(a->c_cache.header == 0)
     {
         _allocator_free_ex(a, p);
@@ -541,6 +581,8 @@ void *allocator_malloc(Allocator *a, size_t s)
     a->prev_size = (uint32_t)s;
     
     const size_t as = ALIGN(s);
+    
+    deferred_cache_release(a, NULL);
     // if we have some memory waiting in our thread free queue.
     // lets make it available.
     // attempt to get the memory requested

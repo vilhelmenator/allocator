@@ -66,7 +66,10 @@ static inline uint8_t size_to_pool(const size_t as)
         return (row + ((as >> (28 - lz)) & 0x7)) + incr - 1;
     }
 }
-
+static inline bool pool_is_connected(Pool* p)
+{
+    return p->prev != NULL || p->next != NULL;
+}
 static inline void pool_move_deferred(Pool* p)
 {
     // for every item in the deferred list.
@@ -82,8 +85,13 @@ static inline void pool_move_deferred(Pool* p)
         count++;
         p->deferred_free = next;
     }
+    if(count != p->dcount)
+    {
+        int bb = 0;
+    }
     p->num_used -= count;
 }
+
 static inline void pool_post_free(Pool *p)
 {
     Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
@@ -103,7 +111,22 @@ static inline void *pool_extend(Pool *p)
 }
 
 static inline bool pool_is_maybe_empty(const Pool* p) { return p->free == NULL;}
-static inline bool pool_is_empty(const Pool *p) { return p->num_used >= p->num_available; }
+static inline bool pool_is_empty(const Pool *p) {
+    if(p->num_used < p->num_available)
+    {
+        return false;
+    }
+    if(p->deferred_free != NULL)
+    {
+        return false;
+    }
+    const AtomicQueue *q = &p->thread_free;
+    if (q->head != q->tail)
+    {
+        return false;
+    }
+    return true;
+}
 static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
 
@@ -117,6 +140,7 @@ static inline void pool_free_block(Pool *p, void *block)
         p->free = (Block*)base_addr;
         p->free->next = NULL;
         p->num_committed = 1;
+        init_deferred_free((DeferredFree*)p);
         return;
     }
     
@@ -153,7 +177,7 @@ static inline void *pool_aquire_block(Pool *p)
     }
     else
     {
-        AtomicQueue *q = &p->thread_free;
+        const AtomicQueue *q = &p->thread_free;
         if (q->head != q->tail)
         {
             deferred_move_thread_free((DeferredFree*)p);

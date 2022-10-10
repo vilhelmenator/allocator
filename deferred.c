@@ -1,7 +1,9 @@
 
 #include "callocator.inl"
+#include "pool.h"
 #include "../cthread/cthread.h"
 
+extern int64_t partition_owners[MAX_THREADS];
 void deferred_move_thread_free(DeferredFree* d)
 {
     AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
@@ -29,34 +31,83 @@ void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMes
 
 
 // compute bounds and initialize
-void deferred_cache_init(deferred_cache*c, void*p)
+void deferred_cache_init(Allocator* a, void*p)
 {
-    /*
-    id = owner_id(p);
-    owning_thread = this_owns(id);
-    size = get_arena_size(p);
-    start = p >> size;
-    end = start + size;
-
-    p->next = NULL;
-    deferredList->head = p;
-    deferredList->tail = p;
-    */
+    int8_t pid = partition_from_addr((uintptr_t)p);
+    if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
+        deferred_cache*c = &a->c_deferred;
+        const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)p, pid);
+        c->owned = a->idx == partition_owners[part_id];
+        
+        // Arenas
+        /*
+         size_t asize = area_size_from_partition_id(pid);
+        // 64th part
+        size_t psize = asize >> 6;
+        c->start = ((uintptr_t)p & ~(psize - 1));
+        c->end = c->start + psize;
+        */
+        
+        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+        Pool *pool = (Pool *)section_find_collection(section, p);
+        c->start = (uintptr_t)pool;
+        c->end = c->start + sizeof(Pool) + (pool->num_available * pool->block_size);
+        
+        ((Block*)p)->next = NULL;
+        c->items.head = p;
+        c->items.tail = p;
+        c->num = 1;
+    }
 }
 
 // release to owning structures.
-void deferred_cache_release(deferred_cache*c, void* p)
+void deferred_cache_release(Allocator* a, void* p)
 {
-    /*
-        // get the area/arena from the start address of cache.
-     */
-    if(p)
+    deferred_cache*c = &a->c_deferred;
+    if(c->end != 0)
     {
-        deferred_cache_init(c, p);
-    }
-    else
-    {
-        c->start = UINT64_MAX;
-        c->end = 0;
+        if(c->owned)
+        {
+            DeferredFree *d = (DeferredFree*)c->start;
+            ((Block*)c->items.tail)->next = d->free;
+            d->free = c->items.head;
+            d->dcount = c->num;
+            Pool *pool = (Pool*)c->start;
+            if((pool->num_used - c->num) == 0)
+            {
+                pool->num_used = 0;
+                Section *section = (Section *)((uintptr_t)pool & ~(SECTION_SIZE - 1));
+                section_free_idx(section, pool->idx);
+                // the last piece was returned so make the first item the start of the free
+                pool->free = (Block*)((uintptr_t)pool + sizeof(Pool));
+                pool->free->next = NULL;
+                pool->num_committed = 1;
+                init_deferred_free((DeferredFree*)pool);
+            }
+            else
+            {
+                //Queue *queue = &a->part_alloc->pools[pool->block_idx];
+                //list_enqueue(queue, pool);
+                //if(pool_is_full(pool))
+                //{
+                //    pool_post_free(pool);
+                //}
+            }
+        }
+        else
+        {
+            DeferredFree *d = (DeferredFree*)c->start;
+            deferred_thread_enqueue(&d->thread_free, c->items.head, c->items.tail);
+        }
+        if(p)
+        {
+            deferred_cache_init(a, p);
+        }
+        else
+        {
+            c->start = UINT64_MAX;
+            c->end = 0;
+            c->num = 0;
+        }
     }
 }

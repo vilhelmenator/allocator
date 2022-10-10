@@ -91,14 +91,17 @@ static inline int8_t partition_from_addr(uintptr_t p)
     }
 }
 
+static inline int8_t partition_allocator_from_addr_and_part(uintptr_t p, int8_t at)
+{
+    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
+    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)offset;
+    return (uint32_t)(((size_t)diff) >> partition_type_to_exponent[at]);
+}
+
 static inline int8_t partition_allocator_from_addr(uintptr_t p)
 {
     int8_t at = partition_from_addr(p);
-    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
-    size_t start_addr = base_size + offset;
-    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)start_addr;
-    return (uint32_t)(((size_t)diff) >> partition_type_to_exponent[at]);
+    return partition_allocator_from_addr_and_part(p, at);
 }
 
 static inline uint64_t area_size_from_addr(uintptr_t p) { return area_size_from_partition_id(partition_from_addr(p)); }
@@ -180,6 +183,7 @@ typedef struct DeferredFree_t
     Block* free;
     void* _d;
     AtomicQueue thread_free;
+    int32_t dcount;
 } DeferredFree;
 
 static inline void init_deferred_free(DeferredFree*f)
@@ -187,6 +191,7 @@ static inline void init_deferred_free(DeferredFree*f)
     f->free = NULL;
     f->_d = NULL;
     f->thread_free = (AtomicQueue){(uintptr_t)&f->_d,(uintptr_t)&f->_d};
+    f->dcount = 0;
 }
 
 void deferred_move_thread_free(DeferredFree* d);
@@ -197,6 +202,7 @@ typedef struct Pool_t
     Block* deferred_free;
     void* _d;
     AtomicQueue thread_free;
+    int32_t dcount;
     
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
@@ -369,6 +375,7 @@ typedef struct deferred_cache_t
     uintptr_t start;
     uintptr_t end;
     uint32_t owned;
+    uint32_t num;
 } deferred_cache;
 
 
@@ -389,12 +396,10 @@ static inline void deferred_cache_enqueue( deferred_cache*c, DeferredFree* dl)
 
 static inline void deferred_cache_add(deferred_cache*c, void* p)
 {
-    ((Block*)p)->next = NULL;
-    ((Block*)(c->items.tail))->next =  p;
+    ((Block*)p)->next = c->items.head;
+    c->items.head =  p;
+    c->num++;
 }
-
-void deferred_cache_init(deferred_cache*c, void*p);
-void deferred_cache_release(deferred_cache*c, void* p);
 
 typedef struct Allocator_t
 {
@@ -409,6 +414,9 @@ typedef struct Allocator_t
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
 } Allocator;
+
+void deferred_cache_init(Allocator* a, void*p);
+void deferred_cache_release(Allocator* a, void* p);
 
 // list utilities
 static inline bool qnode_is_connected(QNode* n)
