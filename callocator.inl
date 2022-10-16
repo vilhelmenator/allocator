@@ -2,7 +2,7 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-//#define ARENA_PATH
+#define ARENA_PATH
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -183,6 +183,8 @@ typedef struct DeferredFree_t
     Block* free;
     void* _d;
     AtomicQueue thread_free;
+    void *prev;
+    void *next;
 } DeferredFree;
 
 static inline void init_deferred_free(DeferredFree*f)
@@ -190,6 +192,8 @@ static inline void init_deferred_free(DeferredFree*f)
     f->free = NULL;
     f->_d = NULL;
     f->thread_free = (AtomicQueue){(uintptr_t)&f->_d,(uintptr_t)&f->_d};
+    f->prev = NULL;
+    f->next = NULL;
 }
 
 void deferred_move_thread_free(DeferredFree* d);
@@ -200,7 +204,9 @@ typedef struct Pool_t
     Block* deferred_free;
     void* _d;
     AtomicQueue thread_free;
-    int32_t dcount;
+    
+    void *prev;
+    void *next;
     
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
@@ -213,10 +219,7 @@ typedef struct Pool_t
     
     int32_t num_available;
 
-    Block* free;   
-    
-    struct Pool_t *prev;
-    struct Pool_t *next;
+    Block* free;
 } Pool;
 
 typedef struct Heap_t
@@ -254,72 +257,69 @@ typedef struct QIndexNode_t
 typedef struct Arena_t
 {
     uint32_t partition_id;
-    uint32_t num_allocations;
-    
     uint8_t container_exponent;
-    int8_t active_l1_offset;
-    uint8_t previous_level;
-    uint8_t previous_range;
-    
-    int32_t active_l0_offset;
-    uint32_t previous_size;
-    IndexQueue   L0_lists[6]; // 1,2,4,8,16,32
-    uint64_t  L1_lists[6]; // 1,2,4,8,16,32
 } Arena; // 128 bytes
 
 typedef struct Arena_L2_t
 {
-    uint32_t  prev;             // internal prev/next ptrs offsets for l0 size lists
-    uint32_t  next;
+    Block* deferred_free;
+    void* _d;
+    AtomicQueue thread_free;
+    
+    // 32
+    void *prev;
+    void *next;
+    void *aligned_prev;
+    void *aligned_next;
+    // 64
     uint64_t  L0_allocations;   // base allocations here at the root
     uint64_t  L0_ranges;        // size of allocations at the root.
-    uint8_t   L0_list_index;
-    uint8_t   L0_has_excess;    // does the lowest level have an excess pool
-    uint8_t   L1_has_excess;    // does the mid level have an excess pool
-    // L0 - 32 bytes
-    uint8_t   L1_list_index;
-    uint64_t  L0_L1_Slots;      // are l0 size slots available at root 64th part.
+
     uint64_t  L1_allocations;   // base allocations here at the root
     uint64_t  L1_ranges;        // sizes of allocations at the root
     uint64_t  L1_zero;          // have the L0 headers been zeroed at the root 64th part.
+    
     // L1 - 64 bytes
-    uint64_t  L1_L2_Slots;      // are l1 size slots available at each 64th part
     uint64_t  L2_allocations;   // base allocations for largest element
     uint64_t  L2_ranges;        // sizes of allocations.
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
-    // 96
-    uint64_t  L0_L2_Slots;      // are l0 size slots available at each 64th part.
-    uint64_t  L2_Pool_Slots;    // which of the high level slots have been initilized as pool containers
-    uint64_t  L2_Pool_Slots_Active; // which of the high level slots are active pool containers
+    
 } Arena_L2; // 128 bytes
-// root header 256 bytes .. 64,64,64,64 .. 256
 
 typedef struct Arena_L1_t
 {
-    uint32_t  prev;
-    uint32_t  next;
+    Block* deferred_free;
+    void* _d;
+    AtomicQueue thread_free;
+    
+    void *prev;
+    void *next;
+    void *aligned_prev;
+    void *aligned_next;
+    // 64
     uint64_t  L0_allocations;   
     uint64_t  L0_ranges;
-    uint8_t   L0_list_index;
-    uint8_t   L0_has_excess;    // does the lowest level have an excess pool
-    uint8_t   L1_has_excess;    // does the mid level have an excess pool
-    int8_t    L1_list_index;
-    uint64_t  L0_L1_Slots;
+    
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
-} Arena_L1;
+} Arena_L1; // 104
 
 typedef struct Arena_L0_t
 {
-    uint32_t  prev;
-    uint32_t  next;
+    Block* deferred_free;
+    void* _d;
+    AtomicQueue thread_free;
+    
+    void *prev;
+    void *next;
+    void *aligned_prev;
+    void *aligned_next;
+    
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
-    int8_t    L0_list_index;
-    uint8_t   L0_has_excess;    // does the lowest level have an excess pool
-    uint8_t   L1_has_excess;    // does the mid level have an excess pool
-} Arena_L0;
+    
+} Arena_L0; // 80 bytes
 
 
 typedef struct Partition_t

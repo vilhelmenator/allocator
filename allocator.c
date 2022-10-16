@@ -446,25 +446,21 @@ void * allocator_alloc_arena(Allocator* alloc, size_t s)
         arena_init((uintptr_t)arena, area_idx, area_type_to_exponent[at]);
         partition->zero_mask |= (1ULL << area_idx);
     }
-    
-    if (arena == NULL) {
-        return NULL;
-    }
-    return arena;
+
+    return header;
 }
 
 void *allocator_alloc_from_arena(Allocator *a, const size_t s, Arena** source_arena)
 {
     *source_arena = allocator_alloc_arena(a, s);
-    return NULL;
+    return arena_get_block(*source_arena, s);
 }
 
 static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s)
 {
 #ifdef ARENA_PATH
-    Arena* arena = NULL;
-    void *section = allocator_alloc_from_arena(a, get_pool_size_class(s), &arena);
-    if (section == NULL) {
+    Arena* arena = allocator_alloc_arena(a, s);
+    if (arena == NULL) {
         return NULL;
     }
 
@@ -473,6 +469,7 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     // reserve size of pool
     size_t arena_size = 1ULL << arena->container_exponent;
     int32_t pool_size = 1 << (arena->container_exponent - 6);
+    void* section = arena_get_block(arena, pool_size);
     uintptr_t base_addr = ((uintptr_t)section & ~(arena_size - 1));
     unsigned int coll_idx = delta_exp_to_idx((uintptr_t)section, base_addr, arena->container_exponent - 6);
     pool_init((Pool*)section, coll_idx, idx, pool_size, s);
