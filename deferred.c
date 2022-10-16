@@ -1,9 +1,11 @@
 
 #include "callocator.inl"
 #include "pool.h"
+#include "partition_allocator.h"
 #include "../cthread/cthread.h"
 
-extern int64_t partition_owners[MAX_THREADS];
+extern int64_t partition_owners[MAX_THREADS]; 
+extern PartitionAllocator *partition_allocators[MAX_THREADS];
 void deferred_move_thread_free(DeferredFree* d)
 {
     AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
@@ -52,8 +54,9 @@ void deferred_cache_init(Allocator* a, void*p)
         Pool *pool = (Pool *)section_find_collection(section, p);
         c->start = (uintptr_t)pool;
         c->end = c->start + sizeof(Pool) + (pool->num_available * pool->block_size);
-        
-        ((Block*)p)->next = NULL;
+        DeferredFree *d = (DeferredFree*)pool;
+        ((Block*)p)->next = d->free;
+        d->free = NULL;
         c->items.head = p;
         c->items.tail = p;
         c->num = 1;
@@ -69,14 +72,21 @@ void deferred_cache_release(Allocator* a, void* p)
         if(c->owned)
         {
             DeferredFree *d = (DeferredFree*)c->start;
-            ((Block*)c->items.tail)->next = d->free;
             d->free = c->items.head;
-            d->dcount = c->num;
             Pool *pool = (Pool*)c->start;
-            if((pool->num_used - c->num) == 0)
+            Section *section = (Section *)((uintptr_t)pool & ~(SECTION_SIZE - 1));
+            Area *area = area_from_addr((uintptr_t)pool);
+            if(area_is_full(area))
             {
-                pool->num_used = 0;
-                Section *section = (Section *)((uintptr_t)pool & ~(SECTION_SIZE - 1));
+                AreaType at = area_get_type(area);
+                Partition* partition = &a->part_alloc->area[at];
+                int32_t aidx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+                partition->full_mask &= ~(1ULL << aidx);
+            }
+            
+            pool->num_used -= c->num;
+            if(pool->num_used == 0)
+            {
                 section_free_idx(section, pool->idx);
                 // the last piece was returned so make the first item the start of the free
                 pool->free = (Block*)((uintptr_t)pool + sizeof(Pool));
@@ -86,12 +96,21 @@ void deferred_cache_release(Allocator* a, void* p)
             }
             else
             {
-                //Queue *queue = &a->part_alloc->pools[pool->block_idx];
-                //list_enqueue(queue, pool);
-                //if(pool_is_full(pool))
-                //{
-                //    pool_post_free(pool);
-                //}
+                Queue *queue = &a->part_alloc->pools[pool->block_idx];
+                if(!pool_is_connected(pool) && queue->head != pool)
+                {
+                    list_enqueue(queue, pool);
+                }
+            }
+            
+            if (!section_is_connected(section)) {
+                int8_t pid = partition_from_addr((uintptr_t)section);
+                const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)section, pid);
+                PartitionAllocator *_part_alloc = partition_allocators[part_id];
+                Queue *sections = _part_alloc->sections;
+                if (sections->head != section && sections->tail != section) {
+                    list_enqueue(sections, section);
+                }
             }
         }
         else

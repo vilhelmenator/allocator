@@ -2,7 +2,7 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-
+//#define ARENA_PATH
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -183,7 +183,6 @@ typedef struct DeferredFree_t
     Block* free;
     void* _d;
     AtomicQueue thread_free;
-    int32_t dcount;
 } DeferredFree;
 
 static inline void init_deferred_free(DeferredFree*f)
@@ -191,7 +190,6 @@ static inline void init_deferred_free(DeferredFree*f)
     f->free = NULL;
     f->_d = NULL;
     f->thread_free = (AtomicQueue){(uintptr_t)&f->_d,(uintptr_t)&f->_d};
-    f->dcount = 0;
 }
 
 void deferred_move_thread_free(DeferredFree* d);
@@ -326,8 +324,10 @@ typedef struct Arena_L0_t
 
 typedef struct Partition_t
 {
-    uint64_t area_mask;
-    uint64_t range_mask;
+    uint64_t area_mask;     // which parsts have been allocated
+    uint64_t range_mask;    // the extends for each part
+    uint64_t zero_mask;     // which parts have been initilized.
+    uint64_t full_mask;     // which parts have free internal memory
 } Partition;
 
 typedef void (*free_func)(void *);

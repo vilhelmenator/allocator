@@ -10,7 +10,6 @@
 #define ARENA_H
 
 #include "callocator.inl"
-#include <stdio.h>
 
 #define WSIZE 4
 #define DSIZE 8
@@ -361,19 +360,6 @@ size_t arena_get_block_size(Arena *h, void *p);
     - look at address alignment. if aligned to 64k, 1k, 16 bytes... which level to look at.
     -
  */
-inline uint8_t size_to_arena(const size_t as)
-{
-    if (as <= SMALL_OBJECT_SIZE) {
-        return 0;
-    } else if (as <= MEDIUM_OBJECT_SIZE) {
-        return 1; // 128Mb pages
-    } else if (as <= LARGE_OBJECT_SIZE) {
-        return 2; // 128Mb pages
-    } else if (as <= HUGE_OBJECT_SIZE) {
-        return 3; // 128Mb pages
-    } else {
-        return 4; // 256Mb pages
-    }
-}
+
 
 #endif // ARENA_H

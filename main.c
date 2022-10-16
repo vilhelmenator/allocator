@@ -285,8 +285,14 @@ end:
     free(variables);
     // release all the system resources
 
-    return callocator_release();
-    ;
+    if(callocator_release())
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
 bool test_pools_small(void) { return test_pools(max_small_size); }
@@ -1035,7 +1041,7 @@ int main()
     //  thrd_t trd;
     //  thrd_create(&trd, &test, NULL);
     //  blach();
-    run_tests();
+    //  run_tests();
     //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //  cfree(m);
     //  m = cmalloc_os(123);

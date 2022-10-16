@@ -66,30 +66,10 @@ static inline uint8_t size_to_pool(const size_t as)
         return (row + ((as >> (28 - lz)) & 0x7)) + incr - 1;
     }
 }
+
 static inline bool pool_is_connected(Pool* p)
 {
     return p->prev != NULL || p->next != NULL;
-}
-static inline void pool_move_deferred(Pool* p)
-{
-    // for every item in the deferred list.
-    int32_t count = 0;
-    if(p->free != NULL)
-    {
-        return;
-    }
-    p->free = p->deferred_free;
-    while(p->deferred_free != NULL)
-    {
-        void* next = p->deferred_free->next;
-        count++;
-        p->deferred_free = next;
-    }
-    if(count != p->dcount)
-    {
-        int bb = 0;
-    }
-    p->num_used -= count;
 }
 
 static inline void pool_post_free(Pool *p)
@@ -103,6 +83,27 @@ static inline void pool_post_reserved(Pool *p)
     Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
     section_reserve_idx(section, p->idx);
 }
+static inline void pool_set_empty(Pool* p)
+{
+    pool_post_free(p);
+    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
+    // the last piece was returned so make the first item the start of the free
+    p->free = (Block*)base_addr;
+    p->free->next = NULL;
+    p->num_committed = 1;
+    init_deferred_free((DeferredFree*)p);
+}
+static inline void pool_move_deferred(Pool* p)
+{
+    // for every item in the deferred list.
+    if(p->free != NULL)
+    {
+        return;
+    }
+    p->free = p->deferred_free;
+    p->deferred_free = NULL;
+}
+
 
 static inline void *pool_extend(Pool *p)
 {
@@ -133,14 +134,8 @@ static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committ
 
 static inline void pool_free_block(Pool *p, void *block)
 {
-    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
     if (--p->num_used == 0) {
-        pool_post_free(p);
-        // the last piece was returned so make the first item the start of the free
-        p->free = (Block*)base_addr;
-        p->free->next = NULL;
-        p->num_committed = 1;
-        init_deferred_free((DeferredFree*)p);
+        pool_set_empty(p);
         return;
     }
     

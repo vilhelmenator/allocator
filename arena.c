@@ -8,6 +8,7 @@
 #include "arena.h"
 #include "area.h"
 #include "section.h"
+#include <stdio.h>
 
 uint32_t num_consecutive_zeros(uint64_t test)
 {
@@ -198,7 +199,7 @@ Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
     }
     // high allocations
     arena_init_head_range(h, base_addr);
-    print_header(h, (uintptr_t)h);
+    //print_header(h, (uintptr_t)h);
     return h;
 }
 

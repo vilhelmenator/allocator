@@ -283,13 +283,16 @@ void *cmalloc_arena(size_t s, size_t partition_idx)
         return NULL;
     }
     Allocator *alloc = get_thread_instance();
-    void *arena = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx);
-
-    Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
-    header->partition_id = (uint32_t)alloc->part_alloc->idx;
-    if (arena == NULL) {
+    int32_t area_idx = -1;
+    void *partition = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx, &area_idx);
+    if(partition == NULL)
+    {
         return NULL;
     }
+    void* arena = partition_allocator_area_at_idx(alloc->part_alloc, partition, area_idx);
+    Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
+    header->partition_id = (uint32_t)alloc->part_alloc->idx;
+
     return arena;
 }
 

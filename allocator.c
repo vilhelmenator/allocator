@@ -5,6 +5,7 @@
 #include "pool.h"
 #include "heap.h"
 #include "os.h"
+#include "arena.h"
 
 #include "../cthread/cthread.h"
 
@@ -223,7 +224,7 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
     if (section->type != ST_HEAP_4M) {
         Pool *pool = (Pool *)section_find_collection(section, p);
         pool_free_block(pool, p);
-        allocator_set_cached_pool(a, pool, false);
+        //allocator_set_cached_pool(a, pool, false);
     } else {
         Heap *heap = (Heap *)((uint8_t *)section + sizeof(Section));
         uint32_t heapIdx = area_get_type((Area *)section);
@@ -251,6 +252,13 @@ void allocator_free_from_container(Allocator *a, void *p, const size_t area_size
 {
     Area *area = (Area *)((uintptr_t)p & ~(area_size - 1));
     const uint32_t part_id = area_get_id(area);
+    if(area_is_full(area))
+    {
+        AreaType at = area_get_type(area);
+        Partition* partition = &a->part_alloc->area[at];
+        int32_t aidx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+        partition->full_mask &= ~(1ULL << aidx);
+    }
     if (a->idx == partition_owners[part_id]) {
         switch (area_get_container_type(area)) {
         case CT_SECTION: {
@@ -281,6 +289,7 @@ void allocator_free_from_container(Allocator *a, void *p, const size_t area_size
     } else {
         allocator_thread_free(a, p, part_id);
     }
+    
 }
 
 Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st)
@@ -294,6 +303,14 @@ Section *allocator_get_free_section(Allocator *a, const size_t s, SectionType st
             if (!section_is_full(free_section)) {
                 break;
             } else {
+                Area *area = area_from_addr((uintptr_t)free_section);
+                if(area_is_full(area))
+                {
+                    AreaType at = area_get_type(area);
+                    Partition* partition = &a->part_alloc->area[at];
+                    int32_t aidx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+                    partition->full_mask |= (1ULL << aidx);
+                }
                 list_remove(a->part_alloc->sections, free_section);
             }
         }
@@ -346,12 +363,18 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
     }
 
     AreaType at = get_area_type_for_heap(s);
-    Area *new_area = partition_allocator_get_free_area(a->part_alloc, s, at);
+    int32_t area_idx = -1;
+    Partition* partition = partition_allocator_get_free_area(a->part_alloc, s, at, &area_idx);
+    Area* new_area = partition_allocator_area_at_idx(a->part_alloc, partition, area_idx);
     if (new_area == NULL) {
         return NULL;
     }
-
-    Partition* partition = &a->part_alloc->area[at];
+    
+    if((partition->zero_mask & 1ULL << area_idx) == 0)
+    {
+        area_init(new_area, a->idx, at);
+        partition->zero_mask |= (1ULL << area_idx);
+    }
     uint32_t idx = partition_allocator_get_area_idx_from_queue(a->part_alloc, new_area, partition);
     uint32_t range = get_range(idx, partition->range_mask);
     uint64_t area_size = area_get_size(new_area)*range;
@@ -367,17 +390,94 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
 void *allocator_alloc_slab(Allocator *a, const size_t s)
 {
     const size_t totalSize = sizeof(Area) + s;
-    Area *area = partition_allocator_get_free_area(a->part_alloc, totalSize, AT_FIXED_256);
-    if (area == NULL) {
+    int32_t area_idx = -1;
+    Partition *partition = partition_allocator_get_free_area(a->part_alloc, totalSize, AT_FIXED_256, &area_idx);
+    if (partition == NULL) {
         return NULL;
+    }
+    Area *area = partition_allocator_area_at_idx(a->part_alloc, partition, area_idx);
+    if((partition->zero_mask & 1ULL << area_idx) == 0)
+    {
+        area_init(area, a->idx, AT_FIXED_256);
+        partition->zero_mask |= (1ULL << area_idx);
     }
     area_reserve_all(area);
     area_set_container_type(area, CT_SLAB);
     return (void *)((uintptr_t)area + sizeof(Area));
 }
 
+static inline int64_t size_to_arena(size_t s)
+{
+    if(s < (1 << 10))
+    {
+        return 0;
+    }
+    static const int32_t lookup[] = {0,1,2,3,4,5,6,6,
+        6,6,6,6,0,1,2,3,
+        4,5,6,6,6,6,6,6
+    };
+    int32_t lz = __builtin_clzll(s);
+    if(lz < 31)
+    {
+        int64_t t = (64 - 8 - lz);
+        return lookup[t];
+    }
+    return -1;
+}
+
+void * allocator_alloc_arena(Allocator* alloc, size_t s)
+{
+    int64_t partition_idx = size_to_arena(s);
+    if (partition_idx < 0) {
+        return NULL;
+    }
+    int32_t area_idx = -1;
+    Partition* partition = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx, &area_idx);
+    if(partition == NULL)
+    {
+        return NULL;
+    }
+    void* arena = partition_allocator_area_at_idx(alloc->part_alloc, partition, area_idx);
+    Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
+    header->partition_id = (uint32_t)alloc->part_alloc->idx;
+    AreaType at = partition_allocator_get_partition_idx(alloc->part_alloc, partition);
+    if((partition->zero_mask & 1ULL << area_idx) == 0)
+    {
+        arena_init((uintptr_t)arena, area_idx, area_type_to_exponent[at]);
+        partition->zero_mask |= (1ULL << area_idx);
+    }
+    
+    if (arena == NULL) {
+        return NULL;
+    }
+    return arena;
+}
+
+void *allocator_alloc_from_arena(Allocator *a, const size_t s, Arena** source_arena)
+{
+    *source_arena = allocator_alloc_arena(a, s);
+    return NULL;
+}
+
 static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s)
 {
+#ifdef ARENA_PATH
+    Arena* arena = NULL;
+    void *section = allocator_alloc_from_arena(a, get_pool_size_class(s), &arena);
+    if (section == NULL) {
+        return NULL;
+    }
+
+    // what is the index of the section in the arena.
+    // what is the size of the section.
+    // reserve size of pool
+    size_t arena_size = 1ULL << arena->container_exponent;
+    int32_t pool_size = 1 << (arena->container_exponent - 6);
+    uintptr_t base_addr = ((uintptr_t)section & ~(arena_size - 1));
+    unsigned int coll_idx = delta_exp_to_idx((uintptr_t)section, base_addr, arena->container_exponent - 6);
+    pool_init((Pool*)section, coll_idx, idx, pool_size, s);
+    return (Pool*)section;
+#else
     Section *sfree_section = allocator_get_free_section(a, s, get_pool_size_class(s));
     if (sfree_section == NULL) {
         return NULL;
@@ -389,6 +489,7 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     pool_init(p, coll_idx, idx, psize, s);
     section_claim_idx(sfree_section, coll_idx);
     return p;
+#endif
 }
 
 void *allocator_alloc_from_pool(Allocator *a, const size_t s)
@@ -428,6 +529,7 @@ void free_extended_part(size_t pid, void *p)
         free_memory((void *)header, size);
     }
 }
+
 static inline void _allocator_free_ex(Allocator *a, void *p)
 {
     int8_t pid = partition_from_addr((uintptr_t)p);
@@ -440,7 +542,7 @@ static inline void _allocator_free_ex(Allocator *a, void *p)
 
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
-    /*
+    
     if(a->c_deferred.end == 0)
     {
         deferred_cache_init(a, p);
@@ -463,7 +565,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
             deferred_cache_add(&a->c_deferred, p);
         }
     }
-    */
+    /*
     if(a->c_cache.header == 0)
     {
         _allocator_free_ex(a, p);
@@ -496,6 +598,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
             }
         }
     }
+     */
 }
 
 
@@ -517,6 +620,18 @@ void allocator_thread_dequeue_all(Allocator *a, AtomicQueue *queue)
 
 static inline void *allocator_try_malloc(Allocator *a, size_t as)
 {
+#ifdef ARENA_PATH
+    if (as <= (1 << 10)) {
+        return allocator_alloc_from_pool(a, as);
+    }
+    else
+    {
+        // allocate from arena.
+        Arena* arena = NULL;
+        void* res = allocator_alloc_from_arena(a, as, &arena);
+        return res;
+    }
+#else
     if (as <= LARGE_OBJECT_SIZE) {
         return allocator_alloc_from_pool(a, as);
     } else if (as <= AREA_SIZE_LARGE) {
@@ -525,26 +640,10 @@ static inline void *allocator_try_malloc(Allocator *a, size_t as)
     } else {
         return allocator_alloc_slab(a, as);
     }
+#endif
 }
 
-static inline int64_t size_to_arena(size_t s)
-{
-    if(s < (1 << 10))
-    {
-        return 0;
-    }
-    static const int32_t lookup[] = {0,1,2,3,4,5,6,6,
-        6,6,6,6,0,1,2,3,
-        4,5,6,6,6,6,6,6
-    };
-    int32_t lz = __builtin_clzll(s);
-    if(lz < 31)
-    {
-        int64_t t = (64 - 8 - lz);
-        return lookup[t];
-    }
-    return -1;
-}
+
 
 static inline void *allocator_malloc_fallback(Allocator *a, size_t as)
 {
@@ -598,6 +697,7 @@ void *allocator_malloc_heap(Allocator *a, size_t s)
 {
     const size_t size = ALIGN4(s);
     allocator_release_cache(a);
+    deferred_cache_release(a, NULL);
     if (s <= AREA_SIZE_LARGE) {
         // allocate form the large page
         return allocator_alloc_from_heap(a, size);
@@ -606,15 +706,19 @@ void *allocator_malloc_heap(Allocator *a, size_t s)
     }
 }
 
+
 bool allocator_release_local_areas(Allocator *a)
 {
     allocator_release_cache(a);
+    deferred_cache_release(a, NULL);
     bool result = false;
     PartitionAllocator *palloc = a->partition_allocators.head;
     while (palloc != NULL) {
         PartitionAllocator *next = palloc->next;
         allocator_thread_dequeue_all(a, palloc->thread_free_queue);
+        partition_allocator_release_deferred(palloc);
         bool was_released = partition_allocator_release_local_areas(palloc);
+        
         if (was_released) {
             palloc->sections->head = NULL;
             palloc->sections->tail = NULL;
