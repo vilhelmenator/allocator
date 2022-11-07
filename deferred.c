@@ -6,15 +6,27 @@
 
 extern int64_t partition_owners[MAX_THREADS]; 
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
-void deferred_move_thread_free(DeferredFree* d)
+void deferred_move_thread_free(Heap* d)
 {
     AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
     AtomicMessage *curr = (AtomicMessage *)(uintptr_t)d->thread_free.head;
-    // loop between start and end addres
+    
+    if (curr == back)
+    {
+        return;
+    }
+    
+    // skip over separator
+    if (curr == d->thread_i) {
+        curr = (AtomicMessage*)atomic_load_explicit(&curr->next, memory_order_acquire);
+    }
+    
+    // loop between start and end address
     while (curr != back) {
         AtomicMessage *next = (AtomicMessage *)atomic_load_explicit(&curr->next, memory_order_acquire);
         if (next == NULL)
             break;
+        
         ((Block*)curr)->next = d->free;
         d->free = (Block*)curr;
         curr = next;
@@ -54,7 +66,7 @@ void deferred_cache_init(Allocator* a, void*p)
         Pool *pool = (Pool *)section_find_collection(section, p);
         c->start = (uintptr_t)pool;
         c->end = c->start + sizeof(Pool) + (pool->num_available * pool->block_size);
-        DeferredFree *d = (DeferredFree*)pool;
+        Heap *d = (Heap*)pool;
         ((Block*)p)->next = d->free;
         d->free = NULL;
         c->items.head = p;
@@ -71,7 +83,7 @@ void deferred_cache_release(Allocator* a, void* p)
     {
         if(c->owned)
         {
-            DeferredFree *d = (DeferredFree*)c->start;
+            Heap *d = (Heap*)c->start;
             d->free = c->items.head;
             Pool *pool = (Pool*)c->start;
             Section *section = (Section *)((uintptr_t)pool & ~(SECTION_SIZE - 1));
@@ -92,7 +104,7 @@ void deferred_cache_release(Allocator* a, void* p)
                 pool->free = (Block*)((uintptr_t)pool + sizeof(Pool));
                 pool->free->next = NULL;
                 pool->num_committed = 1;
-                init_deferred_free((DeferredFree*)pool);
+                init_heap((Heap*)pool);
             }
             else
             {
@@ -115,7 +127,7 @@ void deferred_cache_release(Allocator* a, void* p)
         }
         else
         {
-            DeferredFree *d = (DeferredFree*)c->start;
+            Heap *d = (Heap*)c->start;
             deferred_thread_enqueue(&d->thread_free, c->items.head, c->items.tail);
         }
         if(p)

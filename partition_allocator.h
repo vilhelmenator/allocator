@@ -30,7 +30,7 @@ static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllo
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
     size_t start_addr = (pa->idx)*base_size + offset;
     const ptrdiff_t diff = (uint8_t *)area - (uint8_t *)start_addr;
     return (uint32_t)(((size_t)diff) >> area_type_to_exponent[area_get_type(area)]);
@@ -39,7 +39,7 @@ static inline void *partition_allocator_area_at_idx(PartitionAllocator* pa, Part
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, p);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40)<< (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
     size_t start_addr = (pa->idx)*base_size + offset;
     size_t s = (1 << area_type_to_exponent[at]);
     return (void*)(start_addr + (s * idx));

@@ -3,6 +3,7 @@
 #define callocator_inl
 #include "callocator.h"
 #define ARENA_PATH
+
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -27,7 +28,7 @@ typedef SSIZE_T ssize_t;
 #define LARGE_OBJECT_SIZE MEDIUM_OBJECT_SIZE * 16  // 2Mb
 #define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
 
-#define POOL_BIN_COUNT (17 * 8 + 1)
+#define POOL_BIN_COUNT 135
 #define HEAP_TYPE_COUNT 5
 
 #define MAX_ARES 64
@@ -45,11 +46,15 @@ typedef SSIZE_T ssize_t;
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
 
-#define ALIGN(x) ((MAX(x, 1) + sizeof(intptr_t) - 1) & ~(sizeof(intptr_t) - 1))
-#define ALIGN4(x) ((MAX(x, 1) + 3) & ~(3))
-#define ALIGN_CACHE(x) ((x + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
+#define ALIGN_UP_2(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
+#define ALIGN_DOWN_2(x, y) ((x) & ~((y) - 1))
+#define ALIGN(x) ALIGN_UP_2(x, sizeof(intptr_t))
+#define ALIGN4(x) ALIGN_UP_2(x, 4)
+#define ALIGN_CACHE(x) (((x) + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
 
-
+#define BASE_ADDR(idx) (((1ULL << 40) << (idx)) + (1ULL << 38))  // 1TB + 256
+ 
+ 
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 typedef enum AreaType_t {
     AT_FIXED_4 = 0,
@@ -93,7 +98,7 @@ static inline int8_t partition_from_addr(uintptr_t p)
 
 static inline int8_t partition_allocator_from_addr_and_part(uintptr_t p, int8_t at)
 {
-    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
     const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)offset;
     return (uint32_t)(((size_t)diff) >> partition_type_to_exponent[at]);
 }
@@ -178,51 +183,62 @@ typedef struct Section_t
 
 } Section;
 
-typedef struct DeferredFree_t
+
+typedef struct Heap_t
 {
     Block* free;
-    void* _d;
     AtomicQueue thread_free;
+    //
+    void* thread_i;
     void *prev;
     void *next;
-} DeferredFree;
+} Heap;
 
-static inline void init_deferred_free(DeferredFree*f)
+typedef struct HeapEx_t
+{
+    Block* free;
+    AtomicQueue thread_free;
+    //
+    void* thread_i;
+    void *prev;
+    void *next;
+} HeapEx;
+
+static inline void init_heap(Heap*f)
 {
     f->free = NULL;
-    f->_d = NULL;
-    f->thread_free = (AtomicQueue){(uintptr_t)&f->_d,(uintptr_t)&f->_d};
+    f->thread_i = NULL;
+    f->thread_free = (AtomicQueue){(uintptr_t)&f->thread_i,(uintptr_t)&f->thread_i};
     f->prev = NULL;
     f->next = NULL;
 }
 
-void deferred_move_thread_free(DeferredFree* d);
+void deferred_move_thread_free(Heap* d);
 void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last);
 
 typedef struct Pool_t
 {
+    // 56 byte header
     Block* deferred_free;
-    void* _d;
     AtomicQueue thread_free;
-    
+    void* _d;
     void *prev;
     void *next;
     
+    // 32 byte body
     int32_t idx;        // index in the parent section
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
     uint32_t block_size;
-    uint32_t block_recip;
-    
     int32_t num_used;
-    int32_t num_committed;
     
+    int32_t num_committed;
     int32_t num_available;
 
     Block* free;
 } Pool;
 
-typedef struct Heap_t
+typedef struct ImplicitList_t
 {
     int32_t idx;           // index into the parent section/if in a section.
     uint32_t total_memory; // how much do we have available in total
@@ -233,9 +249,9 @@ typedef struct Heap_t
 
     Queue free_nodes;
 
-    struct Heap_t *prev;
-    struct Heap_t *next;
-} Heap;
+    struct ImplicitList_t *prev;
+    struct ImplicitList_t *next;
+} ImplicitList;
 
 typedef struct HeapBlock_t
 {
@@ -258,19 +274,31 @@ typedef struct Arena_t
 {
     uint32_t partition_id;
     uint8_t container_exponent;
-} Arena; // 128 bytes
+} Arena; // 8 bytes
+
+typedef struct ArenaAllocation_t
+{
+    Arena *arena;
+    uint32_t midx;
+    uint32_t bidx;
+} ArenaAllocation; // 16 bytes
+
+typedef enum ArenaLevel_t
+{
+    AL_LOW = 0,
+    AL_MID = 1,
+    AL_HIGH = 2
+} ArenaLevel;
 
 typedef struct Arena_L2_t
 {
     Block* deferred_free;
-    void* _d;
     AtomicQueue thread_free;
-    
+    void* _d;
     // 32
     void *prev;
     void *next;
-    void *aligned_prev;
-    void *aligned_next;
+    
     // 64
     uint64_t  L0_allocations;   // base allocations here at the root
     uint64_t  L0_ranges;        // size of allocations at the root.
@@ -284,18 +312,16 @@ typedef struct Arena_L2_t
     uint64_t  L2_ranges;        // sizes of allocations.
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     
-} Arena_L2; // 128 bytes
+} Arena_L2; // 136 bytes
 
 typedef struct Arena_L1_t
 {
     Block* deferred_free;
-    void* _d;
     AtomicQueue thread_free;
-    
+    void* _d;
     void *prev;
     void *next;
-    void *aligned_prev;
-    void *aligned_next;
+
     // 64
     uint64_t  L0_allocations;   
     uint64_t  L0_ranges;
@@ -303,23 +329,20 @@ typedef struct Arena_L1_t
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
-} Arena_L1; // 104
+} Arena_L1; // 112
 
 typedef struct Arena_L0_t
 {
     Block* deferred_free;
-    void* _d;
     AtomicQueue thread_free;
-    
+    void* _d;
     void *prev;
     void *next;
-    void *aligned_prev;
-    void *aligned_next;
     
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
     
-} Arena_L0; // 80 bytes
+} Arena_L0; // 88 bytes
 
 
 typedef struct Partition_t
@@ -340,9 +363,12 @@ typedef struct PartitionAllocator_t
     Queue *sections;
     // free pages that have room for various size allocations.
     Queue *heaps;
+    
     // free pools of various sizes.
     Queue *pools;
-
+    Queue *aligned_z_cls;
+    Queue *aligned_cls;
+    
     // collection of messages for other threads
     AtomicMessage *thread_messages;
     uint32_t message_count; // how many threaded message have we acccumuated for passing out
@@ -379,7 +405,7 @@ typedef struct deferred_cache_t
 } deferred_cache;
 
 
-static inline void deferred_cache_enqueue( deferred_cache*c, DeferredFree* dl)
+static inline void deferred_cache_enqueue( deferred_cache*c, Heap* dl)
 {
     if(c->owned)
     {
@@ -446,7 +472,6 @@ static inline void _list_enqueue(void *queue, void *node, size_t head_offset, si
 void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offset);
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
-
 static inline void list_enqueueIndex(void *queue, void *node, void*base)
 {
     IndexQueue *tq = (IndexQueue *)queue;
@@ -462,22 +487,51 @@ static inline void list_enqueueIndex(void *queue, void *node, void*base)
 }
 void list_remove32(void *queue, void* node, void* base);
 
-static inline int32_t find_first_nones(uintptr_t x, int64_t n)
+static inline uint64_t compressMask(uint64_t mask_a, int32_t exp)
+{
+    uint64_t submask = (1ULL << (exp + 1)) - 1;
+    uint64_t width = 1ULL << exp;
+    uint32_t steps = 64 >> exp;
+    uint64_t new_mask = ~((1ULL << steps) - 1);
+    for(int i = 0; i < steps; i++)
+    {
+        int8_t on = ((submask & (mask_a >> i*width)) == submask);
+        new_mask |= (on << i);
+    }
+    return new_mask;
+};
+
+static inline int32_t find_first_nones(uintptr_t x, int64_t n, uint32_t step_exp)
 {
     if(n > 64)
     {
         return -1;
     }
+    
     int64_t s;
-    while (n > 1) {
-        s = n >> 1;
-        x = x & (x >> s);
-        n = n - s;
+    if(step_exp > 0)
+    {
+        uint32_t width = 1U << step_exp;
+        x = compressMask(x, step_exp);
+        while (n > 1) {
+            s = n >> 1;
+            x = x & (x >> s);
+            n = n - s;
+        }
+        return x == 0 ? -1 : __builtin_ctzll(x) * width;
+    }
+    else
+    {
+        while (n > 1) {
+            s = n >> 1;
+            x = x & (x >> s);
+            n = n - s;
+        }
     }
     return x == 0 ? -1 : __builtin_ctzll(x);
 }
 
-static inline int32_t find_first_nzeros(uintptr_t x, int64_t n) { return find_first_nones(~x, n); }
+static inline int32_t find_first_nzeros(uintptr_t x, int64_t n, int32_t exp) { return find_first_nones(~x, n, exp); }
 static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
 {
     uint64_t msk_cpy = mask >> cidx;

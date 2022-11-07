@@ -22,6 +22,12 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * HEAP_TYPE_COUNT);
     Queue *section_queue = (Queue *)thr_mem;
     thr_mem += CACHE_LINE;
+    
+    Queue *aligned_z = (Queue *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * 24);
+    Queue *aligned = (Queue *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * 24);
+    
     AtomicQueue *mqueue = (AtomicQueue *)thr_mem;
     mqueue->head = (uintptr_t)thr_mem;
     mqueue->tail = (uintptr_t)thr_mem;
@@ -34,6 +40,8 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     palloc->sections = section_queue;
     palloc->heaps = heap_queue;
     palloc->pools = pool_queue;
+    palloc->aligned_cls = aligned;
+    palloc->aligned_z_cls = aligned_z;
     palloc->thread_messages = NULL;
     palloc->thread_free_queue = mqueue;
 
@@ -81,7 +89,7 @@ int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *are
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, area_queue);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
     size_t start_addr = (pa->idx)*base_size + offset;
     size_t end_addr = start_addr + base_size;
     
@@ -90,7 +98,7 @@ int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *are
     uint32_t range = (uint32_t)(size >> type_exponent);
     range += (size & (1 << type_exponent) - 1) ? 1 : 0;
     size = type_size * range;
-    int32_t idx = find_first_nzeros(area_queue->area_mask, range);
+    int32_t idx = find_first_nzeros(area_queue->area_mask, range, 0);
     if (idx == -1) {
         return -1; // no room.
     }
@@ -111,7 +119,7 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
         const int num_sections = area_get_section_count(area);
         const ContainerType root_ctype = area_get_container_type(area);
         if (root_ctype == CT_HEAP) {
-            Heap *heap = (Heap *)((uintptr_t)area + sizeof(Area));
+            ImplicitList *heap = (ImplicitList *)((uintptr_t)area + sizeof(Area));
             uint32_t heapIdx = (area_get_type(area));
             Queue *queue = &pa->heaps[heapIdx];
             list_remove(queue, heap);
@@ -137,7 +145,7 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
                     Queue *queue = &pa->pools[pool->block_idx];
                     list_remove(queue, pool);
                 } else {
-                    Heap *heap = (Heap *)collection;
+                    ImplicitList *heap = (ImplicitList *)collection;
                     Queue *queue = &pa->heaps[0];
                     list_remove(queue, heap);
                 }
@@ -199,7 +207,7 @@ Area *area_list_get_area(PartitionAllocator* pa, Partition *queue, uint32_t cidx
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = ((size_t)1 << 40) << (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
     size_t start_addr = (pa->idx)*base_size + offset;
     uintptr_t area_addr = start_addr + ((1 << at) * BASE_AREA_SIZE) * cidx;
     return (Area *)area_addr;

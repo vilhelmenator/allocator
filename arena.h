@@ -182,9 +182,14 @@ static const arena_empty_mask_table empty_masks[7] = {
     {(arena_L0_mask << 12) | arena_empty_mask, (arena_L1_mask << 12) | arena_empty_mask, (arena_L2_mask << 12) | arena_empty_mask}
 };
 
-static inline const arena_size_table *get_size_table(Arena* a)
+static inline const arena_size_table *arena_get_size_table_by_idx(uint8_t aidx)
 {
-    return &arena_tables[a->container_exponent - arena_level_offset];
+    return &arena_tables[aidx];
+}
+
+static inline const arena_size_table *arena_get_size_table(Arena* a)
+{
+    return arena_get_size_table_by_idx(a->container_exponent - arena_level_offset);
 }
 
 static inline const uint64_t get_base_empty_mask(Arena* a, uint32_t level)
@@ -197,28 +202,6 @@ void printBits(size_t const size, void const *const ptr);
 void print_header(Arena *h, uintptr_t ptr);
 
 uint32_t num_consecutive_zeros(uint64_t test);
-
-static inline int32_t get_list_index_for_range(uint32_t range)
-{
-    if((range & (range - 1)) == 0)
-    {
-        return __builtin_ctz(range);
-    }
-    else
-    {
-        return 64 - __builtin_clz(range);
-    }
-}
-
-static inline int32_t get_list_index(uint64_t alloc_mask)
-{
-    uint32_t nz = num_consecutive_zeros(alloc_mask);
-    if(nz != 0)
-    {
-        return get_list_index_for_range(nz);
-    }
-    return -1;
-}
 
 
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
@@ -239,10 +222,56 @@ static inline uint32_t delta_exp_to_idx(uintptr_t a, uintptr_t b, size_t exp)
     return (uint32_t)((size_t)diff >> exp);
 }
 
+static inline uint32_t arena_get_range(uint32_t aidx, size_t size, ArenaLevel al)
+{
+    const arena_size_table *stable = arena_get_size_table_by_idx(aidx);
+    size_t range = size >> stable->exponents[al];
+    range += (size & (stable->sizes[al] - 1)) ? 1 : 0;
+    return (uint32_t)range;
+}
+
+static inline uint32_t arena_get_level_exponent(Arena* arena, ArenaLevel al)
+{
+    return (arena->container_exponent - 18 - (6*al));
+}
+
+static inline Arena* arena_get_header(uintptr_t addr)
+{
+    size_t asize = area_size_from_addr((uintptr_t)addr);
+    uintptr_t base = ALIGN_DOWN_2((uintptr_t)addr, asize);
+    uintptr_t header = base + sizeof(Arena_L2);
+    return (Arena*)header;
+}
+
+static inline uintptr_t arena_get_parent_block(Arena* arena, uintptr_t addr, ArenaLevel al)
+{
+    switch(al)
+    {
+        case AL_HIGH:
+            return ALIGN_DOWN_2((uintptr_t)addr, 1ULL << arena->container_exponent);
+        case AL_MID:
+            return ALIGN_DOWN_2((uintptr_t)addr, 1ULL << (arena->container_exponent - 6));  // 64th part
+        case AL_LOW:
+            return ALIGN_DOWN_2((uintptr_t)addr, 1ULL << (arena->container_exponent - 12)); // 4kth part
+    }
+}
+
+static inline uint32_t arena_get_local_idx(Arena* arena, uintptr_t addr, uintptr_t base, ArenaLevel al)
+{
+    return delta_exp_to_idx((uintptr_t)addr, base, arena_get_level_exponent(arena, al));
+};
+
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent);
 
 bool arena_has_room(Arena *h, size_t size);
-void *arena_get_block(Arena *h, size_t size);
+
+void *arena_alloc(Arena *h, uint32_t range, uint32_t exp, ArenaLevel al);
+
+void *arena_alloc_high(Arena *h, uint32_t range, uint32_t exp, int32_t *midx);
+void *arena_alloc_mid(Arena *h, uint32_t range, uint32_t exp, uint32_t midx, int32_t *bidx);
+void *arena_alloc_low(Arena *h, uint32_t range, uint32_t exp, uint32_t midx, uint32_t bidx, int32_t *idx);
+void *arena_alloc_at(uintptr_t addr, uint32_t range, uint32_t exp, ArenaLevel al);
+
 void arena_free(Arena *h, void *p, bool dummy);
 
 size_t arena_get_block_size(Arena *h, void *p);

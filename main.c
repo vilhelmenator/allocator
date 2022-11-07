@@ -223,6 +223,10 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0 and 1
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
+        if(i == 126)
+        {
+            int bbb = 0;
+        }
         void *all = cmalloc(allocation_size);
         pid = partition_from_addr((uintptr_t)all);
         if (all == NULL) {
@@ -305,13 +309,13 @@ bool test_heaps(size_t allocation_size)
     bool result = true;
     uint64_t num_allocations = 0;
     uint64_t num_extended_allocations = 0;
-    uint64_t max_count_per_heap_1 = ((1 << HT_32M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
-    uint64_t max_count_per_heap_2 = ((1 << HT_64M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
-    uint64_t max_count_per_heap_3 = ((1 << HT_128M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
-    uint64_t max_count_per_heap_4 = ((1 << HT_256M) - sizeof(Area) - sizeof(Heap)) / allocation_size;
+    uint64_t max_count_per_heap_1 = ((1 << HT_32M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
+    uint64_t max_count_per_heap_2 = ((1 << HT_64M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
+    uint64_t max_count_per_heap_3 = ((1 << HT_128M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
+    uint64_t max_count_per_heap_4 = ((1 << HT_256M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
     if (allocation_size <= max_small_size) { // 8 - 16k
         uint64_t base_parts = num_areas_part0 * 8 + num_areas_part1 * 16;
-        uint64_t max_count_per_heap = ((1 << HT_4M) - sizeof(Section) - sizeof(Heap)) / allocation_size;
+        uint64_t max_count_per_heap = ((1 << HT_4M) - sizeof(Section) - sizeof(ImplicitList)) / allocation_size;
         num_allocations = max_count_per_heap * base_parts;
         uint64_t max_count_extended_heap = max_count_per_heap * num_areas_part2 * 32;
         num_extended_allocations = num_allocations + max_count_extended_heap;
@@ -984,6 +988,7 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     // [ ] release all memory
     // [ ] release all levels
     //
+    /*
     size_t err_count = 0;
     size_t size_l0 = (1 << (a_exp - 18)) * mult;
     size_t size_l1 = (1 << (a_exp - 12)) * mult;
@@ -1032,6 +1037,7 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     free(variables);
     printf("error count: %lu\n", err_count);
     cfree_arena(mem);
+     */
 }
 
 
@@ -1041,7 +1047,7 @@ int main()
     //  thrd_t trd;
     //  thrd_create(&trd, &test, NULL);
     //  blach();
-    //  run_tests();
+      run_tests();
     //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //  cfree(m);
     //  m = cmalloc_os(123);
