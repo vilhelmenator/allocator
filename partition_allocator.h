@@ -26,6 +26,17 @@ static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator*
     uintptr_t delta = (uintptr_t)queue - (uintptr_t)&pa->area[0];
     return (uint32_t)(delta >> 5);
 }
+
+static inline uint32_t partition_allocator_get_arena_idx_from_queue(PartitionAllocator *pa, Arena *arena, Partition *queue)
+{
+    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);
+    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
+    size_t start_addr = (pa->idx)*base_size + offset;
+    const ptrdiff_t diff = (uint8_t *)arena - (uint8_t *)start_addr;
+    return (uint32_t)(((size_t)diff) >> arena->container_exponent);
+}
+
 static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, Partition *queue)
 {
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);

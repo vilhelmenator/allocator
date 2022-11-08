@@ -223,7 +223,7 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0 and 1
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        if(i == 126)
+        if(i == 4032)
         {
             int bbb = 0;
         }

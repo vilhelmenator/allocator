@@ -529,6 +529,7 @@ void* allocator_alloc_arena_high(Allocator *a, Arena* arena, uint32_t range, Are
     }
     else
     {
+        a->part_alloc->area[arena_get_arena_index(arena)].full_mask &= ~(1ULL << midx);
         // allocate a new arena.
         Arena* new_arena = allocator_alloc_arena(a, 1ULL << arena->container_exponent);
         if(new_arena != NULL)
@@ -556,6 +557,9 @@ void* allocator_alloc_arena_mid(Allocator *a, Arena* arena, uint32_t range, uint
     else
     {
         //
+        Partition* partition = &a->part_alloc->area[arena_get_arena_index(arena)];
+        int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, arena, partition);
+        partition->full_mask |= (1ULL << aidx);
         void* high = allocator_alloc_arena_high(a, arena, 1, result);
         if(high != NULL)
         {

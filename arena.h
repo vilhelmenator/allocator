@@ -182,6 +182,10 @@ static const arena_empty_mask_table empty_masks[7] = {
     {(arena_L0_mask << 12) | arena_empty_mask, (arena_L1_mask << 12) | arena_empty_mask, (arena_L2_mask << 12) | arena_empty_mask}
 };
 
+static inline const uint32_t arena_get_arena_index(Arena* a)
+{
+    return a->container_exponent - arena_level_offset;
+}
 static inline const arena_size_table *arena_get_size_table_by_idx(uint8_t aidx)
 {
     return &arena_tables[aidx];
@@ -189,7 +193,7 @@ static inline const arena_size_table *arena_get_size_table_by_idx(uint8_t aidx)
 
 static inline const arena_size_table *arena_get_size_table(Arena* a)
 {
-    return arena_get_size_table_by_idx(a->container_exponent - arena_level_offset);
+    return arena_get_size_table_by_idx(arena_get_arena_index(a));
 }
 
 static inline const uint64_t get_base_empty_mask(Arena* a, uint32_t level)
@@ -232,7 +236,8 @@ static inline uint32_t arena_get_range(uint32_t aidx, size_t size, ArenaLevel al
 
 static inline uint32_t arena_get_level_exponent(Arena* arena, ArenaLevel al)
 {
-    return (arena->container_exponent - 18 - (6*al));
+    uint64_t offset = (18 - (6*al));
+    return (arena->container_exponent - offset);
 }
 
 static inline Arena* arena_get_header(uintptr_t addr)
