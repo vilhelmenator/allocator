@@ -2,7 +2,7 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-#define ARENA_PATH
+//#define ARENA_PATH
 
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
@@ -30,7 +30,7 @@ typedef SSIZE_T ssize_t;
 
 #define POOL_BIN_COUNT 135
 #define HEAP_TYPE_COUNT 5
-
+#define ARENA_BIN_COUNT (18*6)
 #define MAX_ARES 64
 #define MAX_THREADS 1024
 
@@ -45,7 +45,7 @@ typedef SSIZE_T ssize_t;
 #else
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
-
+#define WSIZE (sizeof(intptr_t))
 #define ALIGN_UP_2(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
 #define ALIGN_DOWN_2(x, y) ((x) & ~((y) - 1))
 #define ALIGN(x) ALIGN_UP_2(x, sizeof(intptr_t))
@@ -279,8 +279,9 @@ typedef struct Arena_t
 typedef struct ArenaAllocation_t
 {
     Arena *arena;
-    uint32_t midx;
-    uint32_t bidx;
+    int32_t tidx; // top level idx
+    int32_t midx; // mid level idx
+    int32_t bidx; // bottom level idx
 } ArenaAllocation; // 16 bytes
 
 typedef enum ArenaLevel_t
@@ -366,8 +367,15 @@ typedef struct PartitionAllocator_t
     
     // free pools of various sizes.
     Queue *pools;
+    // 18 size classes. 6 per size class for remaining block exponent. 1,2,4,8,16,32
     Queue *aligned_z_cls;
     Queue *aligned_cls;
+    // when aligned requests are getting full.
+    // We map allocation of 1 block to lower sizes of multiple blocks.
+    // so a map to a particular partition will be offset down to the next arena
+    // that could fit a size request with multiple blocks.
+    // [0,1,2,3,4,5] -> 1,2,4,8,16,32
+    uint8_t *offset_map;
     
     // collection of messages for other threads
     AtomicMessage *thread_messages;

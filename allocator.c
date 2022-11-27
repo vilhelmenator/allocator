@@ -519,39 +519,44 @@ Arena* allocator_get_arena(const uint8_t clss, const bool zero)
 void* allocator_alloc_arena_high(Allocator *a, Arena* arena, uint32_t range, ArenaAllocation *result)
 {
     int32_t midx;
-    void* res = arena_alloc_high(arena, range, 0, &midx);
+    void* res = arena_alloc_high(arena, range, 0, &result->tidx);
     if(res != NULL)
     {
         result->arena = arena;
-        result->midx = midx;
-        result->bidx = 1; // first available b block.
+        result->midx = 1; // first available b block.
         return res;
     }
     else
     {
         a->part_alloc->area[arena_get_arena_index(arena)].full_mask &= ~(1ULL << midx);
         // allocate a new arena.
+        // we can go down by at most 5 steps.
+        // 1, 2, 4, 8, 16, 32
+        
         Arena* new_arena = allocator_alloc_arena(a, 1ULL << arena->container_exponent);
         if(new_arena != NULL)
         {
             result->arena = new_arena;
-            result->midx = 0; // the arena is completely empty
-            result->bidx = 1; // first available b block.
+            result->tidx = 0; // the arena is completely empty
+            result->midx = 1; // first available b block.
             return new_arena;
+        }
+        else
+        {
+            //a->part_alloc->offset_map[]
         }
         return NULL;
     }
 }
 
-void* allocator_alloc_arena_mid(Allocator *a, Arena* arena, uint32_t range, uint32_t midx, ArenaAllocation *result)
+void* allocator_alloc_arena_mid(Allocator *a, Arena* arena, uint32_t range, uint32_t tidx, ArenaAllocation *result)
 {
-    int32_t bidx;
-    void* res = arena_alloc_mid(arena, range, 0, midx, &bidx);
+    result->bidx = 1;
+    void* res = arena_alloc_mid(arena, range, 0, tidx, &result->midx);
     if(res != NULL)
     {
         result->arena = arena;
-        result->midx = midx;
-        result->bidx = bidx;
+        result->tidx = tidx;
         return res;
     }
     else
@@ -563,10 +568,9 @@ void* allocator_alloc_arena_mid(Allocator *a, Arena* arena, uint32_t range, uint
         void* high = allocator_alloc_arena_high(a, arena, 1, result);
         if(high != NULL)
         {
-            void* res = arena_alloc_mid(result->arena, range, 0, result->midx, &bidx);
+            void* res = arena_alloc_mid(result->arena, range, 0, result->tidx, &result->midx);
             if(res != NULL)
             {
-                result->bidx = bidx;
                 return res;
             }
         }
@@ -574,15 +578,15 @@ void* allocator_alloc_arena_mid(Allocator *a, Arena* arena, uint32_t range, uint
     }
 }
 
-void* allocator_alloc_arena_low(Allocator *a, Arena* arena, uint32_t range, uint32_t midx, uint32_t bidx, ArenaAllocation *result)
+void* allocator_alloc_arena_low(Allocator *a, Arena* arena, uint32_t range, uint32_t tidx, uint32_t midx, ArenaAllocation *result)
 {
-    int32_t idx;
-    void* res = arena_alloc_low(arena, range, 0, midx, bidx, &idx);
+    int32_t bidx;
+    void* res = arena_alloc_low(arena, range, 0, tidx, midx, &result->bidx);
     if(res != NULL)
     {
         result->arena = arena;
+        result->tidx = tidx;
         result->midx = midx;
-        result->bidx = bidx;
         return res;
     }
     else
@@ -591,7 +595,7 @@ void* allocator_alloc_arena_low(Allocator *a, Arena* arena, uint32_t range, uint
         void* mid = allocator_alloc_arena_mid(a, arena, 1, midx, result);
         if(mid != NULL)
         {
-            void* res = arena_alloc_low(result->arena, range, 0, result->midx, result->bidx, &idx);
+            void* res = arena_alloc_low(result->arena, range, 0, result->midx, result->bidx, &bidx);
             if(res != NULL)
             {
                 return res;
@@ -652,10 +656,61 @@ static inline uintptr_t allocator_arena_get_at(ArenaAllocation* alloc)
 
 void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const size_t alignment, const bool zero)
 {
-    //
+    
+    if(alignment > WSIZE)
+    {
+        // alignment needs to be a power of 2.
+        // the size needs to be a multiple of the alignment.
+        if(!POWER_OF_TWO(alignment))
+        {
+            return NULL;
+        }
+        
+        // size will be round up to the nearest multiple of the alignment.
+        size_t rem = ((size) & (alignment - 1));
+        size_t count = (size >> __builtin_ctzll(alignment));
+        if(rem != 0)
+        {
+            count++;
+        }
+        size_t asize = alignment * count;
+    }
+    else
+    {
+        if(POWER_OF_TWO(size))
+        {
+            // direct lookup.
+            //
+        }
+        else
+        {
+            //
+            uint32_t highbit = 63UL - __builtin_clzll(size);
+            uint32_t mask_offset = highbit - 5;
+            uint64_t bmask = (1 << (mask_offset + 1)) - 1;
+            size_t asize = size >> mask_offset;
+            if((size & bmask) != 0)
+            {
+                asize++; // round up
+            }
+            
+            for(uint32_t i = 1; i < 5; i++)
+            {
+                //
+                size_t csize = asize >> i;
+                if((asize & 0x1) != 0)
+                {
+                    csize++;
+                }
+            }
+            // mask out high 5 bits
+        }
+    }
     int32_t ss = __builtin_clzll(size);
-    int32_t high_index = 63 - ss;
-    int32_t align_idx = (high_index - 4);
+    int32_t high_index = 63UL - ss;
+    int32_t base_offset = high_index - 4;
+    int32_t list_offset = alloc->part_alloc->offset_map[base_offset];
+    int32_t align_idx = base_offset - list_offset;
     
     // check what is available at all levels.
     int32_t level_idx = align_idx / 6;
@@ -719,6 +774,7 @@ void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const
         {
             block = allocator_alloc_arena_high(alloc, arena, range, &result);
         }
+        
         Heap* current_source = (Heap*)allocator_arena_get_at(&result);
         if(current_source != start)
         {
@@ -733,6 +789,7 @@ void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const
         Queue *q = &alloc->part_alloc->aligned_z_cls[align_idx];
         list_enqueue(q, (Heap*)allocator_arena_get_at(&result));
     }
+    
     if(block != NULL)
     {
         

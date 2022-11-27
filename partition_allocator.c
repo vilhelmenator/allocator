@@ -24,9 +24,11 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     thr_mem += CACHE_LINE;
     
     Queue *aligned_z = (Queue *)thr_mem;
-    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * 24);
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * ARENA_BIN_COUNT);
     Queue *aligned = (Queue *)thr_mem;
-    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * 24);
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * ARENA_BIN_COUNT);
+    uint8_t *offset_m = (uint8_t *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(uint8_t) * ARENA_BIN_COUNT);
     
     AtomicQueue *mqueue = (AtomicQueue *)thr_mem;
     mqueue->head = (uintptr_t)thr_mem;
@@ -42,6 +44,7 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     palloc->pools = pool_queue;
     palloc->aligned_cls = aligned;
     palloc->aligned_z_cls = aligned_z;
+    palloc->offset_map = offset_m;
     palloc->thread_messages = NULL;
     palloc->thread_free_queue = mqueue;
 
