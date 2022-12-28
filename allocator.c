@@ -141,48 +141,7 @@ static inline void allocator_release_cache(Allocator *a)
     a->c_cache.header = 0;
 }
 
-static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
-{
-    if(a->prev_size != s)
-    {
-        allocator_release_cached_pool(a);
-        return NULL;
-    }
-    if(a->c_cache.rem_blocks)
-    {
-        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
-    }
-    else
-    {
-        if(a->c_cache.cache_type == CACHE_POOL)
-        {
-            Pool* p = (Pool*)a->c_cache.header;
-            if(pool_is_full(p))
-            {
-                allocator_set_cached_pool(a, p, true);
-                return pool_aquire_block(p);
-            }
-            else
-            {
-                if(!pool_is_empty(p))
-                {
-                    if(p->num_committed < p->num_available)
-                    {
-                        allocator_set_cached_pool(a, p, true);
-                        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
-                    }
-                    else
-                    {
-                        return pool_aquire_block(p);
-                    }
-                }
-            }
-            
-            allocator_release_cached_pool(a);
-        }
-    }
-    return NULL;
-}
+
 
 void allocator_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last)
 {
@@ -528,7 +487,9 @@ void* allocator_alloc_arena_high(Allocator *a, Arena* arena, uint32_t range, Are
     }
     else
     {
-        a->part_alloc->area[arena_get_arena_index(arena)].full_mask &= ~(1ULL << midx);
+        // the idx of the arena.
+        size_t aidx = arena_get_arena_index(arena);
+        a->part_alloc->area[aidx].full_mask &= ~(1ULL << aidx);
         // allocate a new arena.
         // we can go down by at most 5 steps.
         // 1, 2, 4, 8, 16, 32
@@ -540,10 +501,6 @@ void* allocator_alloc_arena_high(Allocator *a, Arena* arena, uint32_t range, Are
             result->tidx = 0; // the arena is completely empty
             result->midx = 1; // first available b block.
             return new_arena;
-        }
-        else
-        {
-            //a->part_alloc->offset_map[]
         }
         return NULL;
     }
@@ -654,63 +611,113 @@ static inline uintptr_t allocator_arena_get_at(ArenaAllocation* alloc)
     return (al1 + (alloc->bidx * stable->sizes[1]));
 }
 
-void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const size_t alignment, const bool zero)
+void* getMemory(size_t base_size, size_t block_count, size_t block_offset, size_t refsize)
 {
     
-    if(alignment > WSIZE)
+    //
+    //
+    //
+    
+    //
+    // get size list.
+    // get block count.
+    //
+    //
+    return NULL;
+}
+
+void* allocator_base_allocation(size_t size, const size_t alignment)
+{
+    if(size == 0)
     {
-        // alignment needs to be a power of 2.
-        // the size needs to be a multiple of the alignment.
-        if(!POWER_OF_TWO(alignment))
+        return NULL;
+    }
+    // if not zero, we align to the next multiple of wordwidth
+    size = ALIGN(size);
+    // alignment needs to be a power of 2.
+    // the size needs to be a multiple of the alignment.
+    if(!POWER_OF_TWO(alignment))
+    {
+        return NULL;
+    }
+    
+    if(size < alignment)
+    {
+        size = alignment;
+    }
+    
+    // if size is not a multiple of alignment.
+    uint32_t highbit = MAX(63UL - __builtin_clzll(size), 5);
+    uint32_t mask_offset = highbit - 5;
+    size_t asize = 1;
+    if(POWER_OF_TWO(size))
+    {
+        mask_offset += 5;
+        for(uint32_t i = 0; i < 6; i++)
         {
-            return NULL;
+            size_t base_size = (1 << (mask_offset - i));
+            if(base_size < (1ULL << 4))
+            {
+                break;
+            }
+            void* res = getMemory(base_size, asize, 0, size);
+            if(res != NULL)
+            {
+                return res;
+            }
+            asize *= 2;
         }
-        
-        // size will be round up to the nearest multiple of the alignment.
-        size_t rem = ((size) & (alignment - 1));
-        size_t count = (size >> __builtin_ctzll(alignment));
-        if(rem != 0)
-        {
-            count++;
-        }
-        size_t asize = alignment * count;
     }
     else
     {
-        if(POWER_OF_TWO(size))
+        size_t block_offset = 1;
+        uint64_t bmask = (1 << (mask_offset + 1)) - 1;
+        asize = size >> mask_offset;
+        if((size & bmask) != 0)
         {
-            // direct lookup.
-            //
+            asize++; // round up if any low bit is set
         }
-        else
+        for(uint32_t i = 0; i < 6; i++)
         {
-            //
-            uint32_t highbit = 63UL - __builtin_clzll(size);
-            uint32_t mask_offset = highbit - 5;
-            uint64_t bmask = (1 << (mask_offset + 1)) - 1;
-            size_t asize = size >> mask_offset;
-            if((size & bmask) != 0)
+            size_t base_size = (1 << (mask_offset + i));
+            if((base_size >= (1ULL << 4)) && (asize < (1ULL << 6)))
             {
-                asize++; // round up
-            }
-            
-            for(uint32_t i = 1; i < 5; i++)
-            {
-                //
-                size_t csize = asize >> i;
-                if((asize & 0x1) != 0)
+                block_offset = alignment >> (mask_offset + i);
+                void* res = getMemory(base_size, asize, block_offset < 2? 0:block_offset, size);
+                if(res != NULL)
                 {
-                    csize++;
+                    return res;
                 }
             }
-            // mask out high 5 bits
+            size_t csize = asize >> 1;
+            if((asize & 0x1) != 0)
+            {
+                csize++;
+            }
+            asize = csize;
         }
     }
+    // next power of two
+    // Desperate search is wasteful
+    // seeks for 1 available block in the higher address ranges.
+    for(uint32_t i = 0; i < 6; i++)
+    {
+        asize =  1ULL << (highbit + (i+1));
+        void* res = getMemory(asize, 1, 0, size);
+        if(res != NULL)
+        {
+            return res;
+        }
+    }
+    return NULL;
+}
+
+void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const size_t alignment, const bool zero)
+{
     int32_t ss = __builtin_clzll(size);
     int32_t high_index = 63UL - ss;
     int32_t base_offset = high_index - 4;
-    int32_t list_offset = alloc->part_alloc->offset_map[base_offset];
-    int32_t align_idx = base_offset - list_offset;
+    int32_t align_idx = base_offset;
     
     // check what is available at all levels.
     int32_t level_idx = align_idx / 6;
@@ -811,40 +818,31 @@ void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const
     }
 }
 
-void* allocator_malloc_aligned_lt2k(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
+void* allocator_malloc_lt2k(Allocator* alloc, const size_t size)
 {
-    //
-    if((alignment > sizeof(void*)) || zero)
+    uint8_t pc = size_to_pool(size);
+    void* res = allocator_malloc_pool_find_fit(alloc, pc);
+    if(res == NULL)
     {
-        return allocator_malloc_aligned_lt32m(alloc, size, alignment, zero);
-    }
-    else
-    {
-        //
-        uint8_t pc = size_to_pool(size);
-        void* res = allocator_malloc_pool_find_fit(alloc, pc);
-        if(res == NULL)
+        res = allocator_malloc_arena_find_fit(alloc, sizeof(void*), size);
+        if(res != NULL)
         {
-            res = allocator_malloc_arena_find_fit(alloc, alignment, size);
-            if(res != NULL)
-            {
-                return res;
-            }
+            return res;
         }
-        
-        uint8_t arena_idx = pc >> 3;
-        const arena_size_table *stable = arena_get_size_table_by_idx(arena_idx);
-
-        // get size of alignment
-        Pool* new_pool = allocator_malloc_aligned_lt32m(alloc, stable->sizes[2], alignment, false);
-        if (new_pool == NULL) {
-            return NULL;
-        }
-        pool_init(new_pool, 0, pc, (uint32_t)stable->sizes[2], size);
-        res = pool_get_free_block(new_pool);
-        allocator_set_cached_pool(alloc, new_pool, true);
-        return res;
     }
+    
+    uint8_t arena_idx = pc >> 3;
+    const arena_size_table *stable = arena_get_size_table_by_idx(arena_idx);
+
+    // get size of alignment
+    Pool* new_pool = allocator_malloc_aligned_lt32m(alloc, stable->sizes[2], sizeof(void*), false);
+    if (new_pool == NULL) {
+        return NULL;
+    }
+    pool_init(new_pool, 0, pc, (uint32_t)stable->sizes[2], size);
+    res = pool_get_free_block(new_pool);
+    allocator_set_cached_pool(alloc, new_pool, true);
+    return res;
 }
 
 void* allocator_malloc_base(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
@@ -868,9 +866,13 @@ void* allocator_malloc_base(Allocator* alloc, const size_t size, const size_t al
     // 8 - high address slabs.
     //
     
-    if(size < (1 << 11)) // 8 <= n < 2k
+    if((size < (1 << 11)) && (alignment == sizeof(void*)) && !zero) // 8 <= n < 2k
     {
-        return allocator_malloc_aligned_lt2k(alloc, size, alignment, zero);
+        // the common allocation path.
+        // no alignment requirements.
+        // no zero requirements.
+        // and smaller than 2k in size.
+        return allocator_malloc_lt2k(alloc, size);
     }
     else
     {
@@ -942,11 +944,19 @@ void* allocator_malloc_base(Allocator* alloc, const size_t size, const size_t al
     }
 }
 
-static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s)
+static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s, Section *prev_section)
 {
-    Section *sfree_section = allocator_get_free_section(a, s, get_pool_size_class(s));
-    if (sfree_section == NULL) {
-        return NULL;
+    Section *sfree_section = NULL;
+    if(prev_section != NULL && !section_is_full(prev_section))
+    {
+        sfree_section = prev_section;
+    }
+    else
+    {
+        sfree_section = allocator_get_free_section(a, s, get_pool_size_class(s));
+        if (sfree_section == NULL) {
+            return NULL;
+        }
     }
 
     const unsigned int coll_idx = section_reserve_next(sfree_section);
@@ -957,9 +967,8 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     return p;
 }
 
-void *allocator_alloc_from_pool(Allocator *a, const size_t s)
+static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
 {
-    const int32_t pool_idx = size_to_pool(s);
     Queue *queue = &a->part_alloc->pools[pool_idx];
     Pool *start = queue->head;
     void*res = NULL;
@@ -970,7 +979,7 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     }
     else
     {
-        start = allocator_alloc_pool(a, pool_idx, (uint32_t)s);
+        start = allocator_alloc_pool(a, pool_idx, (uint32_t)s, prev_section);
         if (start == NULL) {
             return NULL;
         }
@@ -978,6 +987,12 @@ void *allocator_alloc_from_pool(Allocator *a, const size_t s)
     }
     allocator_set_cached_pool(a, start, true);
     return res;
+}
+
+void *allocator_alloc_from_pool(Allocator *a, const size_t s)
+{
+    const int32_t pool_idx = size_to_pool(s);
+    return allocator_alloc_from_pool_list(a, s, pool_idx, NULL);
 }
 
 void free_extended_part(size_t pid, void *p)
@@ -1086,7 +1101,49 @@ static inline void *allocator_malloc_fallback(Allocator *a, size_t as)
     // hopefully this is not NULL
     return ptr;
 }
-
+static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
+{
+    if(a->prev_size != s)
+    {
+        allocator_release_cached_pool(a);
+        return NULL;
+    }
+    if(a->c_cache.rem_blocks)
+    {
+        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
+    }
+    else
+    {
+        if(a->c_cache.cache_type == CACHE_POOL)
+        {
+            Pool* p = (Pool*)a->c_cache.header;
+            if(pool_is_full(p))
+            {
+                allocator_set_cached_pool(a, p, true);
+                return pool_aquire_block(p);
+            }
+            else
+            {
+                if(!pool_is_empty(p))
+                {
+                    if(p->num_committed < p->num_available)
+                    {
+                        allocator_set_cached_pool(a, p, true);
+                        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
+                    }
+                    else
+                    {
+                        return pool_aquire_block(p);
+                    }
+                }
+            }
+            allocator_release_cached_pool(a);
+            //Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+            //return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
+        }
+    }
+    return NULL;
+}
 void *allocator_malloc(Allocator *a, size_t s)
 {
     // do we have  cached pool to use of a fitting size?

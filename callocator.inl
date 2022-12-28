@@ -37,7 +37,7 @@ typedef SSIZE_T ssize_t;
 
 #define MAX(x, y) (x ^ ((x ^ y) & -(x < y)))
 #define MIN(x, y) (y ^ ((x ^ y) & -(x < y)))
-#define POWER_OF_TWO(x) ((x & (x - 1)) == 0)
+#define POWER_OF_TWO(x) (x && !(x & (x - 1)))
 
 #define CACHE_LINE 64
 #if defined(WINDOWS)
@@ -370,12 +370,6 @@ typedef struct PartitionAllocator_t
     // 18 size classes. 6 per size class for remaining block exponent. 1,2,4,8,16,32
     Queue *aligned_z_cls;
     Queue *aligned_cls;
-    // when aligned requests are getting full.
-    // We map allocation of 1 block to lower sizes of multiple blocks.
-    // so a map to a particular partition will be offset down to the next arena
-    // that could fit a size request with multiple blocks.
-    // [0,1,2,3,4,5] -> 1,2,4,8,16,32
-    uint8_t *offset_map;
     
     // collection of messages for other threads
     AtomicMessage *thread_messages;
