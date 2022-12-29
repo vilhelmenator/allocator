@@ -223,10 +223,6 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0 and 1
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        if(i == 4032)
-        {
-            int bbb = 0;
-        }
         void *all = cmalloc(allocation_size);
         pid = partition_from_addr((uintptr_t)all);
         if (all == NULL) {
@@ -457,6 +453,11 @@ bool test_slabs(void)
     if (nll != NULL) {
         state = false;
     }
+    void* gb = (uint64_t *)cmalloc(16 * sz_gb);
+    if (gb != NULL) {
+        cfree(gb);
+        return false;
+    }
 end:
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         cfree(variables[i]);
@@ -486,7 +487,9 @@ bool test_areas(void)
     uintptr_t end_addr = (uintptr_t)variables[num_alloc - 2];
     uintptr_t next_addr = (uintptr_t)variables[num_alloc - 3];
     cfree(variables[num_alloc - 2]);
+    variables[num_alloc - 2] = NULL;
     cfree(variables[num_alloc - 3]);
+    variables[num_alloc - 3] = NULL;
     uintptr_t new_addr = (uintptr_t)cmalloc(allocation_size);
     variables[num_alloc - 3] = (uint64_t *)new_addr;
     if (new_addr != next_addr && new_addr != end_addr) {
@@ -503,14 +506,19 @@ bool test_areas(void)
     next_addr = (uintptr_t)variables[num_alloc - 5];
     // remove four and try to allocate 780 megs;
     cfree(variables[num_alloc - 2]);
+    variables[num_alloc - 2] = NULL;
     cfree(variables[num_alloc - 3]);
+    variables[num_alloc - 3] = NULL;
     cfree(variables[num_alloc - 4]);
+    variables[num_alloc - 4] = NULL;
     cfree(variables[num_alloc - 5]);
+    variables[num_alloc - 5] = NULL;
     new_addr = (uintptr_t)cmalloc(780 * sz_mb);
     if (new_addr != next_addr) {
         num_alloc -= 5;
         cfree((void *)new_addr);
         cfree(variables[num_alloc - 1]);
+        variables[num_alloc - 1] = NULL;
         state = false;
         goto end;
     }
@@ -521,10 +529,12 @@ bool test_areas(void)
     variables[num_alloc - 4] = (uint64_t *)cmalloc(allocation_size);
     variables[num_alloc - 5] = (uint64_t *)cmalloc(allocation_size);
     cfree(variables[num_alloc - 2]);
+    variables[num_alloc - 2] = NULL;
     nll = cmalloc(256 * sz_mb);
     if (partition_from_addr((uintptr_t)nll) != pid) {
         cfree(nll);
         cfree(variables[num_alloc - 1]);
+        variables[num_alloc - 1] = NULL;
         num_alloc -= 2;
         state = false;
         goto end;

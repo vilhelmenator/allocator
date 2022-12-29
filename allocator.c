@@ -303,6 +303,17 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
         if (implicitList_has_room(start, s)) {
             return implicitList_get_block(start, (uint32_t)s);
         } else {
+            if(heap_size_cls != 0)
+            {
+                Area *area = area_from_addr((uintptr_t)start);
+                if(area_is_full(area))
+                {
+                    AreaType at = area_get_type(area);
+                    Partition* partition = &a->part_alloc->area[at];
+                    int32_t aidx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+                    partition->full_mask |= (1ULL << aidx);
+                }
+            }
             list_remove(queue, start);
         }
         start = next;
@@ -324,6 +335,10 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
     AreaType at = get_area_type_for_heap(s);
     int32_t area_idx = -1;
     Partition* partition = partition_allocator_get_free_area(a->part_alloc, s, at, &area_idx);
+    if(partition == NULL)
+    {
+        return NULL;
+    }
     Area* new_area = partition_allocator_area_at_idx(a->part_alloc, partition, area_idx);
     if (new_area == NULL) {
         return NULL;
@@ -331,6 +346,7 @@ void *allocator_alloc_from_heap(Allocator *a, const size_t s)
     
     if((partition->zero_mask & 1ULL << area_idx) == 0)
     {
+        at = partition_allocator_get_partition_idx(a->part_alloc, partition);
         area_init(new_area, a->idx, at);
         partition->zero_mask |= (1ULL << area_idx);
     }
@@ -359,6 +375,8 @@ void *allocator_alloc_slab(Allocator *a, const size_t s)
     {
         area_init(area, a->idx, AT_FIXED_256);
         partition->zero_mask |= (1ULL << area_idx);
+        partition->area_mask |= (1ULL << area_idx);
+        partition->full_mask |= (1ULL << area_idx);
     }
     area_reserve_all(area);
     area_set_container_type(area, CT_SLAB);
@@ -1043,6 +1061,10 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
                 allocator_release_cached_pool(a);
             }
             deferred_cache_add(&a->c_deferred, p);
+            if(a->c_deferred.num > 255)
+            {
+                int bb = 0;
+            }
         }
     }
 }
@@ -1101,6 +1123,7 @@ static inline void *allocator_malloc_fallback(Allocator *a, size_t as)
     // hopefully this is not NULL
     return ptr;
 }
+
 static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
 {
     if(a->prev_size != s)
@@ -1117,35 +1140,23 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
         if(a->c_cache.cache_type == CACHE_POOL)
         {
             Pool* p = (Pool*)a->c_cache.header;
-            if(pool_is_full(p))
+            if(!pool_is_empty(p))
             {
-                allocator_set_cached_pool(a, p, true);
                 return pool_aquire_block(p);
             }
-            else
-            {
-                if(!pool_is_empty(p))
-                {
-                    if(p->num_committed < p->num_available)
-                    {
-                        allocator_set_cached_pool(a, p, true);
-                        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
-                    }
-                    else
-                    {
-                        return pool_aquire_block(p);
-                    }
-                }
-            }
             allocator_release_cached_pool(a);
-            //Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-            //return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
+            deferred_cache_release(a, NULL);
+            Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+            return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
         }
     }
     return NULL;
 }
 void *allocator_malloc(Allocator *a, size_t s)
 {
+    // load memory struct
+    // get memory
+    //
     // do we have  cached pool to use of a fitting size?
     void *ptr = NULL;
     if (a->c_cache.header != 0) {

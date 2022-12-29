@@ -69,8 +69,11 @@ void *implicitList_coalesce(ImplicitList *h, void *bp);
 
 void implicitList_reset(ImplicitList *h);
 
+void implicitList_freeAll(ImplicitList *h);
+
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce);
 
 void implicitList_extend(ImplicitList *h);
 
 void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize);
+void implicitList_move_deferred(ImplicitList *h);

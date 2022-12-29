@@ -1,6 +1,7 @@
 
 #include "callocator.inl"
 #include "pool.h"
+#include "heap.h"
 #include "partition_allocator.h"
 #include "../cthread/cthread.h"
 
@@ -52,6 +53,8 @@ void deferred_cache_init(Allocator* a, void*p)
         deferred_cache*c = &a->c_deferred;
         const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)p, pid);
         c->owned = a->idx == partition_owners[part_id];
+        size_t area_size = area_size_from_partition_id(pid);
+        Area *area = (Area *)((uintptr_t)p & ~(area_size - 1));
         
         // Arenas
         /*
@@ -61,12 +64,44 @@ void deferred_cache_init(Allocator* a, void*p)
         c->start = ((uintptr_t)p & ~(psize - 1));
         c->end = c->start + psize;
         */
+        Heap *d = NULL;
+        switch(area_get_container_type(area))
+        {
+            case CT_SECTION:
+            {
+                Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+                void* collection = section_find_collection(section, p);
+                c->start = (uintptr_t)collection;
+                if(section->type != ST_HEAP_4M)
+                {
+                    Pool* pool = (Pool*)collection;
+                    c->end = c->start + sizeof(Pool) + (pool->num_available * pool->block_size);
+                }
+                else
+                {
+                    ImplicitList* il = (ImplicitList*)collection;
+                    c->end = c->start + il->total_memory;
+                }
+                d = (Heap*)collection;
+                break;
+            }
+            case CT_HEAP:
+            {
+                ImplicitList *il = (ImplicitList *)((uintptr_t)area + sizeof(Area));
+                c->start = (uintptr_t)il;
+                c->end = c->start + il->total_memory;
+                d = (Heap*)il;
+                break;
+            }
+            default:
+            {
+                PartitionAllocator *_part_alloc = partition_allocators[part_id];
+                partition_allocator_free_area(_part_alloc, area);
+                return;
+            }
+                
+        };
         
-        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-        Pool *pool = (Pool *)section_find_collection(section, p);
-        c->start = (uintptr_t)pool;
-        c->end = c->start + sizeof(Pool) + (pool->num_available * pool->block_size);
-        Heap *d = (Heap*)pool;
         ((Block*)p)->next = d->free;
         d->free = NULL;
         c->items.head = p;
@@ -85,9 +120,8 @@ void deferred_cache_release(Allocator* a, void* p)
         {
             Heap *d = (Heap*)c->start;
             d->free = c->items.head;
-            Pool *pool = (Pool*)c->start;
-            Section *section = (Section *)((uintptr_t)pool & ~(SECTION_SIZE - 1));
-            Area *area = area_from_addr((uintptr_t)pool);
+            
+            Area *area = area_from_addr((uintptr_t)c->start);
             if(area_is_full(area))
             {
                 AreaType at = area_get_type(area);
@@ -95,33 +129,85 @@ void deferred_cache_release(Allocator* a, void* p)
                 int32_t aidx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
                 partition->full_mask &= ~(1ULL << aidx);
             }
-            
-            pool->num_used -= c->num;
-            if(pool->num_used == 0)
+            if(area_get_container_type(area) == CT_SECTION)
             {
-                section_free_idx(section, pool->idx);
-                // the last piece was returned so make the first item the start of the free
-                pool->free = (Block*)((uintptr_t)pool + sizeof(Pool));
-                pool->free->next = NULL;
-                pool->num_committed = 1;
-                init_heap((Heap*)pool);
+                Section *section = (Section *)((uintptr_t)c->start & ~(SECTION_SIZE - 1));
+
+                if(section->type != ST_HEAP_4M)
+                {
+                    Pool *pool = (Pool*)c->start;
+                    pool->num_used -= c->num;
+                    if(pool->num_used == 0)
+                    {
+                        section_free_idx(section, pool->idx);
+                        // the last piece was returned so make the first item the start of the free
+                        pool->free = (Block*)((uintptr_t)pool + sizeof(Pool));
+                        pool->free->next = NULL;
+                        pool->num_committed = 1;
+                        init_heap((Heap*)pool);
+                    }
+                    else
+                    {
+                        Queue *queue = &a->part_alloc->pools[pool->block_idx];
+                        if(!pool_is_connected(pool) && queue->head != pool)
+                        {
+                            list_enqueue(queue, pool);
+                        }
+                    }
+                }
+                else
+                {
+                    ImplicitList *heap = (ImplicitList*)c->start;
+                    heap->num_allocations -= c->num;
+                    if(heap->num_allocations == 0)
+                    {
+                        implicitList_freeAll(heap);
+                        init_heap((Heap*)heap);
+                    }
+                    else
+                    {
+                        uint32_t heapIdx = area_get_type((Area *)section);
+                        // if the free pools list is empty.
+                        if (!implicitList_is_connected(heap)) {
+                            // reconnect
+                            Queue *queue = &a->part_alloc->heaps[heapIdx];
+                            if (queue->head != heap && queue->tail != heap) {
+                                list_enqueue(queue, heap);
+                            }
+                        }
+                    }
+                }
+            
+                if (!section_is_connected(section)) {
+                    int8_t pid = partition_from_addr((uintptr_t)section);
+                    const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)section, pid);
+                    PartitionAllocator *_part_alloc = partition_allocators[part_id];
+                    Queue *sections = _part_alloc->sections;
+                    if (sections->head != section && sections->tail != section) {
+                        list_enqueue(sections, section);
+                    }
+                }
             }
             else
             {
-                Queue *queue = &a->part_alloc->pools[pool->block_idx];
-                if(!pool_is_connected(pool) && queue->head != pool)
+                ImplicitList *heap = (ImplicitList*)c->start;
+                heap->num_allocations -= c->num;
+                if(heap->num_allocations == 0)
                 {
-                    list_enqueue(queue, pool);
+                    implicitList_freeAll(heap);
+                    init_heap((Heap*)heap);
                 }
-            }
-            
-            if (!section_is_connected(section)) {
-                int8_t pid = partition_from_addr((uintptr_t)section);
-                const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)section, pid);
-                PartitionAllocator *_part_alloc = partition_allocators[part_id];
-                Queue *sections = _part_alloc->sections;
-                if (sections->head != section && sections->tail != section) {
-                    list_enqueue(sections, section);
+                else
+                {
+                    uint32_t heapIdx = area_get_type((Area *)area);
+                    // if the free pools list is empty.
+                    if (!implicitList_is_connected(heap)) {
+                        // reconnect
+                        Queue *queue = &a->part_alloc->heaps[heapIdx];
+                        if (queue->head != heap && queue->tail != heap) {
+                            list_enqueue(queue, heap);
+                        }
+                    }
                 }
             }
         }

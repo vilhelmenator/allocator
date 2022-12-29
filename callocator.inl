@@ -240,6 +240,13 @@ typedef struct Pool_t
 
 typedef struct ImplicitList_t
 {
+    // 56 byte header
+    Block* deferred_free;
+    AtomicQueue thread_free;
+    void* _d;
+    void *prev;
+    void *next;
+    
     int32_t idx;           // index into the parent section/if in a section.
     uint32_t total_memory; // how much do we have available in total
     uint32_t used_memory;  // how much have we used
@@ -249,8 +256,6 @@ typedef struct ImplicitList_t
 
     Queue free_nodes;
 
-    struct ImplicitList_t *prev;
-    struct ImplicitList_t *next;
 } ImplicitList;
 
 typedef struct HeapBlock_t

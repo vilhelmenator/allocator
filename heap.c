@@ -54,10 +54,39 @@ void implicitList_place(ImplicitList *h, void *bp, const uint32_t asize, const i
     }
 }
 
+void implicitList_move_deferred(ImplicitList *h)
+{
+    // for every item in the deferred list.
+    QNode *current = (QNode *)h->free_nodes.head;
+    if (current != NULL) {
+        return;
+    }
+    h->free_nodes.head = h->deferred_free;
+    Block* c = h->deferred_free;
+    Block* tail = NULL;
+    while(c != NULL)
+    {
+        tail = c;
+        c = c->next;
+        h->num_allocations--;
+    }
+    if(h->num_allocations == 1)
+    {
+        int bbb  = 0;
+    }
+    h->free_nodes.tail = tail;
+    h->deferred_free = NULL;
+}
+
 void *implicitList_find_fit(ImplicitList *h, const uint32_t asize)
 {
     // find the first fit.
     QNode *current = (QNode *)h->free_nodes.head;
+    if(current == NULL)
+    {
+        implicitList_move_deferred(h);
+        current = (QNode *)h->free_nodes.head;
+    }
     while (current != NULL) {
         HeapBlock *hb = (HeapBlock *)current;
         int header = implicitList_block_get_header(hb);
@@ -189,6 +218,22 @@ void implicitList_reset(ImplicitList *h)
     implicitList_block_set_header(hb, h->total_memory, 0, 1);
 
     h->max_block = h->total_memory;
+    h->used_memory = 0;
+    init_heap((Heap *)h);
+}
+
+void implicitList_freeAll(ImplicitList *h)
+{
+    if (h->total_memory < SECTION_SIZE) {
+        // if we have been placed inside of a section.
+        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+        section_free_all(section);
+    } else {
+        size_t area_size = area_size_from_addr((uintptr_t)h);
+        Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
+        area_free_all(area);
+    }
+    implicitList_reset(h);
 }
 
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
@@ -212,16 +257,7 @@ void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
     h->used_memory -= size;
 
     if (--h->num_allocations == 0) {
-        if (h->total_memory < SECTION_SIZE) {
-            // if we have been placed inside of a section.
-            Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-            section_free_all(section);
-        } else {
-            size_t area_size = area_size_from_addr((uintptr_t)h);
-            Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
-            area_free_all(area);
-        }
-        implicitList_reset(h);
+        implicitList_freeAll(h);
     }
 }
 
@@ -238,6 +274,7 @@ void implicitList_extend(ImplicitList *h)
 
 void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
 {
+    init_heap((Heap *)h);
     void *blocks = (uint8_t *)h + sizeof(ImplicitList);
     const uintptr_t section_end = ((uintptr_t)h + (psize - 1)) & ~(psize - 1);
     const size_t remaining_size = section_end - (uintptr_t)blocks;

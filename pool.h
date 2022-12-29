@@ -148,7 +148,7 @@ static inline void *pool_aquire_block(Pool *p)
     } else {
         const AtomicQueue *q = &p->thread_free;
         if (q->head != q->tail) {
-            //deferred_move_thread_free((DeferredFree *)p);
+            deferred_move_thread_free((Heap *)p);
         }
         if (p->deferred_free != NULL) {
             pool_move_deferred(p);

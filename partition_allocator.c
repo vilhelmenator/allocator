@@ -2,6 +2,7 @@
 #include "partition_allocator.h"
 #include "os.h"
 #include "pool.h"
+#include "heap.h"
 
 cache_align PartitionAllocator *partition_allocators[MAX_THREADS];
 cache_align uint8_t default_allocator_buffer[DEFAULT_OS_PAGE_SIZE];
@@ -165,8 +166,8 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     uint64_t new_mask = ((1ULL << range) - 1UL) << idx;
     list->area_mask = list->area_mask & ~new_mask;
     list->range_mask = list->range_mask & ~new_mask;
-    list->zero_mask = list->range_mask & ~new_mask;
-    list->full_mask = list->range_mask & ~new_mask;
+    list->zero_mask = list->zero_mask & ~new_mask;
+    list->full_mask = list->full_mask & ~new_mask;
     int8_t previous_area = ((int8_t*)&pa->previous_partitions)[at];
     if ((idx == previous_area) || (list->area_mask == 0)) {
         ((int8_t*)&pa->previous_partitions)[at] = -1;
@@ -273,6 +274,19 @@ void partition_allocator_release_deferred(PartitionAllocator *pa)
             start = next;
         }
     }
+    for (int j = 0; j < HEAP_TYPE_COUNT; j++) {
+        ImplicitList* start = pa->heaps[j].head;
+        while(start != NULL)
+        {
+            ImplicitList* next = start->next;
+            implicitList_move_deferred(start);
+            if(start->num_allocations == 0)
+            {
+                implicitList_freeAll(start);
+            }
+            start = next;
+        }
+    }
 }
 
 int8_t partition_allocator_get_free_area_from_queue(PartitionAllocator*pa, Partition *current_queue)
@@ -290,7 +304,7 @@ int8_t partition_allocator_get_free_area_from_queue(PartitionAllocator*pa, Parti
         }
     }
     if (new_area == -1) {
-        if (current_queue->area_mask != 0) {
+        if ((current_queue->area_mask != 0) && (current_queue->full_mask != UINT64_MAX)) {
             int32_t area_idx = area_list_get_next_area_idx(current_queue, 0);
             while (area_idx != -1) {
                 if((current_queue->full_mask & 1ULL << area_idx) == 0){
