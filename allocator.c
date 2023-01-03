@@ -73,24 +73,26 @@ Allocator *allocator_aquire(size_t idx)
     return allocator_list[idx];
 }
 
-void allocator_set_cached_pool(Allocator *a, Pool *p, bool alloc)
+void* allocator_set_cached_pool(Allocator *a, Pool *p)
 {
+    if(p == NULL)
+    {
+        return NULL;
+    }
     a->c_cache.header = (uintptr_t)p;
     a->c_cache.end = sizeof(Pool) + (p->num_available * p->block_size);
     a->c_cache.block_size = p->block_size;
     a->c_cache.cache_type = CACHE_POOL;
-    a->c_cache.rem_blocks = 0;
-    if(alloc)
+    a->c_cache.rem_blocks = p->num_available - p->num_committed;
+    pool_post_reserved(p);
+    if(a->c_cache.rem_blocks)
     {
-        a->c_cache.rem_blocks = p->num_available - p->num_committed;
-        if(a->c_cache.rem_blocks)
-        {
-            // reserve all memory from the pool
-            p->num_used = p->num_available;
-            p->num_committed = p->num_available;
-        }
+        // reserve all memory from the pool
+        p->num_used = p->num_available;
+        p->num_committed = p->num_available;
+        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
     }
-    
+    return pool_aquire_block(p);
 }
 
 void allocator_set_cached_arena(Allocator *a, Arena *p)
@@ -183,7 +185,6 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
     if (section->type != ST_HEAP_4M) {
         Pool *pool = (Pool *)section_find_collection(section, p);
         pool_free_block(pool, p);
-        //allocator_set_cached_pool(a, pool, false);
     } else {
         ImplicitList *heap = (ImplicitList *)((uint8_t *)section + sizeof(Section));
         uint32_t heapIdx = area_get_type((Area *)section);
@@ -588,9 +589,7 @@ void* allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t pc)
     if(start != NULL)
     {
         list_remove(queue, start);
-        void* res = pool_aquire_block((Pool *)start);
-        allocator_set_cached_pool(alloc, (Pool *)start, true);
-        return res;
+        return allocator_set_cached_pool(alloc, (Pool *)start);
     }
     return NULL;
 }
@@ -858,9 +857,7 @@ void* allocator_malloc_lt2k(Allocator* alloc, const size_t size)
         return NULL;
     }
     pool_init(new_pool, 0, pc, (uint32_t)stable->sizes[2], size);
-    res = pool_get_free_block(new_pool);
-    allocator_set_cached_pool(alloc, new_pool, true);
-    return res;
+    return allocator_set_cached_pool(alloc, new_pool);
 }
 
 void* allocator_malloc_base(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
@@ -985,15 +982,13 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     return p;
 }
 
-static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
+static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
 {
     Queue *queue = &a->part_alloc->pools[pool_idx];
     Pool *start = queue->head;
-    void*res = NULL;
     if (start != NULL) {
         // there are no empty pools in the queue.
         list_remove(queue, start);
-        res = pool_aquire_block(start);
     }
     else
     {
@@ -1001,10 +996,14 @@ static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s,
         if (start == NULL) {
             return NULL;
         }
-        res = pool_get_free_block(start);
     }
-    allocator_set_cached_pool(a, start, true);
-    return res;
+    return start;
+}
+
+static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
+{
+    Pool* new_pool = allocator_fetch_pool(a, s, pool_idx, prev_section);
+    return allocator_set_cached_pool(a, new_pool);
 }
 
 void *allocator_alloc_from_pool(Allocator *a, const size_t s)
@@ -1061,10 +1060,6 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
                 allocator_release_cached_pool(a);
             }
             deferred_cache_add(&a->c_deferred, p);
-            if(a->c_deferred.num > 255)
-            {
-                int bb = 0;
-            }
         }
     }
 }
@@ -1131,33 +1126,98 @@ static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
         allocator_release_cached_pool(a);
         return NULL;
     }
+
+    if(a->c_cache.cache_type == CACHE_POOL)
+    {
+        Pool* p = (Pool*)a->c_cache.header;
+        if(!pool_is_empty(p))
+        {
+            return pool_aquire_block(p);
+        }
+        allocator_release_cached_pool(a);
+        deferred_cache_release(a, NULL);
+        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+        return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
+    }
+
+    return NULL;
+}
+
+static inline void *allocator_malloc_commit(Allocator *a)
+{
     if(a->c_cache.rem_blocks)
     {
         return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
     }
     else
     {
+        return pool_aquire_block((Pool*)a->c_cache.header);
+    }
+    
+}
+
+void* allocator_load_slot(Allocator* a, size_t s)
+{
+    /*
+        load memory.
+        
         if(a->c_cache.cache_type == CACHE_POOL)
         {
-            Pool* p = (Pool*)a->c_cache.header;
-            if(!pool_is_empty(p))
+        Pool* p = (Pool*)a->c_cache.header;
+        if(!pool_is_empty(p))
+        {
+            return pool_aquire_block(p);
+        }
+        allocator_release_cached_pool(a);
+        deferred_cache_release(a, NULL);
+        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
+        return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
+        }
+
+     */
+    Section *section = NULL;
+    if (a->c_cache.header != 0) {
+        section = (Section *)((uintptr_t)a->c_cache.header & ~(SECTION_SIZE - 1));
+        if(a->prev_size == s){
+            Pool* cpool = (Pool*)a->c_cache.header;
+            if(!pool_is_empty(cpool))
             {
-                return pool_aquire_block(p);
+                return pool_aquire_block(cpool);
             }
             allocator_release_cached_pool(a);
             deferred_cache_release(a, NULL);
-            Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-            return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
+            Pool* new_pool = allocator_fetch_pool(a, cpool->block_size, cpool->block_idx, section);
+            if(new_pool == NULL)
+            {
+                return NULL;
+            }
+            return allocator_set_cached_pool(a, new_pool);
         }
+        allocator_release_cached_pool(a);
     }
-    return NULL;
+    
+    deferred_cache_release(a, NULL);
+    a->prev_size = (uint32_t)s;
+    const size_t as = ALIGN(s);
+    const int32_t pool_idx = size_to_pool(as);
+    Pool* new_pool = allocator_fetch_pool(a, as, pool_idx, section);
+    if(new_pool == NULL)
+    {
+        return NULL;
+    }
+    return allocator_set_cached_pool(a, new_pool);
 }
+
 void *allocator_malloc(Allocator *a, size_t s)
 {
-    // load memory struct
-    // get memory
-    //
-    // do we have  cached pool to use of a fitting size?
+    
+    if(a->c_cache.rem_blocks && (a->prev_size == s))
+    {
+        return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
+    }
+    
+    //return allocator_load_slot(a, s);
+    
     void *ptr = NULL;
     if (a->c_cache.header != 0) {
         ptr = allocator_malloc_from_cache(a, s);

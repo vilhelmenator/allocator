@@ -68,11 +68,10 @@ static inline void pool_post_reserved(Pool *p)
 static inline void pool_set_empty(Pool *p)
 {
     pool_post_free(p);
-    uintptr_t base_addr = (uintptr_t)p + sizeof(Pool);
     // the last piece was returned so make the first item the start of the free
-    p->free = (Block *)base_addr;
-    p->free->next = NULL;
-    p->num_committed = 1;
+    p->free = NULL;//(Block *)base_addr;
+    //p->free->next = NULL;
+    p->num_committed = 0;
     init_heap((Heap *)p);
 }
 static inline void pool_move_deferred(Pool *p)
@@ -169,13 +168,13 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
     p->num_available = (uint32_t)(MIN(remaining_size, block_memory)/p->block_size);
-    p->num_committed = 1;
+    p->num_committed = 0;
 
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;
-    p->free = (Block *)((uint8_t *)p + sizeof(Pool));
-    p->free->next = NULL;
+    p->free = NULL;//(Block *)((uint8_t *)p + sizeof(Pool));
+    //p->free->next = NULL;
 }
 
 #endif
