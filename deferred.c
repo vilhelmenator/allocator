@@ -139,12 +139,7 @@ void deferred_cache_release(Allocator* a, void* p)
                     pool->num_used -= c->num;
                     if(pool->num_used == 0)
                     {
-                        section_free_idx(section, pool->idx);
-                        // the last piece was returned so make the first item the start of the free
-                        pool->free = (Block*)((uintptr_t)pool + sizeof(Pool));
-                        pool->free->next = NULL;
-                        pool->num_committed = 1;
-                        init_heap((Heap*)pool);
+                        pool_set_empty(pool);
                     }
                     else
                     {
