@@ -70,7 +70,7 @@ void *implicitList_coalesce(ImplicitList *h, void *bp);
 void implicitList_reset(ImplicitList *h);
 
 void implicitList_freeAll(ImplicitList *h);
-
+void implicitList_reserve(ImplicitList *h);
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce);
 
 void implicitList_extend(ImplicitList *h);

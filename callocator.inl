@@ -389,7 +389,8 @@ typedef struct PartitionAllocator_t
 typedef enum cache_type_t
 {
     CACHE_POOL,
-    CACHE_POOL_CONTIGUOUS,
+    CACHE_HEAP,
+    CACHE_SLAB,
     CACHE_ARENA,
 } cache_type;
 

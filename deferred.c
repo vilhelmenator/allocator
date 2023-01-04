@@ -97,6 +97,7 @@ void deferred_cache_init(Allocator* a, void*p)
             {
                 PartitionAllocator *_part_alloc = partition_allocators[part_id];
                 partition_allocator_free_area(_part_alloc, area);
+                a->c_cache.header = 0;
                 return;
             }
                 

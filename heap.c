@@ -70,10 +70,7 @@ void implicitList_move_deferred(ImplicitList *h)
         c = c->next;
         h->num_allocations--;
     }
-    if(h->num_allocations == 1)
-    {
-        int bbb  = 0;
-    }
+    
     h->free_nodes.tail = tail;
     h->deferred_free = NULL;
 }
@@ -101,6 +98,33 @@ void *implicitList_find_fit(ImplicitList *h, const uint32_t asize)
     return NULL;
 }
 
+void implicitList_reserve(ImplicitList *h)
+{
+    //
+    if (h->total_memory < SECTION_SIZE) {
+        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+        section_reserve_all(section);
+    } else {
+        size_t area_size = area_size_from_addr((uintptr_t)h);
+        Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
+        area_reserve_all(area);
+    }
+}
+
+void implicitList_freeAll(ImplicitList *h)
+{
+    if (h->total_memory < SECTION_SIZE) {
+        // if we have been placed inside of a section.
+        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
+        section_free_all(section);
+    } else {
+        size_t area_size = area_size_from_addr((uintptr_t)h);
+        Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
+        area_free_all(area);
+    }
+    implicitList_reset(h);
+}
+
 void *implicitList_get_block(ImplicitList *h, uint32_t s)
 {
     if (h->num_allocations++ == 0) {
@@ -110,15 +134,7 @@ void *implicitList_get_block(ImplicitList *h, uint32_t s)
         HeapBlock *hb = (HeapBlock *)(blocks + DSIZE * 2);
         implicitList_block_set_footer(hb, h->total_memory, 0);
         implicitList_block_set_header(implicitList_block_next(hb), 0, 1, 0);
-        //
-        if (h->total_memory < SECTION_SIZE) {
-            Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-            section_reserve_all(section);
-        } else {
-            size_t area_size = area_size_from_addr((uintptr_t)h);
-            Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
-            area_reserve_all(area);
-        }
+
     }
     s = implicitList_get_good_size(s);
     void *ptr = implicitList_find_fit(h, s);
@@ -220,20 +236,6 @@ void implicitList_reset(ImplicitList *h)
     h->max_block = h->total_memory;
     h->used_memory = 0;
     init_heap((Heap *)h);
-}
-
-void implicitList_freeAll(ImplicitList *h)
-{
-    if (h->total_memory < SECTION_SIZE) {
-        // if we have been placed inside of a section.
-        Section *section = (Section *)((uintptr_t)h & ~(SECTION_SIZE - 1));
-        section_free_all(section);
-    } else {
-        size_t area_size = area_size_from_addr((uintptr_t)h);
-        Area *area = (Area *)((uintptr_t)h & ~(area_size - 1));
-        area_free_all(area);
-    }
-    implicitList_reset(h);
 }
 
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
