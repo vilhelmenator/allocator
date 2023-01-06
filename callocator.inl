@@ -46,8 +46,8 @@ typedef SSIZE_T ssize_t;
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
 #define WSIZE (sizeof(intptr_t))
-#define ALIGN_UP_2(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
-#define ALIGN_DOWN_2(x, y) ((x) & ~((y) - 1))
+#define ALIGN_UP_2(x, y) ((((uintptr_t)x) + (((uintptr_t)y) - 1)) & ~(((uintptr_t)y) - 1))
+#define ALIGN_DOWN_2(x, y) (((uintptr_t)x) & ~(((uintptr_t)y) - 1))
 #define ALIGN(x) ALIGN_UP_2(x, sizeof(intptr_t))
 #define ALIGN4(x) ALIGN_UP_2(x, 4)
 #define ALIGN_CACHE(x) (((x) + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
@@ -235,6 +235,8 @@ typedef struct Pool_t
     int32_t num_committed;
     int32_t num_available;
 
+    uint32_t alignment;
+    
     Block* free;
 } Pool;
 

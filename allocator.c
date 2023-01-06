@@ -532,7 +532,8 @@ uint8_t size_to_sub_class(uint32_t clss, const size_t s)
     if(clss == 0)
     {
         //
-        return size_to_pool(s);
+        uint32_t align = 0;
+        return size_to_pool(s, &align);
     }
     else
     {
@@ -910,7 +911,8 @@ void* allocator_malloc_aligned_lt32m(Allocator* alloc, const size_t size,  const
 
 void* allocator_malloc_lt2k(Allocator* alloc, const size_t size)
 {
-    uint8_t pc = size_to_pool(size);
+    uint32_t align = 0;
+    uint8_t pc = size_to_pool(size, &align);
     void* res = allocator_malloc_pool_find_fit(alloc, pc);
     if(res == NULL)
     {
@@ -929,7 +931,7 @@ void* allocator_malloc_lt2k(Allocator* alloc, const size_t size)
     if (new_pool == NULL) {
         return NULL;
     }
-    pool_init(new_pool, 0, pc, (uint32_t)stable->sizes[2], size);
+    pool_init(new_pool, 0, pc, (uint32_t)stable->sizes[2], align);
     return allocator_set_cached_pool(alloc, new_pool);
 }
 
@@ -1032,7 +1034,7 @@ void* allocator_malloc_base(Allocator* alloc, const size_t size, const size_t al
     }
 }
 
-static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s, Section *prev_section)
+static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s, const uint32_t align, Section *prev_section)
 {
     Section *sfree_section = NULL;
     if(prev_section != NULL && !section_is_full(prev_section))
@@ -1050,12 +1052,12 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     const unsigned int coll_idx = section_reserve_next(sfree_section);
     int32_t psize = (1 << size_clss_to_exponent[sfree_section->type]);
     Pool *p = (Pool *)section_get_collection(sfree_section, coll_idx, psize);
-    pool_init(p, coll_idx, idx, psize, s);
+    pool_init(p, coll_idx, idx, psize, align);
     section_claim_idx(sfree_section, coll_idx);
     return p;
 }
 
-static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
+static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const uint32_t align, const int32_t pool_idx, Section *prev_section)
 {
     Queue *queue = &a->part_alloc->pools[pool_idx];
     Pool *start = queue->head;
@@ -1065,7 +1067,7 @@ static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const int
     }
     else
     {
-        start = allocator_alloc_pool(a, pool_idx, (uint32_t)s, prev_section);
+        start = allocator_alloc_pool(a, pool_idx, (uint32_t)s, align, prev_section);
         if (start == NULL) {
             return NULL;
         }
@@ -1073,16 +1075,17 @@ static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const int
     return start;
 }
 
-static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
+static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const uint32_t align, const int32_t pool_idx, Section *prev_section)
 {
-    Pool* new_pool = allocator_fetch_pool(a, s, pool_idx, prev_section);
+    Pool* new_pool = allocator_fetch_pool(a, s, align, pool_idx, prev_section);
     return allocator_set_cached_pool(a, new_pool);
 }
 
 void *allocator_alloc_from_pool(Allocator *a, const size_t s)
 {
-    const int32_t pool_idx = size_to_pool(s);
-    return allocator_alloc_from_pool_list(a, s, pool_idx, NULL);
+    uint32_t align = 0;
+    const int32_t pool_idx = size_to_pool(s, &align);
+    return allocator_alloc_from_pool_list(a, s, align, pool_idx, NULL);
 }
 
 void free_extended_part(size_t pid, void *p)
@@ -1154,30 +1157,6 @@ void allocator_thread_dequeue_all(Allocator *a, AtomicQueue *queue)
     queue->head = (uintptr_t)curr;
 }
 
-static inline void *allocator_malloc_from_cache(Allocator *a, size_t s)
-{
-    if(a->prev_size != s)
-    {
-        allocator_release_cache(a);
-        return NULL;
-    }
-
-    if(a->c_cache.cache_type == CACHE_POOL)
-    {
-        Pool* p = (Pool*)a->c_cache.header;
-        if(!pool_is_empty(p))
-        {
-            return pool_aquire_block(p);
-        }
-        allocator_release_cache(a);
-        deferred_cache_release(a, NULL);
-        Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-        return allocator_alloc_from_pool_list(a, p->block_size, p->block_idx, section);
-    }
-
-    return NULL;
-}
-
 internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
 {
     Section *section = NULL;
@@ -1197,7 +1176,7 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
             // lets fetch a new one of the same measure.
             allocator_release_cache(a);
             deferred_cache_release(a, NULL);
-            Pool* new_pool = allocator_fetch_pool(a, cpool->block_size, cpool->block_idx, section);
+            Pool* new_pool = allocator_fetch_pool(a, cpool->block_size, cpool->alignment, cpool->block_idx, section);
             if(new_pool == NULL)
             {
                 return allocator_cache_alloc_null;
@@ -1213,8 +1192,9 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
     a->prev_size = (uint32_t)s;
     const size_t as = ALIGN(s);
     //
-    const int32_t pool_idx = size_to_pool(as);
-    Pool* new_pool = allocator_fetch_pool(a, as, pool_idx, section);
+    uint32_t align = 0;
+    const int32_t pool_idx = size_to_pool(as, &align);
+    Pool* new_pool = allocator_fetch_pool(a, as, align, pool_idx, section);
     if(new_pool == NULL)
     {
         return allocator_cache_alloc_null;
@@ -1222,7 +1202,7 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
     return allocator_set_cached_pool(a, new_pool);
 }
 
-static inline internal_alloc allocator_try_malloc(Allocator *a, size_t as)
+static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as)
 {
     if (as <= LARGE_OBJECT_SIZE) {
         return allocator_load_pool_slot(a, as);
@@ -1247,24 +1227,31 @@ static inline internal_alloc allocator_malloc_fallback(Allocator *a, size_t as)
         PartitionAllocator *part_alloc = partition_allocator_aquire(new_partition_set_idx);
         list_enqueue(&a->partition_allocators, part_alloc);
         a->part_alloc = part_alloc;
-        return allocator_try_malloc(a, as);
+        return allocator_load_memory_slot(a, as);
     }
-    // hopefully this is not NULL
+    // we are out of options and the current thread can't get more memory
     return allocator_cache_alloc_null;
 }
 
 void *allocator_malloc(Allocator *a, size_t s)
 {
+    // if we have a contiguous cached buffer and it serves our current request.
     if(a->c_cache.rem_blocks && (a->prev_size == s))
     {
         return (void*)(uintptr_t)(a->c_cache.header + a->c_cache.end) - (a->c_cache.rem_blocks-- * a->c_cache.block_size);
     }
-    internal_alloc ialloc = allocator_try_malloc(a, s);
+    // get the internal allocation slot
+    internal_alloc ialloc = allocator_load_memory_slot(a, s);
     // if we were handed the null allocator
     if(ialloc == allocator_cache_alloc_null)
     {
+        // we will attemp only once to get a new partition set
+        // if our current one is failing us.
+        // if this fails, we have exhausted all options.
         ialloc = allocator_malloc_fallback(a, s);
     }
+    // commit our memory slot and return the address
+    // the null allocator slot, just returns NULL.
     return ialloc(a, s);
 }
 

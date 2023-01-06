@@ -8,24 +8,25 @@
 // 4k, 8k, 16k, 32k, 64k, 128k, 256, 512, 1, 2, 4, 8, 16, 32, 64, 128, 256
 //
 static const int32_t pool_sizes[] = {
-    8,       16,      24,      32,      40,      48,      56,      64,   // 64k    8b range
-    72,      80,      88,      96,      104,     112,     120,     128,  // 128    8b
-    144,     160,     176,     192,     208,     224,     240,     256,  // 256    16
-    288,     320,     352,     384,     416,     448,     480,     512,  // 512    32
-    576,     640,     704,     768,     832,     896,     960,     1024, // 1m     64
-    1152,    1280,    1408,    1536,    1664,    1792,    1920,    2048, // 2m    128
+    // if pool block size is a power of two, it will align to that size.
+    8,       16,      24,      32,      40,      48,      56,      64,   // 64k    8b range and aligned to this size
+    72,      80,      88,      96,      104,     112,     120,     128,  // 128    8b   allowes for smaller subrange allocations.
+    144,     160,     176,     192,     208,     224,     240,     256,  // 256    16   1 sr if pool size is not a power of two.
+    288,     320,     352,     384,     416,     448,     480,     512,  // 512    32   3 sr
+    576,     640,     704,     768,     832,     896,     960,     1024, // 1m     64   7 sr
+    1152,    1280,    1408,    1536,    1664,    1792,    1920,    2048, // 2m    128  15 sr
 
-    2304,    2560,    2816,    3072,    3328,    3584,    3840,    4096,
-    4608,    5120,    5632,    6144,    6656,    7168,    7680,    8192,
-    9216,    10240,   11264,   12288,   13312,   14336,   15360,   16384,
-    18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768,
-    36864,   40960,   45056,   49152,   53248,   57344,   61440,   65536,
-    73728,   81920,   90112,   98304,   106496,  114688,  122880,  131072,
-    147456,  163840,  180224,  196608,  212992,  229376,  245760,  262144,
-    294912,  327680,  360448,  393216,  425984,  458752,  491520,  524288,
-    589824,  655360,  720896,  786432,  851968,  917504,  983040,  1048576,
-    1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152,
-    2359296, 2621440, 2883584, 3145728, 3407872, 3670016, 3932160, };
+    2304,    2560,    2816,    3072,    3328,    3584,    3840,    4096,    // 256   (8 - 16 slots per allocation) ( 3 -> 7 allocations per arena block)
+    4608,    5120,    5632,    6144,    6656,    7168,    7680,    8192,    // 512
+    9216,    10240,   11264,   12288,   13312,   14336,   15360,   16384,   // 1024
+    18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768,   // 2k
+    36864,   40960,   45056,   49152,   53248,   57344,   61440,   65536,   // 4k
+    73728,   81920,   90112,   98304,   106496,  114688,  122880,  131072,  // 8k
+    147456,  163840,  180224,  196608,  212992,  229376,  245760,  262144,  // 16k
+    294912,  327680,  360448,  393216,  425984,  458752,  491520,  524288,  // 32k
+    589824,  655360,  720896,  786432,  851968,  917504,  983040,  1048576, // 64k
+    1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152, // 128k
+    2359296, 2621440, 2883584, 3145728, 3407872, 3670016, 3932160, };       // 256k
 
 static inline int32_t get_pool_size_class(size_t s)
 {
@@ -38,22 +39,27 @@ static inline int32_t get_pool_size_class(size_t s)
     }
 }
 
-static inline uint8_t size_to_pool(const size_t as)
+static inline uint8_t size_to_pool(const size_t as, uint32_t *alignment)
 {
     static const int bmask = ~0x7f;
     if ((bmask & as) == 0) {
         // the first 2 rows
+        *alignment = 1 << 3;
         return (as >> 3) - 1;
     } else {
         int32_t lz = 63 - __builtin_clzll(as);
         const size_t base = 1ULL << lz;
         const size_t row = lz - 5;
         const uint64_t incr_exp = (2 + row);
+        *alignment = 1 << incr_exp;
         return row * 8 + (uint8_t)((size_t)((as - 1) - base) >> incr_exp);
     }
 }
 static inline bool pool_is_connected(Pool *p) { return p->prev != NULL || p->next != NULL; }
-
+static inline uint8_t* pool_base_address(Pool *p)
+{
+    return (uint8_t*)(ALIGN_UP_2((uintptr_t)p + sizeof(Pool), p->alignment));
+}
 static inline void pool_post_free(Pool *p)
 {
     Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
@@ -87,7 +93,7 @@ static inline void pool_move_deferred(Pool *p)
 static inline void *pool_extend(Pool *p)
 {
     p->num_used++;
-    return ((uint8_t *)p + sizeof(Pool) + (p->num_committed++ * p->block_size));
+    return (pool_base_address(p) + (p->num_committed++ * p->block_size));
 }
 
 static inline bool pool_is_maybe_empty(const Pool *p) { return p->free == NULL; }
@@ -121,7 +127,7 @@ static inline void pool_free_block(Pool *p, void *block)
 
 static inline void *pool_get_free_block(Pool *p)
 {
-    uint8_t *base_addr = (uint8_t *)p + sizeof(Pool);
+    uint8_t *base_addr = pool_base_address(p);
     if (p->num_used++ == 0) {
         pool_post_reserved(p);
         p->free = NULL;
@@ -157,24 +163,32 @@ static inline void *pool_aquire_block(Pool *p)
     }
 }
 
-static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize, size_t ps)
+static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize, const uint32_t align)
 {
     init_heap((Heap *)p);
-    void *blocks = (uint8_t *)p + sizeof(Pool);
-    const size_t block_memory = psize - sizeof(Pool);
-    const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
-    const size_t remaining_size = section_end - (uintptr_t)blocks;
     p->idx = pidx;
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
-    p->num_available = (uint32_t)(MIN(remaining_size, block_memory)/p->block_size);
     p->num_committed = 0;
-
+    if(POWER_OF_TWO(p->block_size))
+    {
+        p->alignment = p->block_size;
+    }
+    else
+    {
+        p->alignment = align;
+    }
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;
-    p->free = NULL;//(Block *)((uint8_t *)p + sizeof(Pool));
-    //p->free->next = NULL;
+    p->free = NULL;
+    
+    const uintptr_t section_end = ALIGN_UP_2((uintptr_t)p, SECTION_SIZE);
+    void *blocks = pool_base_address(p);
+    const size_t block_memory = psize - ALIGN_UP_2(sizeof(Pool), p->alignment);
+    const size_t remaining_size = section_end - (uintptr_t)blocks;
+    p->num_available = (uint32_t)(MIN(remaining_size, block_memory)/p->block_size);
+
 }
 
 #endif
