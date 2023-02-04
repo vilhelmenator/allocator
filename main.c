@@ -1,6 +1,7 @@
 
 #define CTEST_ENABLED
 #include "../ctest/ctest.h"
+#include "../cthread/cthread.h"
 #include "area.h"
 #include "arena.h"
 #include "callocator.inl"
@@ -223,6 +224,10 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0 and 1
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
+        if(i == 223)
+        {
+            int bb = 0;
+        }
         void *all = cmalloc(allocation_size);
         pid = partition_from_addr((uintptr_t)all);
         if (all == NULL) {
@@ -231,6 +236,7 @@ bool test_pools(size_t allocation_size)
         }
         variables[i] = (uint64_t *)all;
         uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
+        uintptr_t delta = (end - (uintptr_t)variables[i]);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             result = false;
             goto end;
@@ -573,7 +579,7 @@ bool test_huge_alloc(void)
 bool fillAPool(void)
 {
     bool state = true;
-    const int num_allocs = 16378;
+    const int num_allocs = 16373;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
     for (int i = 0; i < num_allocs; i++) {
         allocs[i] = (uint64_t *)cmalloc(8);
@@ -964,12 +970,7 @@ void test_size_iter_sparse_reverse(size_t num_items, size_t num_loops,int t)
     END_TEST(allocator, {});
     free(variables);
 }
-int test(void *p)
-{
-    char *test = (char *)cmalloc(16);
-    cfree(test);
-    return 1;
-}
+
 
 void test_size_arena_iter(uint32_t alloc_size, size_t num_items, size_t num_loops)
 {
@@ -1049,15 +1050,24 @@ void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_
     cfree_arena(mem);
      */
 }
-
-
-int main()
+int test(void *p)
 {
+    char *test = (char *)cmalloc(16);
+    cfree(test);
+    return 1;
+}
+
+int main(void)
+{
+    
+    //cfree(BASE_ADDR(0) - 8);
+    //thrd_t trd;
+    //thrd_create(&trd, &test, NULL);
     // test_new_heap();
     //  thrd_t trd;
     //  thrd_create(&trd, &test, NULL);
     //  blach();
-    run_tests();
+    //run_tests();
     //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //  cfree(m);
     //  m = cmalloc_os(123);

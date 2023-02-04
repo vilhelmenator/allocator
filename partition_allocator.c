@@ -5,7 +5,7 @@
 #include "heap.h"
 
 cache_align PartitionAllocator *partition_allocators[MAX_THREADS];
-cache_align uint8_t default_allocator_buffer[DEFAULT_OS_PAGE_SIZE];
+cache_align uint8_t* default_allocator_buffer = 0;
 typedef void (*free_func)(void *);
 
 PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
@@ -34,6 +34,7 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     mqueue->tail = (uintptr_t)thr_mem;
     thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
     thr_mem -= ALIGN_CACHE(sizeof(PartitionAllocator));
+    
 
     PartitionAllocator *palloc = (PartitionAllocator *)thr_mem;
     palloc->idx = idx;
@@ -51,7 +52,8 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
 
 PartitionAllocator* partition_allocator_init_default(void)
 {
-    PartitionAllocator *part_alloc = partition_allocator_init(0, (uintptr_t)&default_allocator_buffer[0]);
+    default_allocator_buffer = alloc_memory((void *)ADDR_START, MAX_THREADS*PARTITION_ALLOCATOR_BASE_SIZE, true);
+    PartitionAllocator *part_alloc = partition_allocator_init(0, (uintptr_t)default_allocator_buffer);
     partition_allocators[0] = part_alloc;
     return part_alloc;
 }
@@ -59,7 +61,7 @@ PartitionAllocator* partition_allocator_init_default(void)
 PartitionAllocator *partition_allocator_aquire(size_t idx)
 {
     if (partition_allocators[idx] == NULL) {
-        uintptr_t thread_mem = (uintptr_t)cmalloc_os(os_page_size);
+        uintptr_t thread_mem = (uintptr_t)default_allocator_buffer + PARTITION_ALLOCATOR_BASE_SIZE*idx;
         PartitionAllocator *part_alloc = partition_allocator_init(idx, thread_mem);
         partition_allocators[idx] = part_alloc;
     }

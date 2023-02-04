@@ -133,7 +133,27 @@ static inline void *pool_get_free_block(Pool *p)
         p->free = NULL;
         return base_addr;
     }
-
+    
+    while (((uintptr_t)p->free & (p->alignment - 1)) != 0) {
+        // for each unaligned part
+        // we treat it as a counter alloc created within the pool.
+        uintptr_t header = ALIGN_DOWN_2(p->free, p->alignment);
+        int32_t *counter = (int32_t*)header;
+        if(*counter-- > 0)
+        {
+            // an internal counter allocator would have been created for this pool
+            // we just truncate its sub-part and remove it from the list.
+            p->free = p->free->next;
+        }
+        else
+        {
+            // else, our decrement has removed all references to the counter allocator
+            // and we are safe to return its header
+            ((Block*)header)->next = p->free->next;
+            p->free = (Block*)header;
+            break;
+        }
+    }
     uint32_t curr_idx = (uint32_t)(size_t)((uint8_t *)p->free - base_addr)/p->block_size;
     if (curr_idx >= p->num_available) {
         p->free = NULL;

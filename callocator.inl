@@ -32,13 +32,13 @@ typedef SSIZE_T ssize_t;
 #define HEAP_TYPE_COUNT 5
 #define ARENA_BIN_COUNT (18*6)
 #define MAX_ARES 64
-#define MAX_THREADS 1024
+#define MAX_THREADS 4096
 
 
 #define MAX(x, y) (x ^ ((x ^ y) & -(x < y)))
 #define MIN(x, y) (y ^ ((x ^ y) & -(x < y)))
 #define POWER_OF_TWO(x) (x && !(x & (x - 1)))
-
+#define SIGN(x) ((x > 0) - (x < 0))
 #define CACHE_LINE 64
 #if defined(WINDOWS)
 #define cache_align __declspec(align(CACHE_LINE))
@@ -51,8 +51,8 @@ typedef SSIZE_T ssize_t;
 #define ALIGN(x) ALIGN_UP_2(x, sizeof(intptr_t))
 #define ALIGN4(x) ALIGN_UP_2(x, 4)
 #define ALIGN_CACHE(x) (((x) + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
-
-#define BASE_ADDR(idx) (((1ULL << 40) << (idx)) + (1ULL << 38))  // 1TB + 256
+#define ADDR_START (1ULL << 39)
+#define BASE_ADDR(idx) (((1ULL << 40) << (idx)))
  
  
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
@@ -400,8 +400,11 @@ typedef struct alloc_cache_t
 {
     uintptr_t header;
     int32_t end;
-    int32_t rem_blocks;
+    int32_t start;
     int32_t block_size;
+    int32_t alignment;
+    int32_t counter;
+    int32_t req_size;
     cache_type cache_type;
 } alloc_cache;
 

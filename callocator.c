@@ -40,7 +40,7 @@ static void thread_done(void *a)
 static Allocator *init_thread_instance(void)
 {
     int32_t idx = reserve_any_partition_set();
-    Allocator *new_alloc = allocator_list[idx];
+    Allocator *new_alloc = allocator_aquire(idx);
     new_alloc->part_alloc = partition_allocators[idx];
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
@@ -215,7 +215,7 @@ static void __attribute__((destructor)) library_destroy(void) { allocator_destro
 
 void __attribute__((malloc)) *cmalloc(size_t s) {
     
-    if(get_thread_count() == 1)
+    if(is_main_thread())
     {
         return allocator_malloc(main_instance, s);
     }

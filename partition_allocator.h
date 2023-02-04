@@ -2,11 +2,7 @@
 #define PARTITION_ALLOCATOR_H
 
 #include "area.h"
-#define PARTITION_ALLOCATOR_BASE_SIZE \
-ALIGN_CACHE(sizeof(Allocator))+\
-ALIGN_CACHE(sizeof(Queue) * (POOL_BIN_COUNT + HEAP_TYPE_COUNT + 1))+\
-ALIGN_CACHE(sizeof(message_queue))+\
-ALIGN_CACHE(sizeof(PartitionAllocator))
+#define PARTITION_ALLOCATOR_BASE_SIZE (1ULL << 13)
 
 typedef void (*free_func)(void *);
 PartitionAllocator* partition_allocator_init_default(void);
