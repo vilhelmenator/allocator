@@ -45,7 +45,8 @@ typedef SSIZE_T ssize_t;
 #else
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
-#define WSIZE (sizeof(intptr_t))
+#define WSIZE (sizeof(intptr_t)/2)
+#define DSIZE WSIZE*2
 #define ALIGN_UP_2(x, y) ((((uintptr_t)x) + (((uintptr_t)y) - 1)) & ~(((uintptr_t)y) - 1))
 #define ALIGN_DOWN_2(x, y) (((uintptr_t)x) & ~(((uintptr_t)y) - 1))
 #define ALIGN(x) ALIGN_UP_2(x, sizeof(intptr_t))
@@ -388,15 +389,16 @@ typedef struct PartitionAllocator_t
 
 } PartitionAllocator;
 
-typedef enum cache_type_t
+typedef enum slot_type_t
 {
-    CACHE_POOL,
-    CACHE_HEAP,
-    CACHE_SLAB,
-    CACHE_ARENA,
-} cache_type;
+    SLOT_POOL,
+    SLOT_HEAP,
+    SLOT_SLAB,
+    SLOT_ARENA,
+    SLOT_COUNTER,
+} slot_type;
 
-typedef struct alloc_cache_t
+typedef struct alloc_slot_t
 {
     uintptr_t header;
     int32_t end;
@@ -405,20 +407,20 @@ typedef struct alloc_cache_t
     int32_t alignment;
     int32_t counter;
     int32_t req_size;
-    cache_type cache_type;
-} alloc_cache;
+    slot_type type;
+} alloc_slot;
 
-typedef struct deferred_cache_t
+typedef struct deferred_free_t
 {
     Queue items;
     uintptr_t start;
     uintptr_t end;
     uint32_t owned;
     uint32_t num;
-} deferred_cache;
+} deferred_free;
 
 
-static inline void deferred_cache_enqueue( deferred_cache*c, Heap* dl)
+static inline void deferred_enqueue( deferred_free*c, Heap* dl)
 {
     if(c->owned)
     {
@@ -433,7 +435,7 @@ static inline void deferred_cache_enqueue( deferred_cache*c, Heap* dl)
     c->items.tail = NULL;
 }
 
-static inline void deferred_cache_add(deferred_cache*c, void* p)
+static inline void deferred_add(deferred_free*c, void* p)
 {
     ((Block*)p)->next = c->items.head;
     c->items.head =  p;
@@ -447,15 +449,15 @@ typedef struct Allocator_t
     PartitionAllocator *part_alloc;
     
     // per allocator lookup structures
-    alloc_cache c_cache;        // allocation cache structure.
-    deferred_cache c_deferred;  // release cache structure.
+    alloc_slot c_slot;        // allocation cache structure.
+    deferred_free c_deferred;  // release cache structure.
     
     PartitionAllocator *thread_free_part_alloc;
     Queue partition_allocators;
 } Allocator;
 
-void deferred_cache_init(Allocator* a, void*p);
-void deferred_cache_release(Allocator* a, void* p);
+void deferred_init(Allocator* a, void*p);
+void deferred_release(Allocator* a, void* p);
 
 // list utilities
 static inline bool qnode_is_connected(QNode* n)

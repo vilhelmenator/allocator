@@ -2,8 +2,6 @@
 
 #include "callocator.inl"
 
-#define WSIZE 4
-#define DSIZE 8
 #define HEADER_OVERHEAD 4
 #define HEADER_FOOTER_OVERHEAD 8
 

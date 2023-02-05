@@ -46,11 +46,11 @@ void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMes
 
 
 // compute bounds and initialize
-void deferred_cache_init(Allocator* a, void*p)
+void deferred_init(Allocator* a, void*p)
 {
     int8_t pid = partition_from_addr((uintptr_t)p);
     if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
-        deferred_cache*c = &a->c_deferred;
+        deferred_free*c = &a->c_deferred;
         const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)p, pid);
         c->owned = a->idx == partition_owners[part_id];
         size_t area_size = area_size_from_partition_id(pid);
@@ -97,7 +97,7 @@ void deferred_cache_init(Allocator* a, void*p)
             {
                 PartitionAllocator *_part_alloc = partition_allocators[part_id];
                 partition_allocator_free_area(_part_alloc, area);
-                a->c_cache.header = 0;
+                a->c_slot.header = 0;
                 return;
             }
                 
@@ -112,9 +112,9 @@ void deferred_cache_init(Allocator* a, void*p)
 }
 
 // release to owning structures.
-void deferred_cache_release(Allocator* a, void* p)
+void deferred_release(Allocator* a, void* p)
 {
-    deferred_cache*c = &a->c_deferred;
+    deferred_free*c = &a->c_deferred;
     if(c->end != 0)
     {
         if(c->owned)
@@ -214,7 +214,7 @@ void deferred_cache_release(Allocator* a, void* p)
         }
         if(p)
         {
-            deferred_cache_init(a, p);
+            deferred_init(a, p);
         }
         else
         {
