@@ -406,7 +406,7 @@ typedef struct alloc_slot_t
     int32_t block_size;
     int32_t alignment;
     int32_t counter;
-    int32_t req_size;
+    int64_t req_size;
     slot_type type;
 } alloc_slot;
 
@@ -445,7 +445,7 @@ static inline void deferred_add(deferred_free*c, void* p)
 typedef struct Allocator_t
 {
     int32_t idx;
-    uint32_t prev_size;
+    int64_t prev_size;
     PartitionAllocator *part_alloc;
     
     // per allocator lookup structures

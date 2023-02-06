@@ -175,6 +175,7 @@ static int allocator_init()
     uintptr_t end = ((uintptr_t)part_alloc + ALIGN_CACHE(sizeof(PartitionAllocator)));
     uintptr_t alloc_addr = end - DEFAULT_OS_PAGE_SIZE;
     Allocator *new_alloc = (Allocator *)alloc_addr;
+    allocator_set_counter_slot(new_alloc, (void*)end, DEFAULT_OS_PAGE_SIZE);
     allocator_list[0] = new_alloc;
     partition_owners[0] = 0;
     new_alloc->part_alloc = part_alloc;

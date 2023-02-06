@@ -73,7 +73,6 @@ Allocator *allocator_aquire(size_t idx)
     return allocator_list[idx];
 }
 
-typedef void* (*internal_alloc) (Allocator *a, const size_t as);
 void* allocator_slot_alloc_null(Allocator*a,  const size_t as)
 {
     return NULL;
@@ -170,7 +169,12 @@ internal_alloc allocator_set_pool_slot(Allocator *a, Pool *p)
 
 internal_alloc allocator_set_counter_slot(Allocator *a, void *p, uint32_t slot_size)
 {
+    a->c_slot.header = (uintptr_t)p;
+    a->c_slot.start = sizeof(uintptr_t);
     a->c_slot.end = slot_size;
+    a->c_slot.block_size = slot_size;
+    a->c_slot.req_size = a->prev_size;
+    a->c_slot.type = SLOT_COUNTER;
     return allocator_slot_alloc;
 }
 
@@ -1201,28 +1205,32 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
 {
     Section *section = NULL;
     if (a->c_slot.header != 0) {
-        //
-        section = (Section *)((uintptr_t)a->c_slot.header & ~(SECTION_SIZE - 1));
-        if(a->prev_size == s){
+        if(a->c_slot.type == SLOT_POOL)
+        {
             //
-            // we have the same size and our pool still has some juice
-            Pool* cpool = (Pool*)a->c_slot.header;
-            if(!pool_is_empty(cpool))
-            {
-                return allocator_slot_alloc_pool;
+            section = (Section *)((uintptr_t)a->c_slot.header & ~(SECTION_SIZE - 1));
+            if(a->prev_size == s){
+                //
+                // we have the same size and our pool still has some juice
+                Pool* cpool = (Pool*)a->c_slot.header;
+                if(!pool_is_empty(cpool))
+                {
+                    return allocator_slot_alloc_pool;
+                }
+                //
+                // pool just ran out of memory.
+                // lets fetch a new one of the same measure.
+                allocator_release_slot(a);
+                deferred_release(a, NULL);
+                Pool* new_pool = allocator_fetch_pool(a, cpool->block_size, cpool->alignment, cpool->block_idx, section);
+                if(new_pool == NULL)
+                {
+                    return allocator_slot_alloc_null;
+                }
+                return allocator_set_pool_slot(a, new_pool);
             }
-            //
-            // pool just ran out of memory.
-            // lets fetch a new one of the same measure.
-            allocator_release_slot(a);
-            deferred_release(a, NULL);
-            Pool* new_pool = allocator_fetch_pool(a, cpool->block_size, cpool->alignment, cpool->block_idx, section);
-            if(new_pool == NULL)
-            {
-                return allocator_slot_alloc_null;
-            }
-            return allocator_set_pool_slot(a, new_pool);
         }
+        
         allocator_release_slot(a);
     }
     
@@ -1287,7 +1295,8 @@ void *allocator_malloc(Allocator *a, size_t s)
     // supply a new block from that while the requests fit.
     // when that is exhausted or a request does not fit.
     // we just pop the previous cache struct in place and continue from there.
-    switch(SIGN(a->prev_size - s))
+    
+    switch(SIGN((int64_t)(a->prev_size - s)))
     {
         case -1:
         {
@@ -1296,13 +1305,27 @@ void *allocator_malloc(Allocator *a, size_t s)
             // if larger, then we need to find a new allocator
             // otherwise, the size change is small enough to reuse the current
             // setup.
+            if(s < a->c_slot.block_size)
+            {
+                if(a->c_slot.block_size == a->c_slot.end)
+                {
+                    a->c_slot.req_size = MAX((s & ~0x7ULL), sizeof(uintptr_t));
+                    // there is no difference of size request
+                    size_t offset = a->c_slot.start + a->c_slot.req_size;
+                    if(offset <= a->c_slot.end)
+                    {
+                        a->prev_size = s;
+                        return _allocator_slot_alloc(&a->c_slot);
+                    }
+                }
+            }
             break;
         }
         case 0:
         {
             
             // there is no difference of size request
-            int32_t offset = a->c_slot.start + a->c_slot.block_size;
+            size_t offset = a->c_slot.start + a->c_slot.req_size;
             if(offset <= a->c_slot.end)
             {
                 return _allocator_slot_alloc(&a->c_slot);
@@ -1314,7 +1337,18 @@ void *allocator_malloc(Allocator *a, size_t s)
             // new size is smaller then the previous size.
             // what if the min size is smaller than the cache alignment supplies.
             // lets see if the size is small enough to justify creating a counter
-            // alloc within the current cache block.
+            // alloc within the current slot
+            if(a->c_slot.block_size == a->c_slot.end)
+            {
+                a->c_slot.req_size = MAX((s & ~0x7ULL), sizeof(uintptr_t));
+                // there is no difference of size request
+                size_t offset = a->c_slot.start + a->c_slot.req_size;
+                if(offset <= a->c_slot.end)
+                {
+                    a->prev_size = s;
+                    return _allocator_slot_alloc(&a->c_slot);
+                }
+            }
             break;
         }
     };
