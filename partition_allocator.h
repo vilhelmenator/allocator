@@ -4,7 +4,6 @@
 #include "area.h"
 #define PARTITION_ALLOCATOR_BASE_SIZE (1ULL << 13)
 
-typedef void (*free_func)(void *);
 PartitionAllocator* partition_allocator_init_default(void);
 PartitionAllocator *partition_allocator_aquire(size_t idx);
 AtomicMessage *partition_allocator_get_last_message(PartitionAllocator *pa);

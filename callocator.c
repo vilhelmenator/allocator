@@ -216,6 +216,10 @@ static void __attribute__((destructor)) library_destroy(void) { allocator_destro
 
 void __attribute__((malloc)) *cmalloc(size_t s) {
     
+    if(s == 0)
+    {
+        return NULL;
+    }
     if(is_main_thread())
     {
         return allocator_malloc(main_instance, s);

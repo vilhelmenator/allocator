@@ -1162,6 +1162,10 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
 {
     if(a->c_deferred.end == 0)
     {
+        if(a->c_slot.start != a->c_slot.end)
+        {
+            allocator_release_slot(a);
+        }
         deferred_init(a, p);
     }
     else
@@ -1174,11 +1178,6 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
         }
         else
         {
-            
-            if(a->c_slot.start != a->c_slot.end)
-            {
-                allocator_release_slot(a);
-            }
             deferred_add(&a->c_deferred, p);
         }
     }
@@ -1283,64 +1282,40 @@ static inline internal_alloc allocator_malloc_fallback(Allocator *a, size_t as)
 
 void *allocator_malloc(Allocator *a, size_t s)
 {
-    // [ ] add min/max size to cache setup
-    
-    // craete counter alloc when new size can fit multiple times
-    // in current size. At least 2 blocks can be created + the counter at the head.
-    // (8 bytes + 2x current size) < current max size. we create a counter allocator
-    // in the current cache struct.
-    // Keeping the current cache struct while working with the counter allocator.
-    // we allocate one block from the current cache.
-    // create a new cache struct with min,max range.
-    // supply a new block from that while the requests fit.
-    // when that is exhausted or a request does not fit.
-    // we just pop the previous cache struct in place and continue from there.
-    
-    switch(SIGN((int64_t)(a->prev_size - s)))
+    if(a->prev_size == s)
     {
-        case -1:
+        size_t offset = a->c_slot.start + a->c_slot.req_size;
+        if(offset <= a->c_slot.end)
         {
-            // new size is larger than the previous size.
-            // what is the max size the current cache can supply.
-            // if larger, then we need to find a new allocator
-            // otherwise, the size change is small enough to reuse the current
-            // setup.
+            return _allocator_slot_alloc(&a->c_slot);
+        }
+    }
+    else
+    {
+        if(s > a->prev_size)
+        {
             if(s < a->c_slot.block_size)
             {
+                // we have a counter alloc
                 if(a->c_slot.block_size == a->c_slot.end)
                 {
-                    a->c_slot.req_size = MAX((s & ~0x7ULL), sizeof(uintptr_t));
-                    // there is no difference of size request
-                    size_t offset = a->c_slot.start + a->c_slot.req_size;
-                    if(offset <= a->c_slot.end)
-                    {
-                        a->prev_size = s;
-                        return _allocator_slot_alloc(&a->c_slot);
-                    }
+                    a->c_slot.req_size = ALIGN(s);
+                }
+                size_t offset = a->c_slot.start + a->c_slot.req_size;
+                if(offset <= a->c_slot.end)
+                {
+                    a->prev_size = s;
+                    return _allocator_slot_alloc(&a->c_slot);
                 }
             }
-            break;
         }
-        case 0:
+        else
         {
-            
-            // there is no difference of size request
-            size_t offset = a->c_slot.start + a->c_slot.req_size;
-            if(offset <= a->c_slot.end)
-            {
-                return _allocator_slot_alloc(&a->c_slot);
-            }
-            break;
-        }
-        default: // 1
-        {
-            // new size is smaller then the previous size.
-            // what if the min size is smaller than the cache alignment supplies.
-            // lets see if the size is small enough to justify creating a counter
-            // alloc within the current slot
+            // we already have a counter allocator
             if(a->c_slot.block_size == a->c_slot.end)
             {
-                a->c_slot.req_size = MAX((s & ~0x7ULL), sizeof(uintptr_t));
+                // we are inside a counter allocator.
+                a->c_slot.req_size = ALIGN(s);
                 // there is no difference of size request
                 size_t offset = a->c_slot.start + a->c_slot.req_size;
                 if(offset <= a->c_slot.end)
@@ -1349,9 +1324,37 @@ void *allocator_malloc(Allocator *a, size_t s)
                     return _allocator_slot_alloc(&a->c_slot);
                 }
             }
-            break;
+            else
+            {
+                // new size is smaller then the previous size.
+                // what if the min size is smaller than the cache alignment supplies.
+                // lets see if the size is small enough to justify creating a counter
+                // alloc within the current slot
+                int64_t delta = (int64_t)(a->prev_size - s);
+                if(delta < a->c_slot.alignment)
+                {
+                    size_t offset = a->c_slot.start + a->c_slot.req_size;
+                    if(offset <= a->c_slot.end)
+                    {
+                        a->prev_size = s;
+                        return _allocator_slot_alloc(&a->c_slot);
+                    }
+                }
+                else
+                {
+                    if(POWER_OF_TWO(a->c_slot.block_size))
+                    {
+                        if((a->c_slot.block_size/s) >= MIN_BLOCKS_PER_COUNTER_ALLOC)
+                        {
+                            // Craete our counter allocator within the current block.
+                        }
+                    }
+                }
+
+            }
         }
-    };
+    }
+    
     
     // get the internal allocation slot
     internal_alloc ialloc = allocator_load_memory_slot(a, s);

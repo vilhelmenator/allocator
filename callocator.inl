@@ -33,7 +33,7 @@ typedef SSIZE_T ssize_t;
 #define ARENA_BIN_COUNT (18*6)
 #define MAX_ARES 64
 #define MAX_THREADS 4096
-
+#define MIN_BLOCKS_PER_COUNTER_ALLOC 8
 
 #define MAX(x, y) (x ^ ((x ^ y) & -(x < y)))
 #define MIN(x, y) (y ^ ((x ^ y) & -(x < y)))
@@ -362,7 +362,7 @@ typedef struct Partition_t
     uint64_t full_mask;     // which parts have free internal memory
 } Partition;
 
-typedef void (*free_func)(void *);
+
 typedef struct PartitionAllocator_t
 {
     int64_t idx;
