@@ -48,7 +48,7 @@ void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMes
 // compute bounds and initialize
 void deferred_init(Allocator* a, void*p)
 {
-    int8_t pid = partition_from_addr((uintptr_t)p);
+    int8_t pid = partition_id_from_addr((uintptr_t)p);
     if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
         deferred_free*c = &a->c_deferred;
         const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)p, pid);
@@ -175,7 +175,7 @@ void deferred_release(Allocator* a, void* p)
                 }
             
                 if (!section_is_connected(section)) {
-                    int8_t pid = partition_from_addr((uintptr_t)section);
+                    int8_t pid = partition_id_from_addr((uintptr_t)section);
                     const uint32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)section, pid);
                     PartitionAllocator *_part_alloc = partition_allocators[part_id];
                     Queue *sections = _part_alloc->sections;

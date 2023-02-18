@@ -208,7 +208,6 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     const size_t block_memory = psize - ALIGN_UP_2(sizeof(Pool), p->alignment);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
     p->num_available = (uint32_t)(MIN(remaining_size, block_memory)/p->block_size);
-
 }
 
 #endif

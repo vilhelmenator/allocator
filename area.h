@@ -81,7 +81,7 @@ static inline Area *area_from_addr(uintptr_t p)
                                     UINT64_MAX,
                                     UINT64_MAX};
 
-    const int8_t pidx = partition_from_addr(p);
+    const int8_t pidx = partition_id_from_addr(p);
     if (pidx < 0) {
         return NULL;
     }

@@ -50,4 +50,24 @@ static inline void *partition_allocator_area_at_idx(PartitionAllocator* pa, Part
     size_t s = (1 << area_type_to_exponent[at]);
     return (void*)(start_addr + (s * idx));
 }
+
+static inline Partition *partition_from_addr(uintptr_t p)
+{
+    static const uint64_t masks[] = {~((AREA_SIZE_SMALL>>3) - 1),
+                                    ~((AREA_SIZE_SMALL>>2) - 1),
+                                    ~((AREA_SIZE_SMALL>>1) - 1),
+                                    ~(AREA_SIZE_SMALL - 1),
+                                    ~(AREA_SIZE_MEDIUM - 1),
+                                    ~(AREA_SIZE_LARGE - 1),
+                                    ~(AREA_SIZE_HUGE - 1),
+                                    UINT64_MAX,
+                                    UINT64_MAX,
+                                    UINT64_MAX};
+
+    const int8_t pidx = partition_id_from_addr(p);
+    if (pidx < 0) {
+        return NULL;
+    }
+    return (Partition *)(p & masks[pidx]);
+}
 #endif

@@ -175,7 +175,7 @@ static int allocator_init()
     uintptr_t end = ((uintptr_t)part_alloc + ALIGN_CACHE(sizeof(PartitionAllocator)));
     uintptr_t alloc_addr = end - DEFAULT_OS_PAGE_SIZE;
     Allocator *new_alloc = (Allocator *)alloc_addr;
-    allocator_set_counter_slot(new_alloc, (void*)end, DEFAULT_OS_PAGE_SIZE);
+    allocator_set_counter_slot(new_alloc, (void*)end, DEFAULT_OS_PAGE_SIZE, 0, 0);
     allocator_list[0] = new_alloc;
     partition_owners[0] = 0;
     new_alloc->part_alloc = part_alloc;
@@ -303,7 +303,7 @@ void *cmalloc_arena(size_t s, size_t partition_idx)
 
 void cfree_arena(void* p)
 {
-    int8_t pid = partition_from_addr((uintptr_t)p);
+    int8_t pid = partition_id_from_addr((uintptr_t)p);
     if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
         Arena *arena = (Arena *)((uintptr_t)p + sizeof(Arena_L2));
         const uint32_t part_id = arena->partition_id;

@@ -224,19 +224,14 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0 and 1
     int8_t pid = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        if(i == 223)
-        {
-            int bb = 0;
-        }
         void *all = cmalloc(allocation_size);
-        pid = partition_from_addr((uintptr_t)all);
+        pid = partition_id_from_addr((uintptr_t)all);
         if (all == NULL) {
             result = false;
             goto end;
         }
         variables[i] = (uint64_t *)all;
         uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
-        uintptr_t delta = (end - (uintptr_t)variables[i]);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             result = false;
             goto end;
@@ -266,7 +261,7 @@ bool test_pools(size_t allocation_size)
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         variables[i] = (uint64_t *)cmalloc(allocation_size);
-        pid = partition_from_addr((uintptr_t)variables[i]);
+        pid = partition_id_from_addr((uintptr_t)variables[i]);
         uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             result = false;
@@ -279,7 +274,7 @@ bool test_pools(size_t allocation_size)
     }
     // next allocation should be from a different partition id
     void *nll = cmalloc(allocation_size);
-    int8_t npid = partition_from_addr((uintptr_t)nll);
+    int8_t npid = partition_id_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
@@ -346,7 +341,7 @@ bool test_heaps(size_t allocation_size)
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_allocations; i++) {
         uint64_t *new_addr = (uint64_t *)cmalloc_from_heap(allocation_size);
-        pid = partition_from_addr((uintptr_t)new_addr);
+        pid = partition_id_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
@@ -361,7 +356,7 @@ bool test_heaps(size_t allocation_size)
     if (num_extended_allocations == 0) {
         // next allocation should be NULL;
         void *nll = cmalloc_from_heap(allocation_size);
-        int8_t npid = partition_from_addr((uintptr_t)nll);
+        int8_t npid = partition_id_from_addr((uintptr_t)nll);
         if (npid == pid) {
             result = false;
         }
@@ -390,7 +385,7 @@ bool test_heaps(size_t allocation_size)
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_allocations; i++) {
         uint64_t *new_addr = (uint64_t *)cmalloc_from_heap(allocation_size);
-        pid = partition_from_addr((uintptr_t)new_addr);
+        pid = partition_id_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
@@ -404,7 +399,7 @@ bool test_heaps(size_t allocation_size)
     }
     // next allocation should be NULL;
     void *nll = cmalloc_from_heap(allocation_size);
-    int8_t npid = partition_from_addr((uintptr_t)nll);
+    int8_t npid = partition_id_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
@@ -528,7 +523,7 @@ bool test_areas(void)
         state = false;
         goto end;
     }
-    int32_t pid = partition_from_addr((uintptr_t)new_addr);
+    int32_t pid = partition_id_from_addr((uintptr_t)new_addr);
     cfree((void *)new_addr);
     variables[num_alloc - 2] = (uint64_t *)cmalloc(allocation_size);
     variables[num_alloc - 3] = (uint64_t *)cmalloc(allocation_size);
@@ -537,7 +532,7 @@ bool test_areas(void)
     cfree(variables[num_alloc - 2]);
     variables[num_alloc - 2] = NULL;
     nll = cmalloc(256 * sz_mb);
-    if (partition_from_addr((uintptr_t)nll) != pid) {
+    if (partition_id_from_addr((uintptr_t)nll) != pid) {
         cfree(nll);
         cfree(variables[num_alloc - 1]);
         variables[num_alloc - 1] = NULL;

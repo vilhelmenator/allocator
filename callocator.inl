@@ -85,7 +85,7 @@ static const uintptr_t area_type_to_size[] = {
 
 static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_type_to_size[pid]; }
 
-static inline int8_t partition_from_addr(uintptr_t p)
+static inline int8_t partition_id_from_addr(uintptr_t p)
 {
     // 4, 8, 16, 32, 64, 128, 256
     static const uint8_t partition_count = 9;
@@ -106,11 +106,11 @@ static inline int8_t partition_allocator_from_addr_and_part(uintptr_t p, int8_t 
 
 static inline int8_t partition_allocator_from_addr(uintptr_t p)
 {
-    int8_t at = partition_from_addr(p);
+    int8_t at = partition_id_from_addr(p);
     return partition_allocator_from_addr_and_part(p, at);
 }
 
-static inline uint64_t area_size_from_addr(uintptr_t p) { return area_size_from_partition_id(partition_from_addr(p)); }
+static inline uint64_t area_size_from_addr(uintptr_t p) { return area_size_from_partition_id(partition_id_from_addr(p)); }
 
 typedef enum ContainerType_e { CT_SECTION = 16, CT_HEAP = 32, CT_SLAB = 64 } ContainerType;
 typedef enum SectionType_e { ST_HEAP_4M = 0, ST_POOL_128K = 1, ST_POOL_512K = 2, ST_POOL_4M = 3 } SectionType;
@@ -391,23 +391,34 @@ typedef struct PartitionAllocator_t
 
 typedef enum slot_type_t
 {
-    SLOT_POOL,
+    SLOT_NONE = 0,
+    SLOT_POOL = 1,
+    SLOT_ARENA = 2,
+    SLOT_COUNTER = 3,
     SLOT_HEAP,
     SLOT_SLAB,
-    SLOT_ARENA,
-    SLOT_COUNTER,
 } slot_type;
 
 typedef struct alloc_slot_t
 {
     uintptr_t header;
-    int32_t end;
-    int32_t start;
+    
+    int32_t end;        // end of contiguous block
+    int32_t offset;     // current start of free memory
+    
+    int32_t start;      // the offset where we start counting from
     int32_t block_size;
+    
     int32_t alignment;
-    int32_t counter;
-    int64_t req_size;
-    slot_type type;
+    int32_t counter;    // the number of addresses handed out to users
+    
+    int32_t req_size;   // current requested size
+    int32_t pend;       // parents contiguous block end
+    
+    uintptr_t pheader;  // parents contiguos header
+    // arena support
+    uintptr_t alloc_mask;
+    uintptr_t alloc_range_mask;
 } alloc_slot;
 
 typedef struct deferred_free_t
