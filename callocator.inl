@@ -21,18 +21,21 @@ typedef SSIZE_T ssize_t;
 #define AREA_SIZE_MEDIUM (SECTION_SIZE * 16ULL) // 64Mb
 #define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)  // 128Mb
 #define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)   // 256Mb
-#define NUM_AREA_PARTITIONS 7
+#define NUM_AREA_PARTITIONS 9
 
 #define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4 // 16k
 #define MEDIUM_OBJECT_SIZE SMALL_OBJECT_SIZE * 8   // 128kb
 #define LARGE_OBJECT_SIZE MEDIUM_OBJECT_SIZE * 16  // 2Mb
 #define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
 
+#define ARENA_LEVELS 3
 #define POOL_BIN_COUNT 135
 #define HEAP_TYPE_COUNT 5
-#define ARENA_BIN_COUNT (18*6)
+#define ARENA_SBIN_COUNT 6 // 1,2,4,8,16,32
+// number of bins for an arena. 3 levels, 6 size bins. 2 states (zero and not zero ).
+#define ARENA_BIN_COUNT (NUM_AREA_PARTITIONS*ARENA_LEVELS*ARENA_SBIN_COUNT*2)
 #define MAX_ARES 64
-#define MAX_THREADS 4096
+#define MAX_THREADS 1024
 #define MIN_BLOCKS_PER_COUNTER_ALLOC 8
 
 #define MAX(x, y) (x ^ ((x ^ y) & -(x < y)))
@@ -53,19 +56,23 @@ typedef SSIZE_T ssize_t;
 #define ALIGN4(x) ALIGN_UP_2(x, 4)
 #define ALIGN_CACHE(x) (((x) + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
 #define ADDR_START (1ULL << 39)
-#define BASE_ADDR(idx) (((1ULL << 40) << (idx)))
- 
+#define BASE_ADDR(idx) ((1ULL << 40) + ((1ULL << 38) << (idx)))
+#define DEFAULT_ALIGNMENT sizeof(intptr_t)
  
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
+// 9 arena types.
+// 4,8,16,32,64,128,256,512,1GB
 typedef enum AreaType_t {
     AT_FIXED_4 = 0,
     AT_FIXED_8 = 1,
     AT_FIXED_16 = 2,
-    AT_FIXED_32 = 3,  //  small allocations, mostly pools.
-    AT_FIXED_64 = 4,  //
-    AT_FIXED_128 = 5, //  larger allocations, but can also contain pools and sections.
-    AT_FIXED_256 = 6, //  heap allocations only
-    AT_VARIABLE = 7   //  not a fixed size area. found in extended partitions.
+    AT_FIXED_32 = 3,
+    AT_FIXED_64 = 4,
+    AT_FIXED_128 = 5,
+    AT_FIXED_256 = 6,
+    AT_FIXED_512 = 7,
+    AT_FIXED_1024 = 8,
+    AT_VARIABLE = 9
 } AreaType;
 
 static const uintptr_t partition_type_to_exponent[] = {
@@ -76,24 +83,28 @@ static const uintptr_t partition_type_to_exponent[] = {
     32, // 4096 MB
     33, // 8192 MB
     34, // 16384 MB
+    35, // 32GB
+    36, // 64GB
+    37, // 128GB
 };
 
 static const uintptr_t area_type_to_size[] = {
     AREA_SIZE_SMALL>>3, AREA_SIZE_SMALL>>2, AREA_SIZE_SMALL>>1,
     AREA_SIZE_SMALL, AREA_SIZE_MEDIUM, AREA_SIZE_LARGE,
-    AREA_SIZE_HUGE, UINT64_MAX};
+    AREA_SIZE_HUGE, AREA_SIZE_HUGE<<1, AREA_SIZE_HUGE<<2};
 
 static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_type_to_size[pid]; }
 
 static inline int8_t partition_id_from_addr(uintptr_t p)
 {
-    // 4, 8, 16, 32, 64, 128, 256
-    static const uint8_t partition_count = 9;
-    const int lz = 23 - __builtin_clz(p >> 32);
-    if (lz < 0 || lz > partition_count) {
+    intptr_t ptrp = p - (1ULL << 40);
+    if(ptrp < 0)
+    {
         return -1;
-    } else {
-        return lz;
+    }
+    else
+    {
+        return 32 - __builtin_clz(ptrp >> 39);
     }
 }
 
@@ -195,16 +206,6 @@ typedef struct Heap_t
     void *next;
 } Heap;
 
-typedef struct HeapEx_t
-{
-    Block* free;
-    AtomicQueue thread_free;
-    //
-    void* thread_i;
-    void *prev;
-    void *next;
-} HeapEx;
-
 static inline void init_heap(Heap*f)
 {
     f->free = NULL;
@@ -217,6 +218,10 @@ static inline void init_heap(Heap*f)
 void deferred_move_thread_free(Heap* d);
 void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last);
 
+// to infer between a pool and an arena.
+// the first bit after the heap header:
+//  1 for an arena.
+//  0 for a pool.
 typedef struct Pool_t
 {
     // 56 byte header
@@ -227,7 +232,7 @@ typedef struct Pool_t
     void *next;
     
     // 32 byte body
-    int32_t idx;        // index in the parent section
+    int32_t idx;        // index in the parent section. Shifted up by one to keep the lowest bit zero.
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
     uint32_t block_size;
@@ -282,22 +287,34 @@ typedef struct Arena_t
 {
     uint32_t partition_id;
     uint8_t container_exponent;
+    uint32_t num_allocations;
 } Arena; // 8 bytes
-
-typedef struct ArenaAllocation_t
-{
-    Arena *arena;
-    int32_t tidx; // top level idx
-    int32_t midx; // mid level idx
-    int32_t bidx; // bottom level idx
-} ArenaAllocation; // 16 bytes
 
 typedef enum ArenaLevel_t
 {
     AL_LOW = 0,
     AL_MID = 1,
-    AL_HIGH = 2
+    AL_HIGH = 2,
 } ArenaLevel;
+
+typedef struct ArenaAllocation_t
+{
+    Arena* arena;       // the address of the arena the memory comes from. Header.
+    void*  block;
+    
+    int32_t tidx;       // top level idx    . large
+    int32_t midx;       // mid level idx    . med
+    int32_t bidx;       // bottom level idx . small
+    
+    int32_t block_size;
+    
+    int32_t num_blocks; // how many blocks at least did we get.
+    int32_t block_exp;  // what offset multiple does the memory need to be on. 1, 2, 4, 8, etc.
+    
+    ArenaLevel level;   // at what level did we get the memory
+    int32_t isZero;
+    
+} ArenaAllocation; // 48 bytes
 
 typedef struct Arena_L2_t
 {
@@ -308,20 +325,19 @@ typedef struct Arena_L2_t
     void *prev;
     void *next;
     
-    // 64
     uint64_t  L0_allocations;   // base allocations here at the root
     uint64_t  L0_ranges;        // size of allocations at the root.
-
+    // 64
     uint64_t  L1_allocations;   // base allocations here at the root
     uint64_t  L1_ranges;        // sizes of allocations at the root
     uint64_t  L1_zero;          // have the L0 headers been zeroed at the root 64th part.
     
-    // L1 - 64 bytes
+    // 88
     uint64_t  L2_allocations;   // base allocations for largest element
     uint64_t  L2_ranges;        // sizes of allocations.
     uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
     
-} Arena_L2; // 136 bytes
+} Arena_L2; // 112 bytes
 
 typedef struct Arena_L1_t
 {
@@ -331,14 +347,14 @@ typedef struct Arena_L1_t
     void *prev;
     void *next;
 
-    // 64
-    uint64_t  L0_allocations;   
+    //
+    uint64_t  L0_allocations;
     uint64_t  L0_ranges;
-    
+    // 64
     uint64_t  L1_allocations;
     uint64_t  L1_ranges;
     uint64_t  L1_zero;
-} Arena_L1; // 112
+} Arena_L1; // 88
 
 typedef struct Arena_L0_t
 {
@@ -351,8 +367,13 @@ typedef struct Arena_L0_t
     uint64_t  L0_allocations;
     uint64_t  L0_ranges;
     
-} Arena_L0; // 88 bytes
+} Arena_L0; // 64 bytes
 
+typedef struct ArenaSizeGroup_t
+{
+    uint64_t mask;
+    Queue *queues;
+} ArenaSizeGroup; // 64 bytes
 
 typedef struct Partition_t
 {
@@ -366,7 +387,7 @@ typedef struct Partition_t
 typedef struct PartitionAllocator_t
 {
     int64_t idx;
-    Partition area[7];
+    Partition area[NUM_AREA_PARTITIONS];
     uint64_t previous_partitions;
     // sections local to this thread with free heaps or pools
     Queue *sections;
@@ -375,10 +396,10 @@ typedef struct PartitionAllocator_t
     
     // free pools of various sizes.
     Queue *pools;
-    // 18 size classes. 6 per size class for remaining block exponent. 1,2,4,8,16,32
-    Queue *aligned_z_cls;
-    Queue *aligned_cls;
     
+    //
+    ArenaSizeGroup *size_groups;
+
     // collection of messages for other threads
     AtomicMessage *thread_messages;
     uint32_t message_count; // how many threaded message have we acccumuated for passing out
@@ -430,6 +451,12 @@ typedef struct deferred_free_t
     uint32_t num;
 } deferred_free;
 
+static inline int32_t is_arena_type(Heap* h)
+{
+    uintptr_t hptr = (uintptr_t)h + sizeof(Heap);
+    uint8_t val = *(uint8_t*)hptr;
+    return val & 0x1;
+}
 
 static inline void deferred_enqueue( deferred_free*c, Heap* dl)
 {
@@ -511,7 +538,6 @@ static inline void list_enqueueIndex(void *queue, void *node, void*base)
         tq->tail = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
     }
 }
-void list_remove32(void *queue, void* node, void* base);
 
 static inline uint64_t compressMask(uint64_t mask_a, int32_t exp)
 {

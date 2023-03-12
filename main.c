@@ -1051,10 +1051,13 @@ int test(void *p)
     cfree(test);
     return 1;
 }
-
+#include <sys/mman.h>
 int main(void)
 {
     
+    
+    //void *t1 = mmap(0, 1ULL << 30, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
+    //void *t2 = mmap((1ULL << 39), 1ULL << 16, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
     //cfree(BASE_ADDR(0) - 8);
     //thrd_t trd;
     //thrd_create(&trd, &test, NULL);

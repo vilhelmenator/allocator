@@ -23,9 +23,8 @@ static inline void decr_thread_count(void)
     atomic_fetch_sub_explicit(&num_threads,1,memory_order_relaxed);
 }
 
-
 static Allocator *main_instance = NULL;
-static const Allocator default_alloc = {-1, 0, NULL, {0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
+static const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
 static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
@@ -81,37 +80,6 @@ void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offse
     tn->prev = NULL;
 }
 
-void list_remove32(void *queue, void *node, void* base)
-{
-    IndexQueue *tq = (IndexQueue *)queue;
-    QIndexNode *tn = (QIndexNode *)node;
-    
-    if(tq->head == tq->tail)
-    {
-        tq->head = 0xFFFFFFFF;
-        tq->tail = 0xFFFFFFFF;
-    }
-    else
-    {
-        if (tn->prev != 0xFFFFFFFF) {
-            QIndexNode *temp = (QIndexNode *)((uint8_t *)base + tn->prev);
-            temp->next = tn->next;
-        }
-        if (tn->next != 0xFFFFFFFF) {
-            QIndexNode *temp = (QIndexNode *)((uint8_t *)base + tn->next);
-            temp->prev = tn->prev;
-        }
-        if (node == (void*)((uint8_t *)base + tq->head)) {
-            tq->head = tn->next;
-        }
-        else if (node == (void*)((uint8_t *)base + tq->tail)) {
-            tq->tail = tn->prev;
-        }
-    }
-    
-    tn->next = 0xFFFFFFFF;
-    tn->prev = 0xFFFFFFFF;
-}
 
 static inline bool is_main_thread(void)
 {
@@ -214,23 +182,16 @@ static void __attribute__((constructor)) library_init(void) { allocator_init(); 
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
 
-void __attribute__((malloc)) *cmalloc(size_t s) {
+extern inline void __attribute__((malloc)) *cmalloc(size_t s) {
     
     if(s == 0)
     {
         return NULL;
     }
-    if(is_main_thread())
-    {
-        return allocator_malloc(main_instance, s);
-    }
-    else
-    {
-        return allocator_malloc(get_thread_instance(), s);
-    }
+    return allocator_malloc(get_thread_instance(), s);
 }
 
-void cfree(void *p)
+extern inline void cfree(void *p)
 {
     if(p == NULL)
     {

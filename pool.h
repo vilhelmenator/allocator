@@ -63,13 +63,13 @@ static inline uint8_t* pool_base_address(Pool *p)
 static inline void pool_post_free(Pool *p)
 {
     Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-    section_free_idx(section, p->idx);
+    section_free_idx(section, p->idx >> 1);
 }
 
 static inline void pool_post_reserved(Pool *p)
 {
     Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
-    section_reserve_idx(section, p->idx);
+    section_reserve_idx(section, p->idx >> 1);
 }
 static inline void pool_set_empty(Pool *p)
 {
@@ -186,7 +186,7 @@ static inline void *pool_aquire_block(Pool *p)
 static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize, const uint32_t align)
 {
     init_heap((Heap *)p);
-    p->idx = pidx;
+    p->idx = pidx << 1;
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
     p->num_committed = 0;
@@ -203,8 +203,9 @@ static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, cons
     p->prev = NULL;
     p->free = NULL;
     
-    const uintptr_t section_end = ALIGN_UP_2((uintptr_t)p, SECTION_SIZE);
     void *blocks = pool_base_address(p);
+    const uintptr_t section_end = ALIGN_UP_2((uintptr_t)blocks, SECTION_SIZE);
+    
     const size_t block_memory = psize - ALIGN_UP_2(sizeof(Pool), p->alignment);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
     p->num_available = (uint32_t)(MIN(remaining_size, block_memory)/p->block_size);

@@ -171,9 +171,9 @@ Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent)
     Arena *h = (Arena *)(base_addr + sizeof(Arena_L2));
 
     h->container_exponent = (uint32_t)arena_size_exponent;
+    h->num_allocations = 0;
     // high allocations
     arena_init_head_range(h, base_addr);
-    //print_header(h, (uintptr_t)h);
     return h;
 }
 

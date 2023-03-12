@@ -234,8 +234,8 @@ static inline uint32_t arena_get_range(uint32_t aidx, size_t size, ArenaLevel al
 
 static inline uint32_t arena_get_level_exponent(Arena* arena, ArenaLevel al)
 {
-    uint64_t offset = (18 - (6*al));
-    return (arena->container_exponent - offset);
+    uint8_t offset = (18 - (6*al));
+    return (uint32_t)(arena->container_exponent - offset);
 }
 
 static inline Arena* arena_get_header(uintptr_t addr)
@@ -258,14 +258,30 @@ static inline uintptr_t arena_get_parent_block(Arena* arena, uintptr_t addr, Are
             return ALIGN_DOWN_2((uintptr_t)addr, 1ULL << (arena->container_exponent - 12)); // 4kth part
     }
 }
-
+static inline void arena_get_start_and_range(uint32_t idx, uint64_t amask, uint64_t rmask, uint32_t* out_start, uint32_t* out_range)
+{
+    if(rmask == 0LL)
+    {
+        *out_range = 1;
+        *out_start = idx;
+        return;
+    }
+        
+    *out_start = 1;
+    *out_range = get_range(*out_start, rmask);
+    while((*out_start + *out_range) <= idx)
+    {
+        *out_start += *out_range;
+        *out_range = get_range(*out_start, rmask);
+    }
+}
 static inline uint32_t arena_get_local_idx(Arena* arena, uintptr_t addr, uintptr_t base, ArenaLevel al)
 {
     return delta_exp_to_idx((uintptr_t)addr, base, arena_get_level_exponent(arena, al));
 };
 
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent);
-
+void arena_init_head_range(Arena *h, uintptr_t mask_offset);
 bool arena_has_room(Arena *h, size_t size);
 
 void *arena_alloc(Arena *h, uint32_t range, uint32_t exp, ArenaLevel al);
@@ -276,7 +292,9 @@ void *arena_alloc_low(Arena *h, uint32_t range, uint32_t exp, uint32_t midx, uin
 void *arena_alloc_at(uintptr_t addr, uint32_t range, uint32_t exp, ArenaLevel al);
 
 void arena_free(Arena *h, void *p, bool dummy);
-
+void arena_free_L2(Arena *h, void *p, Arena_L2* al2, uintptr_t sub_mask);
+void arena_free_L1(Arena *h, void *p, Arena_L1* al1, Arena_L2* al2, uintptr_t sub_mask, uint32_t ridx,
+                   bool needs_zero);
 size_t arena_get_block_size(Arena *h, void *p);
 /*
     - sizelimits (4m / 64 == 64k)

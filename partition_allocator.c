@@ -3,6 +3,7 @@
 #include "os.h"
 #include "pool.h"
 #include "heap.h"
+#include "Arena.h"
 
 cache_align PartitionAllocator *partition_allocators[MAX_THREADS];
 cache_align uint8_t* default_allocator_buffer = 0;
@@ -23,10 +24,8 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     Queue *section_queue = (Queue *)thr_mem;
     thr_mem += CACHE_LINE;
     
-    Queue *aligned_z = (Queue *)thr_mem;
-    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * ARENA_BIN_COUNT);
-    Queue *aligned = (Queue *)thr_mem;
-    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * ARENA_BIN_COUNT);
+    ArenaSizeGroup *aligned = (ArenaSizeGroup *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(ArenaSizeGroup) * ARENA_BIN_COUNT);
     
     AtomicQueue *mqueue = (AtomicQueue *)thr_mem;
     mqueue->head = (uintptr_t)thr_mem;
@@ -41,8 +40,7 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     palloc->sections = section_queue;
     palloc->heaps = heap_queue;
     palloc->pools = pool_queue;
-    palloc->aligned_cls = aligned;
-    palloc->aligned_z_cls = aligned_z;
+    palloc->size_groups = aligned;
     palloc->thread_messages = NULL;
     palloc->thread_free_queue = mqueue;
 
@@ -108,8 +106,11 @@ int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *are
     area_queue->area_mask |= (new_mask << idx);
     area_queue->range_mask |= apply_range(range, idx);
     uintptr_t aligned_addr = start_addr + (type_size * idx);
-    alloc_memory_aligned((void *)aligned_addr, end_addr, size, alignment);
-    return idx;
+    if(alloc_memory_aligned((void *)aligned_addr, end_addr, size, alignment))
+    {
+        return idx;
+    }
+    return -1;
 }
 
 bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *area)
@@ -155,6 +156,30 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
 
             list_remove(pa->sections, section);
         }
+        return true;
+    }
+    return false;
+}
+
+bool partition_allocator_try_release_arena_containers(PartitionAllocator *pa, Arena *arena)
+{
+    if (arena->num_allocations == 0) {
+
+        const arena_size_table *stable = arena_get_size_table(arena);
+        Arena_L2* al2 =  (Arena_L2*)ALIGN_DOWN_2(arena, 1ULL << arena->container_exponent);
+        int32_t cidx = 0;
+        while (cidx != -1) {
+            cidx = get_next_mask_idx(al2->L2_allocations, cidx);
+            Arena_L1* al1 = (Arena_L1*)((uintptr_t)al2 + cidx*stable->sizes[1]);
+            if(!is_arena_type((Heap*)al1))
+            {
+                // is a pool container
+                Pool *pool = (Pool *)al1;
+                Queue *queue = &pa->pools[pool->block_idx];
+                list_remove(queue, pool);
+            }
+        }
+        
         return true;
     }
     return false;
