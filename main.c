@@ -1052,11 +1052,19 @@ int test(void *p)
     return 1;
 }
 #include <sys/mman.h>
+int32_t temp_hit_counter = 0;
 int main(void)
 {
-    
-    
-    //void *t1 = mmap(0, 1ULL << 30, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
+
+    /*
+    size_t size = 1ULL << 22;
+    void *t1 = mmap(BASE_ADDR(0), size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
+    int32_t p1 = mprotect(t1, size, (PROT_READ | PROT_WRITE));
+    int32_t res = munmap(t1, size);
+    void *t2 = mmap(BASE_ADDR(0)+0x40000, size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
+    int32_t p2 = mprotect(t2, size, (PROT_READ | PROT_WRITE));
+    int32_t res2 = munmap(t2, size);
+     */
     //void *t2 = mmap((1ULL << 39), 1ULL << 16, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
     //cfree(BASE_ADDR(0) - 8);
     //thrd_t trd;
@@ -1074,6 +1082,7 @@ int main(void)
     int test_local = 1;
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+        //printf("hit %d \n", temp_hit_counter);
     }
     //test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS*10, test_local);
     //test_size_iter_sparse_reverse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS*10, test_local);

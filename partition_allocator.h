@@ -10,27 +10,11 @@ AtomicMessage *partition_allocator_get_last_message(PartitionAllocator *pa);
 void partition_allocator_thread_free(PartitionAllocator *pa, void *p);
 void partition_allocator_free_area(PartitionAllocator *pa, Area *area);
 bool partition_allocator_release_local_areas(PartitionAllocator *pa);
-void partition_allocator_release_deferred(PartitionAllocator *pa);
-Partition *partition_allocator_get_free_area(PartitionAllocator *pa, size_t s, AreaType t, int32_t* area_idx);
+void partition_allocator_release_deferred(PartitionAllocator *pa, Allocator* a);
+Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t partition_id, size_t s, int32_t* area_idx, bool zero);
 AreaType get_area_type_for_heap(const size_t size);
 Section *partition_allocator_alloc_section(PartitionAllocator *pa, const size_t size);
 
-static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator* pa, Partition* queue)
-{
-    // sizeof(Partition) == 32
-    uintptr_t delta = (uintptr_t)queue - (uintptr_t)&pa->area[0];
-    return (uint32_t)(delta >> 5);
-}
-
-static inline uint32_t partition_allocator_get_arena_idx_from_queue(PartitionAllocator *pa, Arena *arena, Partition *queue)
-{
-    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);
-    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = BASE_ADDR(at);
-    size_t start_addr = (pa->idx)*base_size + offset;
-    const ptrdiff_t diff = (uint8_t *)arena - (uint8_t *)start_addr;
-    return (uint32_t)(((size_t)diff) >> arena->container_exponent);
-}
 
 static inline uint32_t partition_allocator_get_area_idx_from_queue(PartitionAllocator *pa, Area *area, Partition *queue)
 {

@@ -2,7 +2,7 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-//#define ARENA_PATH
+#define ARENA_PATH
 
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
@@ -29,11 +29,11 @@ typedef SSIZE_T ssize_t;
 #define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
 
 #define ARENA_LEVELS 3
-#define POOL_BIN_COUNT 135
+#define POOL_BIN_COUNT 136
 #define HEAP_TYPE_COUNT 5
 #define ARENA_SBIN_COUNT 6 // 1,2,4,8,16,32
 // number of bins for an arena. 3 levels, 6 size bins. 2 states (zero and not zero ).
-#define ARENA_BIN_COUNT (NUM_AREA_PARTITIONS*ARENA_LEVELS*ARENA_SBIN_COUNT*2)
+#define ARENA_BIN_COUNT (NUM_AREA_PARTITIONS*ARENA_LEVELS*ARENA_SBIN_COUNT)
 #define MAX_ARES 64
 #define MAX_THREADS 1024
 #define MIN_BLOCKS_PER_COUNTER_ALLOC 8
@@ -283,97 +283,24 @@ typedef struct QIndexNode_t
     uint32_t next;
 } QIndexNode;
 
+
 typedef struct Arena_t
 {
+    Block* deferred_free;
+    AtomicQueue thread_free;
+    void* _d;
+    void *prev;
+    void *next;
+    
+    uint64_t  allocations;
+    uint64_t  ranges;
+    uint64_t  zero;
+    
     uint32_t partition_id;
     uint8_t container_exponent;
-    uint32_t num_allocations;
-} Arena; // 8 bytes
+    
+} Arena; // 64 bytes
 
-typedef enum ArenaLevel_t
-{
-    AL_LOW = 0,
-    AL_MID = 1,
-    AL_HIGH = 2,
-} ArenaLevel;
-
-typedef struct ArenaAllocation_t
-{
-    Arena* arena;       // the address of the arena the memory comes from. Header.
-    void*  block;
-    
-    int32_t tidx;       // top level idx    . large
-    int32_t midx;       // mid level idx    . med
-    int32_t bidx;       // bottom level idx . small
-    
-    int32_t block_size;
-    
-    int32_t num_blocks; // how many blocks at least did we get.
-    int32_t block_exp;  // what offset multiple does the memory need to be on. 1, 2, 4, 8, etc.
-    
-    ArenaLevel level;   // at what level did we get the memory
-    int32_t isZero;
-    
-} ArenaAllocation; // 48 bytes
-
-typedef struct Arena_L2_t
-{
-    Block* deferred_free;
-    AtomicQueue thread_free;
-    void* _d;
-    // 32
-    void *prev;
-    void *next;
-    
-    uint64_t  L0_allocations;   // base allocations here at the root
-    uint64_t  L0_ranges;        // size of allocations at the root.
-    // 64
-    uint64_t  L1_allocations;   // base allocations here at the root
-    uint64_t  L1_ranges;        // sizes of allocations at the root
-    uint64_t  L1_zero;          // have the L0 headers been zeroed at the root 64th part.
-    
-    // 88
-    uint64_t  L2_allocations;   // base allocations for largest element
-    uint64_t  L2_ranges;        // sizes of allocations.
-    uint64_t  L2_zero;          // have the l2 headers been zeroed at each 64th part
-    
-} Arena_L2; // 112 bytes
-
-typedef struct Arena_L1_t
-{
-    Block* deferred_free;
-    AtomicQueue thread_free;
-    void* _d;
-    void *prev;
-    void *next;
-
-    //
-    uint64_t  L0_allocations;
-    uint64_t  L0_ranges;
-    // 64
-    uint64_t  L1_allocations;
-    uint64_t  L1_ranges;
-    uint64_t  L1_zero;
-} Arena_L1; // 88
-
-typedef struct Arena_L0_t
-{
-    Block* deferred_free;
-    AtomicQueue thread_free;
-    void* _d;
-    void *prev;
-    void *next;
-    
-    uint64_t  L0_allocations;
-    uint64_t  L0_ranges;
-    
-} Arena_L0; // 64 bytes
-
-typedef struct ArenaSizeGroup_t
-{
-    uint64_t mask;
-    Queue *queues;
-} ArenaSizeGroup; // 64 bytes
 
 typedef struct Partition_t
 {
@@ -398,8 +325,8 @@ typedef struct PartitionAllocator_t
     Queue *pools;
     
     //
-    ArenaSizeGroup *size_groups;
-
+    Queue *aligned_heaps;
+    
     // collection of messages for other threads
     AtomicMessage *thread_messages;
     uint32_t message_count; // how many threaded message have we acccumuated for passing out
@@ -497,16 +424,27 @@ typedef struct Allocator_t
 void deferred_init(Allocator* a, void*p);
 void deferred_release(Allocator* a, void* p);
 
+static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator* pa, Partition* queue)
+{
+    uintptr_t delta = (uintptr_t)queue - (uintptr_t)&pa->area[0];
+    return (uint32_t)(delta >> 5);
+}
+
+static inline uint32_t partition_allocator_get_arena_idx_from_queue(PartitionAllocator *pa, Arena *arena, Partition *queue)
+{
+    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, queue);
+    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
+    size_t offset = BASE_ADDR(at);
+    size_t start_addr = (pa->idx)*base_size + offset;
+    const ptrdiff_t diff = (uint8_t *)arena - (uint8_t *)start_addr;
+    return (uint32_t)(((size_t)diff) >> arena->container_exponent);
+}
 // list utilities
 static inline bool qnode_is_connected(QNode* n)
 {
     return (n->prev != 0) || (n->next != 0);
 }
-// list utilities
-static inline bool qnode_indsex_is_connected(QIndexNode* n)
-{
-    return (n->prev != 0) || (n->next != 0);
-}
+static inline bool heap_is_connected(Heap *p) { return p->prev != NULL || p->next != NULL; }
 
 static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
@@ -525,19 +463,6 @@ static inline void _list_enqueue(void *queue, void *node, size_t head_offset, si
 void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offset);
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
-static inline void list_enqueueIndex(void *queue, void *node, void*base)
-{
-    IndexQueue *tq = (IndexQueue *)queue;
-    if (tq->head != 0xFFFFFFFF) {
-        QIndexNode *tn = (QIndexNode *)node;
-        tn->next = tq->head;
-        tn->prev = 0xFFFFFFFF;
-        QIndexNode *temp = (QIndexNode *)((uint8_t *)base + tq->head);
-        temp->prev = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
-    } else {
-        tq->tail = tq->head = (uint32_t)((uint64_t)base - (uint64_t)node);
-    }
-}
 
 static inline uint64_t compressMask(uint64_t mask_a, int32_t exp)
 {
@@ -614,5 +539,47 @@ static inline uint32_t get_range(uint32_t at, uint64_t mask)
     }
     return __builtin_ctzll(mask >> (at + 1)) + 2;
 }
-
+static inline uint32_t num_consecutive_zeros(uint64_t test)
+{
+    if(test == 0)
+    {
+        return 64;
+    }
+    
+    uint32_t lz = __builtin_clzll(test);
+    uint32_t tz = __builtin_ctzll(test);
+    if(lz == 0)
+    {
+        uint32_t l1 = __builtin_clzll(~test);
+        if((64 - l1) <= tz)
+        {
+            return tz;
+        }
+        test &= (1ULL << (64 - (l1 - 1))) - 1;
+    }
+    
+    uint32_t mz = MAX(lz, tz);
+    if((64 - (lz + tz)) <= mz)
+    {
+        return mz;
+    }
+    
+    if(tz == 0)
+    {
+        test = test >> __builtin_ctzll(~test);
+    }
+    else
+    {
+        test = test >> (tz + 1);
+    }
+    
+    while (test >= (1ULL << mz))
+    {
+        tz = __builtin_ctzll(test);
+        mz = mz ^ ((mz ^ tz) & -(mz < tz));
+        test = test >> (tz + 1);
+        test = test >> __builtin_ctzll(~test);
+    }
+    return mz;
+}
 #endif /* callocator_inl */

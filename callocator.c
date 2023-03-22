@@ -250,13 +250,13 @@ void *cmalloc_arena(size_t s, size_t partition_idx)
     }
     Allocator *alloc = get_thread_instance();
     int32_t area_idx = -1;
-    void *partition = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx, &area_idx);
+    void *partition = partition_allocator_get_free_area(alloc->part_alloc, partition_idx, area_type_to_size[partition_idx], &area_idx, false);
     if(partition == NULL)
     {
         return NULL;
     }
     void* arena = partition_allocator_area_at_idx(alloc->part_alloc, partition, area_idx);
-    Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
+    Arena *header = (Arena *)(uintptr_t)arena;
     header->partition_id = (uint32_t)alloc->part_alloc->idx;
 
     return arena;
@@ -266,7 +266,7 @@ void cfree_arena(void* p)
 {
     int8_t pid = partition_id_from_addr((uintptr_t)p);
     if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
-        Arena *arena = (Arena *)((uintptr_t)p + sizeof(Arena_L2));
+        Arena *arena = (Arena *)(uintptr_t)p;
         const uint32_t part_id = arena->partition_id;
         PartitionAllocator *_part_alloc = partition_allocators[part_id];
         

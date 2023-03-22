@@ -79,7 +79,7 @@ void* allocator_slot_alloc_null(Allocator*a,  const size_t as)
 
 void* allocator_slot_alloc_pool(Allocator*a,  const size_t as)
 {
-    return pool_aquire_block((Pool*)(a->c_slot.header & ~0x3));
+    return pool_aquire_block((Pool*)(a->c_slot.header & ~0x3), a);
 }
 
 static inline void* _allocator_slot_alloc(alloc_slot*a)
@@ -147,7 +147,7 @@ internal_alloc allocator_set_pool_slot(Allocator *a, Pool *p)
     a->c_slot.pheader = 0;
     a->c_slot.pend = 0;
     int32_t rem_blocks = p->num_available - p->num_committed;
-    pool_post_reserved(p);
+    pool_post_reserved(p, a);
     
     if(rem_blocks > 0)
     {
@@ -193,7 +193,7 @@ internal_alloc allocator_set_arena_slot(Allocator *a, void *p)
     
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
     size_t asize = area_size_from_partition_id(pid);
-    
+    /*
     Arena_L2* al2 =  (Arena_L2*)ALIGN_DOWN_2(p, asize);
     Arena *h = (Arena *)((uintptr_t)al2 + sizeof(Arena_L2));
     
@@ -237,6 +237,7 @@ internal_alloc allocator_set_arena_slot(Allocator *a, void *p)
             break;
         }
     }
+    */
     a->c_slot.alignment = a->c_slot.block_size;
     a->c_slot.req_size = a->c_slot.block_size;
     
@@ -255,26 +256,30 @@ static inline void allocator_release_pool_slot(Allocator *a)
     if(a->c_slot.offset < a->c_slot.end)
     {
         rem_blocks = (a->c_slot.end - a->c_slot.offset)/a->c_slot.block_size;
+        p->num_used -= rem_blocks;
+        p->num_committed -= rem_blocks;
+        if (!pool_is_empty(p)) {
+
+            if(pool_is_full(p))
+            {
+                pool_post_free(p, a);
+                Queue *queue = &a->part_alloc->pools[p->block_idx];
+                if(pool_is_connected(p) || queue->head == p)
+                {
+                    list_remove(queue, p);
+                }
+            }
+            else
+            {
+                Queue *queue = &a->part_alloc->pools[p->block_idx];
+                if(!pool_is_connected(p) && queue->head != p)
+                {
+                    list_enqueue(queue, p);
+                }
+            }
+        }
     }
-    
-    p->num_used -= rem_blocks;
-    p->num_committed -= rem_blocks;
-    if (!pool_is_empty(p)) {
-        Queue *queue = &a->part_alloc->pools[p->block_idx];
-        if(!pool_is_connected(p) && queue->head != p)
-        {
-            list_enqueue(queue, p);
-        }
-        else
-        {
-            list_remove(queue, p);
-            list_enqueue(queue, p);
-        }
-        if(pool_is_full(p))
-        {
-            pool_post_free(p);
-        }
-    }
+
     //
     a->c_slot.offset = 0;
     a->c_slot.end = 0;
@@ -378,7 +383,7 @@ void allocator_free_from_section(Allocator *a, void *p, Section *section, uint32
 {
     if (section->type != ST_HEAP_4M) {
         Pool *pool = (Pool *)section_find_collection(section, p);
-        pool_free_block(pool, p);
+        pool_free_block(pool, p, a);
     } else {
         ImplicitList *heap = (ImplicitList *)((uint8_t *)section + sizeof(Section));
         uint32_t heapIdx = area_get_type((Area *)section);
@@ -529,7 +534,7 @@ internal_alloc allocator_load_heap_slot(Allocator *a, const size_t s)
 
     AreaType at = get_area_type_for_heap(s);
     int32_t area_idx = -1;
-    Partition* partition = partition_allocator_get_free_area(a->part_alloc, s, at, &area_idx);
+    Partition* partition = partition_allocator_get_free_area(a->part_alloc, at, area_type_to_size[at], &area_idx, false);
     if(partition == NULL)
     {
         return allocator_slot_alloc_null;
@@ -561,7 +566,7 @@ internal_alloc allocator_load_slab_slot(Allocator *a, const size_t s)
 {
     const size_t totalSize = sizeof(Area) + s;
     int32_t area_idx = -1;
-    Partition *partition = partition_allocator_get_free_area(a->part_alloc, totalSize, AT_FIXED_256, &area_idx);
+    Partition *partition = partition_allocator_get_free_area(a->part_alloc, AT_FIXED_256, totalSize, &area_idx, false);
     if (partition == NULL) {
         return allocator_slot_alloc_null;
     }
@@ -580,7 +585,7 @@ void *allocator_alloc_slab(Allocator *a, const size_t s)
 {
     const size_t totalSize = sizeof(Area) + s;
     int32_t area_idx = -1;
-    Partition *partition = partition_allocator_get_free_area(a->part_alloc, totalSize, AT_FIXED_256, &area_idx);
+    Partition *partition = partition_allocator_get_free_area(a->part_alloc, AT_FIXED_256, totalSize, &area_idx, false);
     if (partition == NULL) {
         return NULL;
     }
@@ -597,34 +602,29 @@ void *allocator_alloc_slab(Allocator *a, const size_t s)
     return (void *)((uintptr_t)area + sizeof(Area));
 }
 
-static inline int64_t size_to_arena(size_t s)
+void * allocator_alloc_arena(Allocator* alloc, int64_t partition_idx, bool zero)
 {
-    int32_t lz = 63 - __builtin_clzll(s);
-    uint8_t szidx = lz - 4;
-    return szidx % 6;
-}
-
-void * allocator_alloc_arena(Allocator* alloc, size_t s)
-{
-    int64_t partition_idx = size_to_arena(s);
     if (partition_idx < 0) {
         return NULL;
     }
     int32_t area_idx = -1;
-    Partition* partition = partition_allocator_get_free_area(alloc->part_alloc, s, (AreaType)partition_idx, &area_idx);
+    Partition* partition = partition_allocator_get_free_area(alloc->part_alloc, partition_idx, area_type_to_size[partition_idx], &area_idx, zero);
     if(partition == NULL)
     {
         return NULL;
     }
     void* arena = partition_allocator_area_at_idx(alloc->part_alloc, partition, area_idx);
-    Arena *header = (Arena *)((uintptr_t)arena + sizeof(Arena_L2));
-    header->partition_id = (uint32_t)alloc->part_alloc->idx;
+    Arena *header = (Arena *)arena;
     AreaType at = partition_allocator_get_partition_idx(alloc->part_alloc, partition);
+    
     if((partition->zero_mask & 1ULL << area_idx) == 0)
     {
-        arena_init((uintptr_t)arena, area_idx, area_type_to_exponent[at]);
         partition->zero_mask |= (1ULL << area_idx);
-        partition->full_mask |= (1ULL << area_idx);
+        header->container_exponent = area_type_to_exponent[at];
+        header->partition_id = (uint32_t)alloc->part_alloc->idx;
+        header->allocations = 1;
+        header->ranges = 0;
+        header->zero = 0;
     }
 
     return header;
@@ -672,8 +672,7 @@ uint8_t size_to_sub_class(uint32_t clss, const size_t s)
     if(clss == 0)
     {
         //
-        uint32_t align = 0;
-        return size_to_pool(s, &align);
+        return size_to_pool(s);
     }
     else
     {
@@ -690,106 +689,6 @@ uint8_t size_to_sub_class(uint32_t clss, const size_t s)
     }
 }
 
-uint8_t size_to_arena_level(uint32_t clss, const size_t s)
-{
-    // 4, 8, 16, 32, 64, 128
-    // size of arena
-    return 0;
-};
-
-uint8_t alignment_offset(uint32_t clss, const size_t s)
-{
-    // if partition ...
-    // if arena ...
-    return 0;
-};
-
-
-void* allocator_alloc_arena_high(Allocator *a, Arena* arena, uint32_t range, ArenaAllocation *result)
-{
-    void* res = arena_alloc_high(arena, range, 0, &result->tidx);
-    if(res != NULL)
-    {
-        result->arena = arena;
-        result->midx = 1; // first available b block.
-        return res;
-    }
-    else
-    {
-        // the idx of the arena.
-        size_t aidx = arena_get_arena_index(arena);
-        a->part_alloc->area[aidx].full_mask &= ~(1ULL << aidx);
-        // allocate a new arena.
-        // we can go down by at most 5 steps.
-        // 1, 2, 4, 8, 16, 32
-        
-        Arena* new_arena = allocator_alloc_arena(a, 1ULL << arena->container_exponent);
-        if(new_arena != NULL)
-        {
-            result->arena = new_arena;
-            result->tidx = 0; // the arena is completely empty
-            result->midx = 1; // first available b block.
-            return new_arena;
-        }
-        return NULL;
-    }
-}
-
-void* allocator_alloc_arena_mid(Allocator *a, Arena* arena, uint32_t range, uint32_t tidx, ArenaAllocation *result)
-{
-    result->bidx = 1;
-    void* res = arena_alloc_mid(arena, range, 0, tidx, &result->midx);
-    if(res != NULL)
-    {
-        result->arena = arena;
-        result->tidx = tidx;
-        return res;
-    }
-    else
-    {
-        //
-        Partition* partition = &a->part_alloc->area[arena_get_arena_index(arena)];
-        int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, arena, partition);
-        partition->full_mask |= (1ULL << aidx);
-        void* high = allocator_alloc_arena_high(a, arena, 1, result);
-        if(high != NULL)
-        {
-            void* res = arena_alloc_mid(result->arena, range, 0, result->tidx, &result->midx);
-            if(res != NULL)
-            {
-                return res;
-            }
-        }
-        return NULL;
-    }
-}
-
-void* allocator_alloc_arena_low(Allocator *a, Arena* arena, uint32_t range, uint32_t tidx, uint32_t midx, ArenaAllocation *result)
-{
-    int32_t bidx;
-    void* res = arena_alloc_low(arena, range, 0, tidx, midx, &result->bidx);
-    if(res != NULL)
-    {
-        result->arena = arena;
-        result->tidx = tidx;
-        result->midx = midx;
-        return res;
-    }
-    else
-    {
-        //
-        void* mid = allocator_alloc_arena_mid(a, arena, 1, midx, result);
-        if(mid != NULL)
-        {
-            void* res = arena_alloc_low(result->arena, range, 0, result->midx, result->bidx, &bidx);
-            if(res != NULL)
-            {
-                return res;
-            }
-        }
-        return NULL;
-    }
-}
 
 internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t pc)
 {
@@ -804,40 +703,8 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
     return allocator_slot_alloc_null;
 }
 
-void* allocator_malloc_arena_find_fit(Allocator* alloc, const size_t size,  const size_t alignment)
-{
-    size_t as = ALIGN_UP_2(size, 1 << 4);
-    int32_t lz = 63 - __builtin_clzll(as);
-    uint8_t szidx = lz - 4;
-    for(int si = szidx; si >= 0; si--)
-    {
-        Queue * queue = alloc->part_alloc->size_groups[si].queues;
-        uint8_t clevel = si/6;
-        Heap* start = queue->head;
-        if(start != NULL)
-        {
-            int32_t arena_index = si % 6;
-            uint32_t range = arena_get_range(arena_index, size, clevel);
-            void* res = arena_alloc_at((uintptr_t)start, range, 0, clevel);
-            if(res != NULL)
-            {
-                list_remove(queue, start);
-                allocator_set_arena_slot(alloc, (Arena*)start);
-            }
-            return res;
-        }
-    }
-    return NULL;
-}
 
-static inline uintptr_t allocator_arena_get_at(ArenaAllocation* alloc)
-{
-    const arena_size_table *stable = arena_get_size_table(alloc->arena);
-    uintptr_t base = ((uintptr_t)alloc->arena & ~(os_page_size - 1));
-    uintptr_t al1 = (uintptr_t)(base + (alloc->midx * stable->sizes[2]));
-    return (al1 + (alloc->bidx * stable->sizes[1]));
-}
-
+/*
 int32_t allocator_find_arena(Allocator* alloc, ArenaAllocation *result, bool zero)
 {
     size_t base_size = result->block_size;
@@ -855,328 +722,12 @@ int32_t allocator_find_arena(Allocator* alloc, ArenaAllocation *result, bool zer
     
     int64_t partition_idx = size_to_arena(base_size);
     const arena_size_table *stable = arena_get_size_table_by_idx(partition_idx);
-    ArenaSizeGroup *group = &alloc->part_alloc->size_groups[arena_idx];
-    if(group->mask != 0)
-    {
-        //
-        uint32_t submask = group->mask >> (16*level_idx) & 0xff;
-        Queue* queue = NULL;
-        if(submask != 0)
-        {
-            uint32_t mask_parts[2] = {(submask >> 8) & 0xf, submask & 0xf};
-            uint32_t bcp_mask = ~(bcp - 1);
-            for(uint32_t i = zero; i < 2; i++)
-            {
-                if(mask_parts[i] >= bcp)
-                {
-                    int32_t nsmask = mask_parts[i] & bcp_mask;
-                    int32_t first_nzero = __builtin_ctz(nsmask);
-                    queue = &group->queues[first_nzero];
-                    break;
-                }
-            }
-        }
-        
-        if(queue == NULL)
-        {
-            if(level_idx == 0)
-            {
-                // allocate a new block from L1 or L2.
-            }
-            else if(level_idx == 1)
-            {
-                // allocate a new block from L2
-            }
-            else
-            {
-                // get new arena.
-            }
-        }
-        else
-        {
-            // aquire our item from the queue and return.
-        }
-    }
-    Arena* new_arena = allocator_alloc_arena(alloc, base_size);
-    if(new_arena != NULL)
-    {
-        result->level = AL_HIGH;
-        result->isZero = 1;
-        result->arena = new_arena;
-        result->block = (void*)((uintptr_t)new_arena & ~(os_page_size - 1));
-        result->tidx = 0;
-        return 1;
-    }
-    return 0;
+    
 }
-
-int32_t allocator_find_arena2(Allocator* alloc, ArenaAllocation *result, bool zero)
-{
-    size_t base_size = result->block_size;
-    int32_t block_count = result->num_blocks;
-    int32_t block_offset = result->block_exp;
-    int32_t lz = __builtin_clzll(base_size);
-    int32_t base_offset = 63UL - lz - 4;
-    
-    int32_t clz = __builtin_clzll(block_count);
-    
-    int32_t level_idx = base_offset / 6;
-    int32_t arena_idx = base_offset % 6;
-    
-    int64_t partition_idx = size_to_arena(base_size);
-    const arena_size_table *stable = arena_get_size_table_by_idx(partition_idx);
-    
-    Queue *queues = alloc->part_alloc->size_groups[arena_idx].queues;
-    
-    Queue *al2_queue = NULL;
-    Queue *al1_queue = NULL;
-    Queue *al0_queue = NULL;
-    result->isZero = zero;
-    int32_t size_iter = 6;
-    if(!zero)
-    {
-        size_iter *= 2;
-    }
-    
-    
-    Arena_L2* al2 = NULL;
-    Arena_L1* al1 = NULL;
-    uint32_t num_free_al2 = 32;
-    uint32_t num_free_al1 = 32;
-    uint32_t al2_size_idx = 5;
-    uint32_t al1_size_idx = 5;
-    // check l2 first.
-    for(int32_t i = size_iter - 1; i >= 0; i--)
-    {
-        Queue * q = &queues[(arena_idx+12)*12 + i];
-        if(q->head != NULL)
-        {
-            al2_queue = q;
-            al2 = q->head;
-            al2_size_idx = i;
-            break;
-        }
-        num_free_al2 = num_free_al2 >> 1;
-        if(num_free_al2 == 0)
-        {
-            num_free_al2 = 32;
-        }
-    }
-    for(int32_t i = size_iter - 1; i >= 0; i--)
-    {
-        Queue * q = &queues[(arena_idx+6)*12 + i];
-        if(q->head != NULL)
-        {
-            al1_queue = q;
-            al1 = q->head;
-            al1_size_idx = i;
-            break;
-        }
-        num_free_al1 = num_free_al1 >> 1;
-        if(num_free_al1 == 0)
-        {
-            num_free_al1 = 32;
-        }
-    }
-    if(level_idx == 2)
-    {
-        if(al2 != NULL && num_free_al2 >= block_count)
-        {
-            result->arena = (Arena *)((uintptr_t)al2 + sizeof(Arena_L2));
-            result->block = al2;
-            result->level = AL_HIGH;
-            // we can use the one in the list.
-            list_remove(al2_queue, (Heap*)al2);
-            return 1;
-        }
-    }
-    else if(level_idx == 1)
-    {
-        if(al1 != NULL && num_free_al1 >= block_count)
-        {
-            uintptr_t base = ((uintptr_t)al1 & ~(stable->sizes[3] - 1));
-            result->arena = (Arena *)((uintptr_t)base + sizeof(Arena_L2));
-            result->block = al1;
-            result->midx = arena_get_local_idx(result->arena, (uintptr_t)al1, base, AL_HIGH);
-            result->level = AL_MID;
-            list_remove(al1_queue, (Heap*)al1);
-            return 1;
-        }
-        else
-        {
-            if(al2 != NULL)
-            {
-                Arena *header = (Arena *)((uintptr_t)al2 + sizeof(Arena_L2));
-                int32_t root_midx = find_first_nzeros(al2->L1_allocations, block_count, block_offset);
-                result->level = AL_HIGH;
-                if(root_midx >= 0)
-                {
-                    list_remove(al2_queue, (Heap*)al2);
-                    result->arena = (Arena *)((uintptr_t)al2 + sizeof(Arena_L2));
-                    result->block = al2;
-                    return 1;
-                }
-                root_midx = find_first_nzeros(al2->L2_allocations, 1, 0);
-                uintptr_t mask = reserve_range_idx(1, root_midx);
-                al2->L2_allocations |= mask;
-                al2->L2_ranges |= apply_range((uint32_t)block_count, root_midx);
-                uintptr_t res = ((uintptr_t)al2 + (root_midx * stable->sizes[2]));
-                if (((1ULL << root_midx) & al2->L2_zero) == 0) {
-                    
-                    arena_init_head_range(header, res);
-                }
-                if(num_consecutive_zeros(al2->L2_allocations) < num_free_al2)
-                {
-                    list_remove(al2_queue, (Heap*)al2_queue->head);
-                    al2_size_idx--;
-                    if(al2_size_idx >= 0)
-                    {
-                        list_enqueue(&queues[al2_size_idx], al2);
-                    }
-                }
-                result->arena = header;
-                result->block = (void*)res;
-                result->bidx = root_midx;
-                return 1;
-            }
-        }
-    }
-    else
-    {
-        Heap * start = NULL;
-        // check lists
-        for(int32_t i = size_iter - 1; i >= 0; i--)
-        {
-            Queue * q = &queues[base_offset*6 + i];
-            if(q->head != NULL)
-            {
-                al0_queue = q;
-                break;
-            }
-        }
-        Arena *header = NULL;
-        if(start != NULL)
-        {
-            // return the area.
-            list_remove(al0_queue, (Heap*)al0_queue->head);
-            uintptr_t base = ((uintptr_t)al0_queue->head & ~(stable->sizes[3] - 1));
-            header = (Arena *)((uintptr_t)base + sizeof(Arena_L2));
-            result->midx = arena_get_local_idx(header, (uintptr_t)al0_queue->head, base, AL_HIGH);
-            result->bidx = arena_get_local_idx(header, (uintptr_t)al0_queue->head, base, AL_MID);
-            result->arena = header;
-            result->block = al0_queue->head;
-            result->level = AL_LOW;
-            return 1;
-        }
-        else
-        {
-            int32_t al1_midx = -1;
-            int32_t al2_midx = -1;
-            if(al1 != NULL)
-            {
-                
-                uintptr_t base = ((uintptr_t)al1 & ~(stable->sizes[3] - 1));
-                header = (Arena *)((uintptr_t)base + sizeof(Arena_L2));
-                al1_midx = find_first_nzeros(al1->L0_allocations, block_count, block_offset);
-                result->midx = arena_get_local_idx(header, (uintptr_t)al1_queue->head, base, AL_HIGH);
-                result->arena = header;
-                result->block = al1_queue->head;
-                result->level = AL_MID;
-                if(al1_midx >= 0)
-                {
-                    list_remove(al1_queue, (Heap*)al1_queue->head);
-                    result->bidx = arena_get_local_idx(header, (uintptr_t)al1, base, AL_MID);
-                    return 1;
-                }
-                
-                
-                int32_t root_midx = find_first_nzeros(al1->L1_allocations, 1, 0);
-                result->bidx = root_midx;
-                uintptr_t mask = reserve_range_idx(1, root_midx);
-                al1->L1_allocations |= mask;
-                al1->L1_ranges |= apply_range(1, root_midx);
-                uintptr_t res = ((uintptr_t)al1 + (root_midx * stable->sizes[1]));
-                if (((1ULL << root_midx) & al1->L1_zero) == 0) {
-                    
-                    arena_init_head_range(header, res);
-                }
-                if(num_consecutive_zeros(al1->L1_allocations) < num_free_al1)
-                {
-                    list_remove(al1_queue, (Heap*)al1);
-                    al1_size_idx--;
-                    if(al1_size_idx >= 0)
-                    {
-                        list_enqueue(&queues[al1_size_idx], al1);
-                    }
-                }
-                return 1;
-            }
-            if(al2 != NULL)
-            {
-                header = (Arena *)((uintptr_t)al2 + sizeof(Arena_L2));
-                al2_midx = find_first_nzeros(al2->L0_allocations, block_count, block_offset);
-                result->arena = header;
-                result->level = AL_HIGH;
-                if(al2_midx >= 0)
-                {
-                    list_remove(al2_queue, (Heap*)al2);
-                    result->block = al2;
-                    return 1;
-                }
-                al2_midx = find_first_nzeros(al2->L2_allocations, 1, 0);
-                uintptr_t mask = reserve_range_idx(1, al2_midx);
-                al2->L2_allocations |= mask;
-                al2->L2_ranges |= apply_range(1, al2_midx);
-                uintptr_t res = ((uintptr_t)al2 + (al2_midx * stable->sizes[2]));
-                if (((1ULL << al2_midx) & al2->L2_zero) == 0) {
-                    
-                    arena_init_head_range(header, res);
-                }
-                if(num_consecutive_zeros(al2->L2_allocations) < num_free_al1)
-                {
-                    list_remove(al2_queue, (Heap*)al2);
-                    al2_size_idx--;
-                    if(al2_size_idx >= 0)
-                    {
-                        list_enqueue(&queues[al2_size_idx], al2);
-                    }
-                }
-                result->level = AL_MID;
-                result->midx = al2_midx;
-                result->block = (void*)res;
-                return 1;
-            }
-        }
-    }
-    Arena* new_arena = allocator_alloc_arena(alloc, base_size);
-    if(new_arena != NULL)
-    {
-        result->level = AL_HIGH;
-        result->isZero = 1;
-        result->arena = new_arena;
-        result->block = (void*)((uintptr_t)new_arena & ~(os_page_size - 1));
-        result->tidx = 1;
-        return 1;
-    }
-    return 0;
-}
-
 
 int32_t allocator_get_arena(Allocator* alloc, size_t size, const size_t alignment, bool zero, ArenaAllocation* result)
 {
-    // if not zero, we align to the next multiple of wordwidth
-    size = ALIGN(size);
-    // alignment needs to be a power of 2.
-    // the size needs to be a multiple of the alignment.
-    if(!POWER_OF_TWO(alignment))
-    {
-        return 0;
-    }
-    
-    if(size < alignment)
-    {
-        size = alignment;
-    }
+
     
     // if size is not a multiple of alignment.
     uint32_t highbit = MAX(63UL - __builtin_clzll(size), 5);
@@ -1250,88 +801,77 @@ int32_t allocator_get_arena(Allocator* alloc, size_t size, const size_t alignmen
     }
     return 0;
 }
+*/
 
-internal_alloc allocator_malloc_lt2k(Allocator* alloc, const size_t size)
+internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
 {
-    uint32_t align = 0;
-    uint8_t pc = size_to_pool(size, &align);
+    int32_t row_map[] = {0,0,0,0,0,0,5,5,5,5};
+    uint8_t pc = size_to_pool(size);
     internal_alloc res = allocator_malloc_pool_find_fit(alloc, pc);
     if(res == allocator_slot_alloc_null)
     {
-        uint8_t arena_idx = pc >> 3;
-        size_t area_size = area_size_from_partition_id(arena_idx);
-
-        ArenaAllocation result = {0,0,0,0,0, (uint32_t)(area_size >> 6), 1, 0, AL_HIGH, 0};
-        if(allocator_find_arena(alloc, &result, 0))
+        int32_t row = pc/8;
+        
+        uint8_t arena_idx = row_map[row];
+        Heap* start = allocator_alloc_arena(alloc, arena_idx, zero);
+        if(start != NULL)
         {
-            int8_t tidx = result.tidx;
-            const arena_size_table *stable = arena_get_size_table(result.arena);
-            Arena_L2* al2 = (Arena_L2*)result.block;
+            Arena* arena = (Arena*)start;
+            int32_t midx = find_first_nzeros(arena->allocations, 1, 0);
             
-            tidx = find_first_nzeros(al2->L2_allocations,result.num_blocks,result.block_exp);
-            if(tidx != -1)
-            {
-                uintptr_t mask = reserve_range_idx(1, tidx);
-                al2->L2_allocations |= mask;
-                al2->L2_ranges |= apply_range((uint32_t)result.num_blocks, tidx);
-                Pool* new_pool = (Pool*)((uintptr_t)al2 + tidx*stable->sizes[2]);
-                if(result.isZero)
-                {
-                    int32_t max_zeros = num_consecutive_zeros(al2->L2_allocations);
-                    int32_t size_cls = 31 - __builtin_clz(max_zeros);
-                    int64_t partition_idx = size_to_arena(stable->sizes[0]);
-                    Queue* queue = alloc->part_alloc->size_groups[partition_idx*12 + size_cls].queues;
-                    list_enqueue(queue, al2);
-                }
-                pool_init(new_pool, tidx, pc, (uint32_t)stable->sizes[result.level], align);
-                res = allocator_set_pool_slot(alloc, new_pool);
-                result.arena->num_allocations++;
-            }
+            int8_t pid = partition_id_from_addr((uintptr_t)arena);
+            size_t area_size = area_size_from_partition_id(pid);
+            size_t block_size = area_size >> 6;
+            
+            Pool* new_pool = (Pool*)((uintptr_t)arena + (midx * block_size));
+            pool_init(new_pool, midx, pc, (uint32_t)block_size);
+            res = allocator_set_pool_slot(alloc, new_pool);
         }
     }
     
     return res;
 }
 
-internal_alloc allocator_malloc_base(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
+internal_alloc allocator_malloc_base(Allocator* alloc, size_t size, size_t alignment, const bool zero)
 {
-    //
-    // first we find an area that services a type of size.
-    // then we look at the alignment requirements.
-    // because larger number of two are multiples of lower multiples.
-    // an alignment of 32, will also be true on 64, 128, ... and up.
-    // the only thing is in the higher arena, is that you mighe have to
-    // require an allocation to be of certain sections.
-    // (4m,x64) (8m,32) (16,16) (32,8) (64,4) (128,2)
-    // likeweise for when allocating from a partition.
-    // (256m,x64), (512m,x32), (1m,x16), (2,8), (4,4), (8,2), (16,1)
-    //
-    
-    //
-    // 0 - 5, Arena
-    // 6 - largest arena
-    // 7 - areas. from largest arena
-    // 8 - high address slabs.
-    //
-    
     internal_alloc res = allocator_slot_alloc_null;
-    if((size < (1 << 11)) && (alignment == sizeof(void*)) && !zero) // 8 <= n < 2k
+    // if not zero, we align to the next multiple of wordwidth
+    size = ALIGN(size);
+    // alignment needs to be a power of 2.
+    // the size needs to be a multiple of the alignment.
+    if(!POWER_OF_TWO(alignment))
     {
-        res = allocator_malloc_lt2k(alloc, size);
+        return res;
+    }
+    
+    if(size < alignment)
+    {
+        size = alignment;
+    }
+    
+    if(size <= (1 << 15)) // 8 <= n <= 32k 27
+    {
+        // map size to pool size.
+        // <= 2k just use the previous mapping rules.
+        // <= 32k just map to 256m arena, 4m block.
+        // < 4m just map to arenas. 64k - 4m blocks.
+        // < 256m allocate block ranges from arenas.
+        // < 8gb allocate range of areas.
+        
+        res = allocator_malloc_leq_32k(alloc, size, alignment, zero);
     }
     else
     {
-        // < 256MB
-        // these large alloaction do not go through this path
-        if(size < (1ULL << 27))
+        // these large allocation do not go through this path
+        if(size < (1ULL << 24)) // 32k < n <= 16m
         {
-            ArenaAllocation result = {0,0,0,0,0,0,0};
-            if(allocator_get_arena(alloc, size, alignment, zero, &result))
-            {
-                res = allocator_set_arena_slot(alloc, &result);
-            }
+            // allocate a single arena block
         }
-        else if(size < (1ULL << 33)) // 256m <= n < 8g
+        else if(size < (1ULL << 28)) // 16m < n <= 256m
+        {
+            // allocate multiple arena blocks.
+        }
+        else if(size < (1ULL << 33)) // 256m < n < 8g
         {
             res = allocator_load_slab_slot(alloc, size);
         }
@@ -1343,7 +883,7 @@ internal_alloc allocator_malloc_base(Allocator* alloc, const size_t size, const 
     return res;
 }
 
-static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s, const uint32_t align, Section *prev_section)
+static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const uint32_t s, Section *prev_section)
 {
     Section *sfree_section = NULL;
     if(prev_section != NULL && !section_is_full(prev_section))
@@ -1361,12 +901,12 @@ static inline Pool *allocator_alloc_pool(Allocator *a, const uint32_t idx, const
     const unsigned int coll_idx = section_reserve_next(sfree_section);
     int32_t psize = (1 << size_clss_to_exponent[sfree_section->type]);
     Pool *p = (Pool *)section_get_collection(sfree_section, coll_idx, psize);
-    pool_init(p, coll_idx, idx, psize, align);
+    pool_init(p, coll_idx, idx, psize);
     section_claim_idx(sfree_section, coll_idx);
     return p;
 }
 
-static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const uint32_t align, const int32_t pool_idx, Section *prev_section)
+static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
 {
     Queue *queue = &a->part_alloc->pools[pool_idx];
     Pool *start = queue->head;
@@ -1376,7 +916,7 @@ static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const uin
     }
     else
     {
-        start = allocator_alloc_pool(a, pool_idx, (uint32_t)s, align, prev_section);
+        start = allocator_alloc_pool(a, pool_idx, (uint32_t)s, prev_section);
         if (start == NULL) {
             return NULL;
         }
@@ -1384,17 +924,16 @@ static inline void *allocator_fetch_pool(Allocator *a, const size_t s, const uin
     return start;
 }
 
-static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const uint32_t align, const int32_t pool_idx, Section *prev_section)
+static inline void *allocator_alloc_from_pool_list(Allocator *a, const size_t s, const int32_t pool_idx, Section *prev_section)
 {
-    Pool* new_pool = allocator_fetch_pool(a, s, align, pool_idx, prev_section);
+    Pool* new_pool = allocator_fetch_pool(a, s, pool_idx, prev_section);
     return allocator_set_pool_slot(a, new_pool);
 }
 
 void *allocator_alloc_from_pool(Allocator *a, const size_t s)
 {
-    uint32_t align = 0;
-    const int32_t pool_idx = size_to_pool(s, &align);
-    return allocator_alloc_from_pool_list(a, s, align, pool_idx, NULL);
+    const int32_t pool_idx = size_to_pool(s);
+    return allocator_alloc_from_pool_list(a, s, pool_idx, NULL);
 }
 
 void free_extended_part(size_t pid, void *p)
@@ -1426,6 +965,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
 {
     if(a->c_deferred.end == 0)
     {
+        allocator_release_slot(a);
         deferred_init(a, p);
     }
     else
@@ -1458,13 +998,13 @@ void allocator_thread_dequeue_all(Allocator *a, AtomicQueue *queue)
 
 internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
 {
+    
     deferred_release(a, NULL);
     a->prev_size = (uint32_t)s;
     const size_t as = ALIGN(s);
     //
-    uint32_t align = 0;
-    const int32_t pool_idx = size_to_pool(as, &align);
-    Pool* new_pool = allocator_fetch_pool(a, as, align, pool_idx, NULL);
+    const int32_t pool_idx = size_to_pool(as);
+    Pool* new_pool = allocator_fetch_pool(a, as, pool_idx, NULL);
     if(new_pool == NULL)
     {
         return allocator_slot_alloc_null;
@@ -1474,6 +1014,7 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
 
 static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as)
 {
+    allocator_release_slot(a);
 #ifdef ARENA_PATH
     deferred_release(a, NULL);
     a->prev_size = (uint32_t)as;
@@ -1706,7 +1247,7 @@ bool allocator_release_local_areas(Allocator *a)
     while (palloc != NULL) {
         PartitionAllocator *next = palloc->next;
         allocator_thread_dequeue_all(a, palloc->thread_free_queue);
-        partition_allocator_release_deferred(palloc);
+        partition_allocator_release_deferred(palloc, a);
         bool was_released = partition_allocator_release_local_areas(palloc);
         
         if (was_released) {

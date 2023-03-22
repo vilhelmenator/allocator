@@ -60,57 +60,36 @@ void deferred_init(Allocator* a, void*p)
         
 #ifdef ARENA_PATH
         const arena_size_table *stable = arena_get_size_table_by_idx(pid);
-        Arena_L2* al2 =  (Arena_L2*)ALIGN_DOWN_2(p, area_size);
-        Arena *h = (Arena *)((uintptr_t)al2 + sizeof(Arena_L2));
-        int32_t idx = arena_get_local_idx(h, (uintptr_t)p, (uintptr_t)al2, AL_HIGH);
-        Arena_L1 * al1 = (Arena_L1*)((uintptr_t)al2 + idx*stable->sizes[2]);
-        bool top_aligned = ((uintptr_t)p & (stable->sizes[2] - 1)) == 0;
-        uint32_t out_start = 0;
-        uint32_t out_range = 0;
-        if (top_aligned) {
-            if(idx == 0)
-            {
-                // slab
-                PartitionAllocator *_part_alloc = partition_allocators[part_id];
-                partition_allocator_free_area(_part_alloc, p);
-                a->c_slot.header = 0;
-            }
-            else
-            {
-                // a pool will never get more than 1 block at the high level, so we are safe to just release this.
-                uint32_t range = get_range(idx, al2->L2_ranges);
-                uintptr_t sub_mask = ~reserve_range_idx(range, idx);
-                arena_free_L2(h, p, al2, sub_mask);
-            }
+        Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
+        
+        int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, stable->exponents[0]);
+        if(idx == 0)
+        {
+            // slab
+            pid = partition_id_from_addr((uintptr_t)p);
+            PartitionAllocator *_part_alloc = partition_allocators[part_id];
+            partition_allocator_free_area(_part_alloc, p);
+            a->c_slot.header = 0;
+            return;
         }
         else
         {
-            if(!is_arena_type((Heap*)al1))
+            bool top_aligned = ((uintptr_t)p & (stable->sizes[0] - 1)) == 0;
+            if(top_aligned)
             {
-                c->start = (uintptr_t)al1;
-                c->end = c->start + stable->sizes[2];
-                d = (Heap*)al1;
+                uint32_t range = get_range(idx, h->ranges);
+                uintptr_t sub_mask = ~reserve_range_idx(range, idx);
+                h->allocations &= sub_mask;
+                h->ranges &= sub_mask;
+                a->c_slot.header = 0;
+                return;
             }
             else
             {
-                int32_t midx = arena_get_local_idx(h, (uintptr_t)p, (uintptr_t)al1, AL_MID);
-                Arena_L0 * al0 = (Arena_L0*)((uintptr_t)al1 + midx*stable->sizes[1]);
-                
-                if(!is_arena_type((Heap*)al0))
-                {
-                    arena_get_start_and_range(midx, al1->L1_allocations, al1->L1_ranges, &out_start, &out_range);
-                    c->start = (uintptr_t)al1 + out_start*stable->sizes[1];
-                    c->end = c->start + out_range*stable->sizes[1];
-                    d = (Heap*)al1;
-                }
-                else
-                {
-                    c->start = (uintptr_t)al0;
-                    c->end = c->start + stable->sizes[1];
-                    d = (Heap*)al1;
-                }
+                c->start = ((uintptr_t)h + idx*stable->sizes[0]);
+                c->end = c->start + stable->sizes[0];
+                d = (Heap*)c->start;
             }
-            
         }
 #else
         Area *area = (Area *)((uintptr_t)p & ~(area_size - 1));
@@ -183,7 +162,8 @@ void deferred_release(Allocator* a, void* p)
             Area* area = area_from_addr((uintptr_t)c->start);
             
 #ifdef ARENA_PATH
-            Arena* header = (Arena*)((uintptr_t)area + sizeof(Arena_L2));
+            Arena* header = (Arena*)((uintptr_t)area);
+            
             if(!is_arena_type((Heap*)c->start))
             {
                 //
@@ -191,14 +171,21 @@ void deferred_release(Allocator* a, void* p)
                 pool->num_used -= c->num;
                 if(pool->num_used == 0)
                 {
-                    header->num_allocations--;
-                    if(header->num_allocations == 0)
+                    pool_set_empty(pool, a);
+                    Queue *queue = &a->part_alloc->pools[pool->block_idx];
+                    if(pool_is_connected(pool) && queue->head == pool)
                     {
-                        AreaType at = area_get_type(area);
-                        Partition* partition = &a->part_alloc->area[at];
-                        int32_t aidx = partition_allocator_get_area_idx_from_queue(a->part_alloc, area, partition);
+                        list_remove(queue, pool);
+                    }
+                    /*
+                    if(header->allocations == 1)
+                    {
+                        uint8_t pid = partition_id_from_addr((uintptr_t)p);
+                        Partition* partition = &a->part_alloc->area[pid];
+                        int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, header, partition);
                         partition->full_mask &= ~(1ULL << aidx);
                     }
+                     */
                 }
                 else
                 {
@@ -209,6 +196,7 @@ void deferred_release(Allocator* a, void* p)
                     }
                 }
             }
+            
 #else
             
             
@@ -229,7 +217,12 @@ void deferred_release(Allocator* a, void* p)
                     pool->num_used -= c->num;
                     if(pool->num_used == 0)
                     {
-                        pool_set_empty(pool);
+                        pool_set_empty(pool, a);
+                        Queue *queue = &a->part_alloc->pools[pool->block_idx];
+                        if(pool_is_connected(pool) && queue->head == pool)
+                        {
+                            list_remove(queue, pool);
+                        }
                     }
                     else
                     {
