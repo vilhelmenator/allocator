@@ -1014,13 +1014,13 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
     return allocator_set_pool_slot(a, new_pool);
 }
 
-static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t alignemt, size_t as, bool zero)
+static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as, size_t alignment, bool zero)
 {
     allocator_release_slot(a);
 #ifdef ARENA_PATH
     deferred_release(a, NULL);
     a->prev_size = (uint32_t)as;
-    return allocator_malloc_base(a, ALIGN(as), alignemt, zero);
+    return allocator_malloc_base(a, ALIGN(as), alignment, zero);
 #else
     
     if (as <= LARGE_OBJECT_SIZE) {
