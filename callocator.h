@@ -1,30 +1,4 @@
-/*
- // Finish something!!!!
- // part 1
- [x] - reallocate.
 
- // part 2
- [ ] - partition set testing.
- [ ] - thread alloc/free tests. Test queues.
-
- // part 3.
- [ ] - allocation benchmarks.
-    * various benchmarks
-    * missing API functions.
-    * aligned allocations.
-    * string functions.
-
- // part 4
- [ ] - Heap Allocation improvements. Sorted pools.
- [ ] - Remapping for 4k page allocations.
- [ ] - 32 bit support.
-    * 64 thread_count
-    * 3 gig range.
- [ ] - publish to github and wrap up.
- ------------------------------------------
- [ ] - Sorted Pool for resizing structures.
- [ ] - Additional API utils.
- */
 #ifndef _callocator_h_
 #define _callocator_h_
 
@@ -38,7 +12,9 @@ void cfree(void *p);
 // IN PROGRESS
 void *crealloc(void *p, size_t s);
 void *ccalloc(size_t num, size_t size);
+
 void *caligned_alloc(size_t alignment, size_t size);
+void *zalloc( size_t num, size_t size ); // initilized to zero
 
 bool callocator_release(void);
 void *cmalloc_at(size_t s, uintptr_t vm_addr);
@@ -46,7 +22,6 @@ void *cmalloc_area(size_t s, size_t partition_idx);
 void *cmalloc_arena(size_t s, size_t partition_idx);
 void cfree_arena(void* p);
 void *cmalloc_os(size_t s);
-void *cmalloc_from_heap(size_t s);
 
 // NOT DONE
 

@@ -340,7 +340,7 @@ bool test_heaps(size_t allocation_size)
     int8_t pid = 0;
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_allocations; i++) {
-        uint64_t *new_addr = (uint64_t *)cmalloc_from_heap(allocation_size);
+        uint64_t *new_addr = (uint64_t *)caligned_alloc(32, allocation_size);
         pid = partition_id_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
@@ -355,7 +355,7 @@ bool test_heaps(size_t allocation_size)
     }
     if (num_extended_allocations == 0) {
         // next allocation should be NULL;
-        void *nll = cmalloc_from_heap(allocation_size);
+        void *nll = caligned_alloc(64, allocation_size);
         int8_t npid = partition_id_from_addr((uintptr_t)nll);
         if (npid == pid) {
             result = false;
@@ -384,7 +384,7 @@ bool test_heaps(size_t allocation_size)
     variables = (uint64_t **)malloc(num_allocations * sizeof(uint64_t));
     // exhaust part 0, 1, and 2
     for (uint32_t i = 0; i < num_allocations; i++) {
-        uint64_t *new_addr = (uint64_t *)cmalloc_from_heap(allocation_size);
+        uint64_t *new_addr = (uint64_t *)caligned_alloc(128, allocation_size);
         pid = partition_id_from_addr((uintptr_t)new_addr);
         variables[i] = new_addr;
         uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
@@ -398,7 +398,7 @@ bool test_heaps(size_t allocation_size)
         }
     }
     // next allocation should be NULL;
-    void *nll = cmalloc_from_heap(allocation_size);
+    void *nll = caligned_alloc(256, allocation_size);
     int8_t npid = partition_id_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
@@ -439,7 +439,7 @@ bool test_slabs(void)
 
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (uint64_t *)cmalloc_from_heap(allocation_size);
+        variables[i] = (uint64_t *)caligned_alloc(512, allocation_size);
         uintptr_t end = align_up((uintptr_t)variables[i], 256 * sz_mb);
         if ((end - (uintptr_t)variables[i]) < allocation_size) {
             state = false;
@@ -450,7 +450,7 @@ bool test_slabs(void)
             goto end;
         }
     }
-    void *nll = cmalloc_from_heap(allocation_size);
+    void *nll = caligned_alloc(1024, allocation_size);
     if (nll != NULL) {
         state = false;
     }
@@ -478,7 +478,7 @@ bool test_areas(void)
     for (uint32_t i = 0; i < num_alloc; i++) {
         variables[i] = (uint64_t *)cmalloc(allocation_size);
     }
-    void *nll = cmalloc_from_heap(allocation_size);
+    void *nll = caligned_alloc(2048, allocation_size);
     if (nll != NULL) {
         cfree(nll);
         state = false;
@@ -659,7 +659,7 @@ bool fillAPage(void)
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
 
     for (int i = 0; i < num_allocs; i++) {
-        uint64_t *addr = (uint64_t *)cmalloc_from_heap(8);
+        uint64_t *addr = (uint64_t *)caligned_alloc(4096, 8);
         allocs[i] = addr;
         *allocs[i] = (uint64_t)allocs[i];
     }

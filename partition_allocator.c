@@ -3,7 +3,7 @@
 #include "os.h"
 #include "pool.h"
 #include "heap.h"
-#include "Arena.h"
+#include "arena.h"
 
 cache_align PartitionAllocator *partition_allocators[MAX_THREADS];
 cache_align uint8_t* default_allocator_buffer = 0;
@@ -333,10 +333,8 @@ int8_t partition_allocator_get_free_area_from_queue(PartitionAllocator*pa, Parti
     int8_t new_area = -1;
     //if((partition->free_mask & 1ULL << area_idx) == 0)
     uint32_t at = partition_allocator_get_partition_idx(pa, current_partition);
-    Area *previous_area = NULL;
     int32_t previous_index = ((int8_t*)&pa->previous_partitions)[at];
     if (((int8_t*)&pa->previous_partitions)[at] != -1) {
-        previous_area = partition_allocator_area_at_idx(pa, current_partition, previous_index);
         if((current_partition->full_mask & 1ULL << previous_index) == 0){
             if(zero)
             {

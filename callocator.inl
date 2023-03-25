@@ -2,7 +2,7 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-#define ARENA_PATH
+//#define ARENA_PATH
 
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
@@ -60,6 +60,7 @@ typedef SSIZE_T ssize_t;
 #define DEFAULT_ALIGNMENT sizeof(intptr_t)
  
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
+
 // 9 arena types.
 // 4,8,16,32,64,128,256,512,1GB
 typedef enum AreaType_t {
@@ -93,7 +94,7 @@ static const uintptr_t area_type_to_size[] = {
     AREA_SIZE_SMALL, AREA_SIZE_MEDIUM, AREA_SIZE_LARGE,
     AREA_SIZE_HUGE, AREA_SIZE_HUGE<<1, AREA_SIZE_HUGE<<2};
 
-static inline uint64_t area_size_from_partition_id(uint8_t pid) { return area_type_to_size[pid]; }
+static inline uint64_t area_size_from_partition_id(uint8_t pid) { return BASE_AREA_SIZE << (pid%64); }
 
 static inline int8_t partition_id_from_addr(uintptr_t p)
 {
@@ -372,10 +373,10 @@ typedef struct alloc_slot_t
 typedef struct deferred_free_t
 {
     Queue items;
+    uint32_t num;
+    uint32_t owned;
     uintptr_t start;
     uintptr_t end;
-    uint32_t owned;
-    uint32_t num;
 } deferred_free;
 
 static inline int32_t is_arena_type(Heap* h)
@@ -421,8 +422,17 @@ typedef struct Allocator_t
     Queue partition_allocators;
 } Allocator;
 
+typedef struct Allocator_param_t
+{
+    uintptr_t thread_id;
+    size_t size;
+    size_t alignment;
+    bool zero;
+} Allocator_param;
+
 void deferred_init(Allocator* a, void*p);
 void deferred_release(Allocator* a, void* p);
+Allocator *get_instance(uintptr_t tid);
 
 static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator* pa, Partition* queue)
 {
@@ -582,4 +592,5 @@ static inline uint32_t num_consecutive_zeros(uint64_t test)
     }
     return mz;
 }
+
 #endif /* callocator_inl */

@@ -9,8 +9,7 @@ void release_partition_set(const int32_t idx);
 
 Allocator *allocator_aquire(size_t idx);
 internal_alloc allocator_set_counter_slot(Allocator *a, void *p, uint32_t slot_size, uintptr_t pheader, int32_t pend);
-void *allocator_malloc(Allocator *a, size_t s);
-void *allocator_malloc_heap(Allocator *a, size_t s);
+void *allocator_malloc(Allocator_param *prm);
 bool allocator_release_local_areas(Allocator *a);
 void allocator_free(Allocator *a, void *p);
 void allocator_free_th(Allocator *a, void *p);

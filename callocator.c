@@ -9,7 +9,7 @@
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
 extern int64_t partition_owners[MAX_THREADS];
 extern Allocator *allocator_list[MAX_THREADS];
-static uintptr_t main_thread_id;
+uintptr_t main_thread_id;
 static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
 static inline size_t  get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
@@ -23,8 +23,8 @@ static inline void decr_thread_count(void)
     atomic_fetch_sub_explicit(&num_threads,1,memory_order_relaxed);
 }
 
-static Allocator *main_instance = NULL;
-static const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
+Allocator *main_instance;
+const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0,0,0,0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
 static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
@@ -88,6 +88,15 @@ static inline bool is_main_thread(void)
     } else {
         return false;
     }
+}
+
+Allocator *get_instance(uintptr_t tid)
+{
+    Allocator *ti = thread_instance;
+    if (ti == &default_alloc) {
+        init_thread_instance();
+    }
+    return thread_instance;
 }
 
 static inline Allocator *get_thread_instance(void)
@@ -182,21 +191,43 @@ static void __attribute__((constructor)) library_init(void) { allocator_init(); 
 static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
 #endif
 
-extern inline void __attribute__((malloc)) *cmalloc(size_t s) {
+extern inline void __attribute__((malloc)) *cmalloc(size_t size) {
     
+    if(size == 0)
+    {
+        return NULL;
+    }
+    Allocator_param params = {get_thread_id(), size, sizeof(intptr_t), false};
+    return allocator_malloc(&params);
+}
+
+extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, size_t size)
+{
+    if(size == 0)
+    {
+        return NULL;
+    }
+    Allocator_param params = {get_thread_id(), size, alignment, false};
+    return allocator_malloc(&params);
+}
+
+extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
+{
+    size_t s = num*size;
     if(s == 0)
     {
         return NULL;
     }
-    return allocator_malloc(get_thread_instance(), s);
+    Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), false};
+    return allocator_malloc(&params);
 }
-
 extern inline void cfree(void *p)
 {
     if(p == NULL)
     {
         return;
     }
+    
     if (is_main_thread()) {
         allocator_free(main_instance, p);
     } else {
@@ -312,8 +343,6 @@ bool callocator_reset(void)
     */
     return true;
 }
-
-void *cmalloc_from_heap(size_t size) { return allocator_malloc_heap(get_thread_instance(), size); }
 
 void *crealloc(void *p, size_t s)
 {

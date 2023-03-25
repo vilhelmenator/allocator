@@ -14,6 +14,8 @@ cache_align int64_t partition_owners[MAX_THREADS];
 cache_align Allocator *allocator_list[MAX_THREADS];
 static const int32_t thread_message_imit = 100;
 static spinlock partition_lock = {0};
+extern uintptr_t main_thread_id;
+extern Allocator *main_instance;
 int8_t reserve_any_partition_set(void)
 {
     spinlock_lock(&partition_lock);
@@ -1012,13 +1014,13 @@ internal_alloc allocator_load_pool_slot(Allocator* a, size_t s)
     return allocator_set_pool_slot(a, new_pool);
 }
 
-static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as)
+static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t alignemt, size_t as, bool zero)
 {
     allocator_release_slot(a);
 #ifdef ARENA_PATH
     deferred_release(a, NULL);
     a->prev_size = (uint32_t)as;
-    return allocator_malloc_base(a, ALIGN(as), sizeof(uintptr_t), false);
+    return allocator_malloc_base(a, ALIGN(as), alignemt, zero);
 #else
     
     if (as <= LARGE_OBJECT_SIZE) {
@@ -1033,7 +1035,7 @@ static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as)
 #endif
 }
 
-static inline internal_alloc allocator_malloc_fallback(Allocator *a, size_t as)
+static inline internal_alloc allocator_malloc_fallback(Allocator *a, size_t alignment, size_t as, bool zero)
 {
     // reset caching structs
     a->c_slot.header = 0;
@@ -1046,7 +1048,7 @@ static inline internal_alloc allocator_malloc_fallback(Allocator *a, size_t as)
         PartitionAllocator *part_alloc = partition_allocator_aquire(new_partition_set_idx);
         list_enqueue(&a->partition_allocators, part_alloc);
         a->part_alloc = part_alloc;
-        return allocator_load_memory_slot(a, as);
+        return allocator_load_memory_slot(a, as, alignment, zero);
     }
     // we are out of options and the current thread can't get more memory
     return allocator_slot_alloc_null;
@@ -1188,8 +1190,22 @@ static void *allocator_malloc_slot(Allocator *a, size_t s, void* res)
     return NULL;
 }
 
-void *allocator_malloc(Allocator *a, size_t s)
+void *allocator_malloc(Allocator_param *prm)
 {
+    size_t s = prm->size;
+    size_t align = prm->alignment;
+    bool zero = prm->zero;
+    Allocator* a = NULL;
+    
+    if(prm->thread_id == main_thread_id)
+    {
+        a = main_instance;
+    }
+    else
+    {
+        a = get_instance(prm->thread_id);
+    }
+    
     void* res = (void*)(uintptr_t)((a->c_slot.header & ~0x3) + a->c_slot.offset);
     //
     if(a->prev_size == s)
@@ -1208,33 +1224,18 @@ void *allocator_malloc(Allocator *a, size_t s)
     }
     
     // get the internal allocation slot
-    internal_alloc ialloc = allocator_load_memory_slot(a, s);
+    internal_alloc ialloc = allocator_load_memory_slot(a, s, align, zero);
     // if we were handed the null allocator
     if(ialloc == allocator_slot_alloc_null)
     {
         // we will attemp only once to get a new partition set
         // if our current one is failing us.
         // if this fails, we have exhausted all options.
-        ialloc = allocator_malloc_fallback(a, s);
+        ialloc = allocator_malloc_fallback(a, s, align, zero);
     }
     // commit our memory slot and return the address
     // the null allocator slot, just returns NULL.
     return ialloc(a, s);
-}
-
-void *allocator_malloc_heap(Allocator *a, size_t s)
-{
-    const size_t size = ALIGN4(s);
-    allocator_release_slot(a);
-    deferred_release(a, NULL);
-    internal_alloc ialloc = allocator_slot_alloc_null;
-    if (s <= AREA_SIZE_LARGE) {
-        // allocate form the large page
-        ialloc = allocator_load_heap_slot(a, s);
-    } else {
-        ialloc = allocator_load_slab_slot(a, size);
-    }
-    return ialloc(a, size);
 }
 
 
