@@ -2,7 +2,7 @@
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
-//#define ARENA_PATH
+#define ARENA_PATH
 
 #if defined(_MSC_VER)
 #include <BaseTsd.h>

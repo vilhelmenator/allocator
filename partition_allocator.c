@@ -414,6 +414,7 @@ Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t par
     size_t alignment = area_size;
     Partition *current_queue = &pa->area[partition_idx];
     AreaType t = (AreaType)partition_idx;
+#if defined(ARENA_PATH)
     if(UINT64_MAX == current_queue->area_mask)
     {
         
@@ -422,6 +423,7 @@ Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t par
         current_queue = &pa->area[0];
         t = (AreaType)0;
     }
+#endif
     *new_area_idx = partition_allocator_get_free_area_from_queue(pa, current_queue, zero);
     while (*new_area_idx == -1 && (UINT64_MAX == current_queue->area_mask)) {
         // try releasing an area first.
