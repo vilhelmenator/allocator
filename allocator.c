@@ -577,7 +577,6 @@ internal_alloc allocator_load_slab_slot(Allocator *a, const size_t s)
     {
         area_init(area, a->idx, AT_FIXED_256);
         partition->zero_mask |= (1ULL << area_idx);
-        partition->area_mask |= (1ULL << area_idx);
         partition->full_mask |= (1ULL << area_idx);
     }
     return allocator_set_slab_slot(a, area);
@@ -596,7 +595,6 @@ void *allocator_alloc_slab(Allocator *a, const size_t s)
     {
         area_init(area, a->idx, AT_FIXED_256);
         partition->zero_mask |= (1ULL << area_idx);
-        partition->area_mask |= (1ULL << area_idx);
         partition->full_mask |= (1ULL << area_idx);
     }
     area_reserve_all(area);
@@ -807,7 +805,7 @@ int32_t allocator_get_arena(Allocator* alloc, size_t size, const size_t alignmen
 
 internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
 {
-    int32_t row_map[] = {0,0,0,0,0,0,5,5,5,5};
+    int32_t row_map[] = {0,0,0,0,0,4,5,5,5,5};
     uint8_t pc = size_to_pool(size);
     internal_alloc res = allocator_malloc_pool_find_fit(alloc, pc);
     if(res == allocator_slot_alloc_null)
@@ -851,7 +849,7 @@ internal_alloc allocator_malloc_base(Allocator* alloc, size_t size, size_t align
         size = alignment;
     }
     
-    if(size <= (1 << 15)) // 8 <= n <= 32k 27
+    if(size <= (1 << 15)) // 8 <= n <= 32k
     {
         // map size to pool size.
         // <= 2k just use the previous mapping rules.
@@ -865,17 +863,21 @@ internal_alloc allocator_malloc_base(Allocator* alloc, size_t size, size_t align
     else
     {
         // these large allocation do not go through this path
-        if(size < (1ULL << 24)) // 32k < n <= 16m
+        if(size < (1ULL << 22)) // 32k < n <= 4m
         {
             // allocate a single arena block
+            //Heap* start = allocator_alloc_arena(alloc, arena_idx, zero);
+            // load this into a slot.
         }
         else if(size < (1ULL << 28)) // 16m < n <= 256m
         {
-            // allocate multiple arena blocks.
+            // allocate a single arena
+            //Heap* start = allocator_alloc_arena(alloc, arena_idx, zero);
         }
         else if(size < (1ULL << 33)) // 256m < n < 8g
         {
-            res = allocator_load_slab_slot(alloc, size);
+            // allocate from the OS.
+            res = allocator_load_slab_slot(alloc, size);  //
         }
         else
         {

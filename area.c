@@ -4,84 +4,21 @@
 #include "os.h"
 
 
-static inline bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
+
+// os_alloc_blocks
+// os_free_block
+// partition allocator
+// 
+void *alloc_memory_aligned_blocks(uint8_t partition, size_t count)
 {
-    if (base == ptr) {
-        return true;
-    }
-    uintptr_t range = (uintptr_t)((uint8_t *)ptr + size);
-    if (range > end) {
-        return false;
-    }
-    return true;
+    //os_allocator  : partition_queue[partition_max];
+    //              : init_counter[partition_max];
+    //uint8_t partition_set =
+    // each partition has 64 areas
+    // we will attempt to allocate each of those areas and pluck them into a free list.
+    // we will only reserve the memory for those blocks and not commit them.
+    // we reserve the blocks, but only commit the first page of each served area so we can write into it and attach
+    // it to a list.
+    return NULL;
 }
 
-static spinlock alloc_lock = {0};
-void *alloc_memory_aligned(void *base, uintptr_t end, size_t size, size_t alignment)
-{
-    // base must be aligned to alignment
-    // size must be at least the size of an os page.
-    // alignment is smaller than a page size or not a power of two.
-    if (!safe_to_aquire(base, NULL, size, end)) {
-        return NULL;
-    }
-    // this is not frequently called
-    spinlock_lock(&alloc_lock);
-    void *ptr = alloc_memory(base, size, false);
-    if (ptr == NULL) {
-        goto err;
-    }
-
-    if (!safe_to_aquire(base, ptr, size, end)) {
-        free_memory(ptr, size);
-        ptr = NULL;
-        goto err;
-    }
-
-    if ((((uintptr_t)ptr & (alignment - 1)) != 0)) {
-        // this should happen very rarely, if at all.
-        // release our failed attempt.
-        free_memory(ptr, size);
-
-        // Now we attempt to overallocate
-        size_t adj_size = size + alignment;
-        ptr = alloc_memory(base, adj_size, false);
-        if (ptr == NULL) {
-            goto err;
-        }
-
-        // if the new ptr is not in our current partition set
-        if (!safe_to_aquire(base, ptr, adj_size, end)) {
-            free_memory(ptr, adj_size);
-            ptr = NULL;
-            goto err;
-        }
-
-        // if we got our aligned memory
-        if (((uintptr_t)ptr & (alignment - 1)) != 0) {
-            goto success;
-        }
-        // we are still not aligned, but we have an address that is aligned.
-        free_memory(ptr, adj_size);
-
-        void *aligned_p = (void *)(((uintptr_t)ptr + (alignment - 1)) & ~(alignment - 1));
-        // get our aligned address
-        ptr = alloc_memory(aligned_p, size, false);
-        if (ptr != aligned_p) {
-            // Why would this fail?
-            free_memory(ptr, size);
-            ptr = NULL;
-            goto err;
-        }
-    }
-success:
-    if (!commit_memory(ptr, size)) {
-        // something is greatly foobar.
-        // not allowed to commit the memory we reserved.
-        free_memory(ptr, size);
-        ptr = NULL;
-    }
-err:
-    spinlock_unlock(&alloc_lock);
-    return ptr;
-}

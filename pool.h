@@ -75,6 +75,7 @@ static inline void pool_post_free(Pool *p, Allocator* a)
     arena->allocations = arena->allocations & ~new_mask;
     if(arena->allocations == 1)
     {
+        // add arena to free arenas.
         Partition* partition = &a->part_alloc->area[pid];
         int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, arena, partition);
         partition->full_mask &= ~(1ULL << aidx);
@@ -91,9 +92,9 @@ static inline void pool_post_reserved(Pool *p, Allocator* a)
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
     size_t asize = area_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
-    int32_t pidx = p->idx >> 1;
+    uint32_t pidx = p->idx >> 1;
     uint32_t range = get_range((uint32_t)pidx, arena->ranges);
-    uint64_t new_mask = ((1ULL << range) - 1UL) << pidx;
+    uint64_t new_mask = ((1ULL << range%64) - 1UL) << pidx%64;
     arena->ranges |= apply_range(range, pidx);
     arena->allocations = arena->allocations | new_mask;
     arena->zero = arena->zero | new_mask;
@@ -101,7 +102,7 @@ static inline void pool_post_reserved(Pool *p, Allocator* a)
     {
         Partition* partition = &a->part_alloc->area[pid];
         int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, arena, partition);
-        partition->full_mask |= (1ULL << aidx);
+        partition->full_mask |= (1ULL << aidx%64);
     }
 #else
     Section *section = (Section *)((uintptr_t)p & ~(SECTION_SIZE - 1));
@@ -221,7 +222,7 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
     }
 }
 
-static void pool_init(Pool *p, const int8_t pidx, const uint32_t block_idx, const int32_t psize)
+static void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize)
 {
     init_heap((Heap *)p);
     p->idx = pidx << 1;

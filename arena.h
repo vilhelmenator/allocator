@@ -174,12 +174,6 @@ static inline const arena_size_table *arena_get_size_table(Arena* a)
     return arena_get_size_table_by_idx(arena_get_arena_index(a));
 }
 
-void printBits(size_t const size, void const *const ptr);
-
-void print_header(Arena *h, uintptr_t ptr);
-
-uint32_t num_consecutive_zeros(uint64_t test);
-
 
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
 uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k);

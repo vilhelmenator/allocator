@@ -66,7 +66,6 @@ void deferred_init(Allocator* a, void*p)
         if(idx == 0)
         {
             // slab
-            pid = partition_id_from_addr((uintptr_t)p);
             PartitionAllocator *_part_alloc = partition_allocators[part_id];
             partition_allocator_free_area(_part_alloc, p);
             a->c_slot.header = 0;
@@ -159,10 +158,9 @@ void deferred_release(Allocator* a, void* p)
         {
             Heap *d = (Heap*)c->start;
             d->free = c->items.head;
-            Area* area = area_from_addr((uintptr_t)c->start);
+            
             
 #ifdef ARENA_PATH
-            Arena* header = (Arena*)((uintptr_t)area);
             
             if(!is_arena_type((Heap*)c->start))
             {
@@ -199,7 +197,7 @@ void deferred_release(Allocator* a, void* p)
             
 #else
             
-            
+            Area* area = area_from_addr((uintptr_t)c->start);
             if(area_is_full(area))
             {
                 AreaType at = area_get_type(area);

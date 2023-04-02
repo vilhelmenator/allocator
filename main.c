@@ -1055,7 +1055,6 @@ int test(void *p)
 int32_t temp_hit_counter = 0;
 int main(void)
 {
-
     /*
     size_t size = 1ULL << 22;
     void *t1 = mmap(BASE_ADDR(0), size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);

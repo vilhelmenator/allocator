@@ -305,10 +305,11 @@ typedef struct Arena_t
 
 typedef struct Partition_t
 {
-    uint64_t area_mask;     // which parsts have been allocated
-    uint64_t range_mask;    // the extends for each part
+    uint64_t area_mask;     // which parts have been allocated.
+    uint64_t range_mask;    // the extends for each part.
     uint64_t zero_mask;     // which parts have been initilized.
-    uint64_t full_mask;     // which parts have free internal memory
+    uint64_t full_mask;     // which parts have free internal memory.
+    uint64_t commit_mask;
 } Partition;
 
 
@@ -316,7 +317,6 @@ typedef struct PartitionAllocator_t
 {
     int64_t idx;
     Partition area[NUM_AREA_PARTITIONS];
-    uint64_t previous_partitions;
     // sections local to this thread with free heaps or pools
     Queue *sections;
     // free pages that have room for various size allocations.
@@ -324,9 +324,6 @@ typedef struct PartitionAllocator_t
     
     // free pools of various sizes.
     Queue *pools;
-    
-    //
-    Queue *aligned_heaps;
     
     // collection of messages for other threads
     AtomicMessage *thread_messages;
@@ -422,6 +419,16 @@ typedef struct Allocator_t
     Queue partition_allocators;
 } Allocator;
 
+// partition alloc container and queue container
+// idea to be an abstraction so that the partition allocator is not tied to the thread allocator
+// get memory from OS. Map address of resulting address to partition set and arena.
+//
+typedef struct OSAllocator_t
+{
+    PartitionAllocator *part_alloc;
+    
+} OSAllocator;
+
 typedef struct Allocator_param_t
 {
     uintptr_t thread_id;
@@ -437,7 +444,8 @@ Allocator *get_instance(uintptr_t tid);
 static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator* pa, Partition* queue)
 {
     uintptr_t delta = (uintptr_t)queue - (uintptr_t)&pa->area[0];
-    return (uint32_t)(delta >> 5);
+    uintptr_t id = (uint32_t)(delta / sizeof(Partition));
+    return  id;
 }
 
 static inline uint32_t partition_allocator_get_arena_idx_from_queue(PartitionAllocator *pa, Arena *arena, Partition *queue)

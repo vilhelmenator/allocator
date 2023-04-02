@@ -50,7 +50,16 @@ static inline bool decommit_memory(void *base, size_t size)
 static inline bool free_memory(void *ptr, size_t size)
 {
 #if defined(WINDOWS)
-    return VirtualFree(ptr, 0, MEM_RELEASE);
+    MEMORY_BASIC_INFORMATION info = { 0 };
+    VirtualQuery(ptr, &info, sizeof(info));
+    if(info.AllocationBase < (uintptr_t)ptr)
+    {
+        return VirtualFree(info.AllocationBase, 0, MEM_RELEASE);
+    }
+    else
+    {
+        return VirtualFree(ptr, 0, MEM_RELEASE);
+    }
 #else
     return (munmap(ptr, size) == 0);
 #endif
