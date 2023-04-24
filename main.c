@@ -1078,6 +1078,19 @@ int main(void)
     //  m = cmalloc_os(123);
     //  cfree(m);
 
+    uint32_t temp_count = 8181 + 511;
+    char **variables = (char **)malloc(temp_count * sizeof(char *));
+
+    for (uint64_t i = 0; i < temp_count; i++) {
+        variables[i] = (char *)cmalloc(8);
+    }
+    for (uint64_t i = 0; i < temp_count; i++) {
+        cfree(variables[i]);
+    }
+    variables[0] = (char *)cmalloc(8);
+    variables[1] = (char *)cmalloc(8);
+    cfree(variables[0]);
+    cfree(variables[1]);
     int test_local = 1;
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);

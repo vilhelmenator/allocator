@@ -8,43 +8,50 @@
 
 extern int64_t partition_owners[MAX_THREADS]; 
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
-void deferred_move_thread_free(Heap* d)
+
+uint32_t deferred_move_thread_free(Heap* d)
 {
     AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
     AtomicMessage *curr = (AtomicMessage *)(uintptr_t)d->thread_free.head;
-    
+    uint32_t count = 0;
     if (curr == back)
     {
-        return;
+        return count;
     }
     
-    // skip over separator
-    if (curr == d->thread_i) {
-        curr = (AtomicMessage*)atomic_load_explicit(&curr->next, memory_order_acquire);
-    }
-    
-    // loop between start and end address
-    while (curr != back) {
-        AtomicMessage *next = (AtomicMessage *)atomic_load_explicit(&curr->next, memory_order_acquire);
-        if (next == NULL)
-            break;
+    uint32_t offset = (uint32_t)atomic_load_explicit(&curr->next, memory_order_acquire);
+    if(offset)
+    {
         
-        ((Block*)curr)->next = d->free;
-        d->free = (Block*)curr;
-        curr = next;
+        if ((void*)curr == &d->thread_i) {
+            curr = (AtomicMessage*)((uintptr_t)d + offset);
+            d->thread_i = NULL;
+            deferred_thread_enqueue(d, (AtomicMessage *)&d->thread_i);
+            back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
+            offset = (uint32_t)atomic_load_explicit(&curr->next, memory_order_acquire);
+        }
+        
+        if(curr != back)
+        {
+            count =  curr->count;
+            int32_t idx = curr->idx;
+            ((Block*)curr)->next = (Block*)((uintptr_t)d + idx*d->block_size);
+            d->free = (Block*)curr;
+            curr = (AtomicMessage*)((uintptr_t)d + offset);
+        }
     }
+    
     d->thread_free.head = (uintptr_t)curr;
+    return count;
 }
 
-void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last)
+void deferred_thread_enqueue(Heap *d, AtomicMessage *msg)
 {
-    atomic_store_explicit(&last->next, (uintptr_t)NULL, memory_order_release); // last.next = null
-    AtomicMessage *prev = (AtomicMessage *)atomic_exchange_explicit(&queue->tail, (uintptr_t)last,
+    AtomicQueue* queue = &d->thread_free;
+    AtomicMessage *prev = (AtomicMessage *)atomic_exchange_explicit(&queue->tail, (uintptr_t)msg,
                                                          memory_order_release); // swap back and last
-    atomic_store_explicit(&prev->next, (uintptr_t)first, memory_order_release); // prev.next = first
+    atomic_store_explicit(&prev->next, (uintptr_t)msg - (uintptr_t)d, memory_order_release); // prev.next = first
 }
-
-
 
 // compute bounds and initialize
 void deferred_init(Allocator* a, void*p)
@@ -145,6 +152,7 @@ void deferred_init(Allocator* a, void*p)
         c->items.head = p;
         c->items.tail = p;
         c->num = 1;
+        c->block_size = d->block_size;
     }
 }
 
@@ -159,12 +167,10 @@ void deferred_release(Allocator* a, void* p)
             Heap *d = (Heap*)c->start;
             d->free = c->items.head;
             
-            
 #ifdef ARENA_PATH
             
             if(!is_arena_type((Heap*)c->start))
             {
-                //
                 Pool *pool = (Pool*)c->start;
                 pool->num_used -= c->num;
                 if(pool->num_used == 0)
@@ -194,7 +200,6 @@ void deferred_release(Allocator* a, void* p)
                     }
                 }
             }
-            
 #else
             
             Area* area = area_from_addr((uintptr_t)c->start);
@@ -291,7 +296,11 @@ void deferred_release(Allocator* a, void* p)
         else
         {
             Heap *d = (Heap*)c->start;
-            deferred_thread_enqueue(&d->thread_free, c->items.head, c->items.tail);
+            uintptr_t next = (uintptr_t)((Block*)c->items.head)->next;
+            AtomicMessage* msg = (AtomicMessage*)c->items.head;
+            msg->count = c->num;
+            msg->idx = (next - c->start)/d->block_size;
+            deferred_thread_enqueue(d, c->items.head);
         }
         if(p)
         {

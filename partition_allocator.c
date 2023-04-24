@@ -107,26 +107,29 @@ int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *are
     }
     return -1;
 }
-int32_t partition_allocator_get_next_area2(PartitionAllocator *pa, Partition *area_queue, uint64_t size, uint64_t alignment)
+int32_t partition_allocator_get_next_area2(PartitionAllocator *pa, Partition *partition, uint64_t size, uint64_t alignment)
 {
-    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, area_queue);
+    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, partition);
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
     size_t offset = BASE_ADDR(at);
     size_t start_addr = (pa->idx)*base_size + offset;
-    size_t end_addr = start_addr + base_size;
-    
     size_t type_exponent = area_type_to_exponent[at];
     size_t type_size = area_type_to_size[at];
     uint32_t range = (uint32_t)(size >> type_exponent);
     range += (size & (1 << type_exponent) - 1) ? 1 : 0;
     size = type_size * range;
-    int32_t idx = find_first_nzeros(area_queue->commit_mask, range, 0);
+    /*
+    do{
+        
+    }while(!atomic_compare_exchange_weak)
+     */
+    int32_t idx = find_first_nzeros(partition->commit_mask, range, 0);
     if (idx == -1) {
         return -1; // no room.
     }
     uint64_t new_mask = (1ULL << range) - 1ULL;
-    area_queue->commit_mask |= (new_mask << idx);
-    area_queue->range_mask |= apply_range(range, idx);
+    partition->commit_mask |= (new_mask << idx);
+    partition->range_mask |= apply_range(range, idx);
     uintptr_t aligned_addr = start_addr + (type_size * idx);
     if(commit_memory((void *)aligned_addr, size))
     {
@@ -141,9 +144,6 @@ int32_t partition_allocator_reserve_areas(PartitionAllocator *pa, Partition *par
     size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
     size_t offset = BASE_ADDR(at);
     size_t start_addr = (pa->idx)*base_size + offset;
-    size_t end_addr = start_addr + base_size;
-    
-    size_t type_exponent = area_type_to_exponent[at];
     size_t type_size = area_type_to_size[at];
     for(uint8_t i = 0; i < 64; i++ )
     {
@@ -153,7 +153,6 @@ int32_t partition_allocator_reserve_areas(PartitionAllocator *pa, Partition *par
         {
             uint64_t new_mask = (1ULL << 1) - 1ULL;
             partition->area_mask |= (new_mask << i);
-            partition->range_mask |= apply_range(1, i);
         }
         else
         {
@@ -173,7 +172,7 @@ static inline Partition *partition_allocator_get_area_list(PartitionAllocator *p
 
 static inline int32_t area_list_get_next_area_idx(Partition *queue, uint32_t cidx)
 {
-    return get_next_mask_idx(queue->area_mask, cidx);
+    return get_next_mask_idx(queue->commit_mask, cidx);
 }
 
 bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *area)
@@ -244,6 +243,7 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     list->range_mask = list->range_mask & ~new_mask;
     list->zero_mask = list->zero_mask & ~new_mask;
     list->full_mask = list->full_mask & ~new_mask;
+    list->commit_mask = list->full_mask & ~new_mask;
 #if defined(ARENA_PATH)
     free_memory(a, area_type_to_size[at]*range);
 #else
@@ -436,9 +436,9 @@ Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t par
     uint8_t num_blocks = 1;
     Partition *current_queue = &pa->area[partition_idx];
     AreaType t = (AreaType)partition_idx;
+    
 #if defined(ARENA_PATH)
-    //if(UINT64_MAX == current_queue->area_mask)
-    if((current_queue->full_mask == current_queue->area_mask) && (current_queue->area_mask != 0))
+    if(current_queue->full_mask == current_queue->area_mask && (current_queue->area_mask != 0))
     {
         num_blocks = 1 << partition_idx;
         area_size = area_type_to_size[0];
@@ -448,8 +448,7 @@ Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t par
     }
 #endif
     *new_area_idx = partition_allocator_get_free_area_from_queue(pa, current_queue, num_blocks, zero);
-    //while (*new_area_idx == -1 && (UINT64_MAX == current_queue->area_mask)) {
-    while (*new_area_idx == -1 && (current_queue->full_mask == current_queue->area_mask) && (current_queue->area_mask != 0)) {
+    while (*new_area_idx == -1 && (current_queue->full_mask == current_queue->area_mask && (current_queue->area_mask != 0))) {
         // try releasing an area first.
         bool was_released = partition_allocator_release_single_area_from_queue(pa, current_queue);
         if (was_released) {
@@ -466,18 +465,24 @@ Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t par
         num_blocks = 1 << (uint8_t)t;
         *new_area_idx = partition_allocator_get_free_area_from_queue(pa, current_queue, num_blocks, zero);
     }
-    
+
+
     if (*new_area_idx == -1) {
         if (s < os_page_size) {
             s = os_page_size;
         }
+        // since we are touching the OS, we might as well, throw in a couple of more
+        // batches of work.
+        
         if(current_queue->area_mask == 0)
         {
             partition_allocator_reserve_areas(pa, current_queue);
-            //current_queue->commit_mask = UINT64_MAX;
+        }
+        else
+        {
+            partition_allocator_release_local_areas(pa);
         }
         temp_hit_counter++;
-        //*new_area_idx = partition_allocator_get_next_area(pa, current_queue, s, alignment);
         *new_area_idx = partition_allocator_get_next_area2(pa, current_queue, s, alignment);
         if (*new_area_idx == -1) {
             return NULL;

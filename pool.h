@@ -4,23 +4,24 @@
 
 #include "../cthread/cthread.h"
 #include "section.h"
+#include "os.h"
 //
 // 4k, 8k, 16k, 32k, 64k, 128k, 256, 512, 1, 2, 4, 8, 16, 32, 64, 128, 256
 //
 static const int32_t pool_sizes[] = {
     // if pool block size is a power of two, it will align to that size.
-    8,       16,      24,      32,      40,      48,      56,      64,   // 64k    8b range and aligned to this size
-    72,      80,      88,      96,      104,     112,     120,     128,  // 128    8b   allowes for smaller subrange allocations.
-    144,     160,     176,     192,     208,     224,     240,     256,  // 256    16   1 sr if pool size is not a power of two.
-    288,     320,     352,     384,     416,     448,     480,     512,  // 512    32   3 sr
-    576,     640,     704,     768,     832,     896,     960,     1024, // 1m     64   7 sr
-    1152,    1280,    1408,    1536,    1664,    1792,    1920,    2048, // 2m    128  15 sr
+    8,       16,      24,      32,      40,      48,      56,      64,          // 64k  8b    range and aligned to this size
+    72,      80,      88,      96,      104,     112,     120,     128,         // 128  8b    allowes for smaller subrange allocations.
+    144,     160,     176,     192,     208,     224,     240,     256,         // 256  16    1 sr if pool size is not a power of two.
+    288,     320,     352,     384,     416,     448,     480,     512,         // 512  32    3 sr
+    576,     640,     704,     768,     832,     896,     960,     1024,        // 1m   64    7 sr
+    1152,    1280,    1408,    1536,    1664,    1792,    1920,    2048,        // 2m   128    15 sr
 
     // 256m arena
-    2304,    2560,    2816,    3072,    3328,    3584,    3840,    4096,    // 256   (8 - 16 slots per allocation) ( 3 -> 7 allocations per arena block)
-    4608,    5120,    5632,    6144,    6656,    7168,    7680,    8192,    // 512
-    9216,    10240,   11264,   12288,   13312,   14336,   15360,   16384,   // 1024
-    18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768,   // 2k
+    2304,    2560,    2816,    3072,    3328,    3584,    3840,    4096,        // 256   (8 - 16 slots per allocation) ( 3 -> 7 allocations per arena block)
+    4608,    5120,    5632,    6144,    6656,    7168,    7680,    8192,        // 512
+    9216,    10240,   11264,   12288,   13312,   14336,   15360,   16384,       // 1024
+    18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768,       // 2k
     
     // point to arenas
     // these sizes just get mapped to arenas:
@@ -115,7 +116,6 @@ static inline void pool_set_empty(Pool *p, Allocator* a)
     pool_post_free(p, a);
     // the last piece was returned so make the first item the start of the free
     p->free = NULL;//(Block *)base_addr;
-    //p->free->next = NULL;
     p->num_committed = 0;
     init_heap((Heap *)p);
 }
@@ -125,7 +125,16 @@ static inline void pool_move_deferred(Pool *p)
     if (p->free != NULL) {
         return;
     }
-    p->free = p->deferred_free;
+    
+    if(p->num_used == 0)
+    {
+        p->num_committed = 0;
+        p->free = NULL;
+    }
+    else
+    {
+        p->free = p->deferred_free;
+    }
     p->deferred_free = NULL;
 }
 
@@ -136,7 +145,7 @@ static inline void *pool_extend(Pool *p)
 }
 
 static inline bool pool_is_maybe_empty(const Pool *p) { return p->free == NULL; }
-static inline bool pool_is_empty(const Pool *p)
+static inline bool pool_is_empty(Pool *p)
 {
     if (p->num_used < p->num_available) {
         return false;
@@ -146,6 +155,10 @@ static inline bool pool_is_empty(const Pool *p)
     }
     const AtomicQueue *q = &p->thread_free;
     if (q->head != q->tail) {
+        p->num_used -= deferred_move_thread_free((Heap *)p);
+        if (p->deferred_free != NULL) {
+            pool_move_deferred(p);
+        }
         return false;
     }
     return true;
@@ -173,26 +186,6 @@ static inline void *pool_get_free_block(Pool *p, Allocator* a)
         return base_addr;
     }
     
-    while (((uintptr_t)p->free & (p->alignment - 1)) != 0) {
-        // for each unaligned part
-        // we treat it as a counter alloc created within the pool.
-        uintptr_t header = ALIGN_DOWN_2(p->free, p->alignment);
-        int32_t *counter = (int32_t*)header;
-        if(*counter-- > 0)
-        {
-            // an internal counter allocator would have been created for this pool
-            // we just truncate its sub-part and remove it from the list.
-            p->free = p->free->next;
-        }
-        else
-        {
-            // else, our decrement has removed all references to the counter allocator
-            // and we are safe to return its header
-            ((Block*)header)->next = p->free->next;
-            p->free = (Block*)header;
-            break;
-        }
-    }
     uint32_t curr_idx = (uint32_t)(size_t)((uint8_t *)p->free - base_addr)/p->block_size;
     if (curr_idx >= p->num_available) {
         p->free = NULL;
@@ -210,10 +203,7 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
     if (!pool_is_fully_commited(p)) {
         return pool_extend(p);
     } else {
-        const AtomicQueue *q = &p->thread_free;
-        if (q->head != q->tail) {
-            deferred_move_thread_free((Heap *)p);
-        }
+        p->num_used -= deferred_move_thread_free((Heap *)p);
         if (p->deferred_free != NULL) {
             pool_move_deferred(p);
             return pool_get_free_block(p, a);
@@ -229,7 +219,7 @@ static void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, con
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
     p->num_committed = 0;
-    p->alignment = 1 << __builtin_ctz(p->block_size);
+    p->alignment = (uint32_t)(1ULL << __builtin_ctzll(p->block_size));
     
     p->num_used = 0;
     p->next = NULL;

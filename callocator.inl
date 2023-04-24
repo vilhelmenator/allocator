@@ -154,7 +154,9 @@ typedef struct IndexQueue_t
 // lockless message queue
 typedef struct AtomicMessage_t
 {
-    _Atomic(uintptr_t) next;
+    uint16_t idx;   // next block idx
+    uint16_t count; // number of blocks in this message
+    _Atomic(uint32_t) next; // next message idx
 } AtomicMessage;
 
 typedef struct AtomicQueue_t
@@ -162,17 +164,6 @@ typedef struct AtomicQueue_t
     uintptr_t head;
     _Atomic(uintptr_t) tail;
 } AtomicQueue;
-
-typedef struct AtomicIndexMessage_t
-{
-    _Atomic(int32_t) next;
-} AtomicIndexMessage;
-
-typedef struct AtomicIndexQueue_t
-{
-    int32_t head;
-    _Atomic(int32_t) tail;
-} AtomicIndexQueue;
 
 typedef struct Area_t
 {
@@ -203,6 +194,7 @@ typedef struct Heap_t
     AtomicQueue thread_free;
     //
     void* thread_i;
+    size_t block_size;
     void *prev;
     void *next;
 } Heap;
@@ -216,8 +208,8 @@ static inline void init_heap(Heap*f)
     f->next = NULL;
 }
 
-void deferred_move_thread_free(Heap* d);
-void deferred_thread_enqueue(AtomicQueue *queue, AtomicMessage *first, AtomicMessage *last);
+uint32_t deferred_move_thread_free(Heap* d);
+void deferred_thread_enqueue(Heap *d, AtomicMessage *msg);
 
 // to infer between a pool and an arena.
 // the first bit after the heap header:
@@ -229,6 +221,7 @@ typedef struct Pool_t
     Block* deferred_free;
     AtomicQueue thread_free;
     void* _d;
+    size_t block_size;
     void *prev;
     void *next;
     
@@ -236,7 +229,6 @@ typedef struct Pool_t
     int32_t idx;        // index in the parent section. Shifted up by one to keep the lowest bit zero.
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
-    uint32_t block_size;
     int32_t num_used;
     
     int32_t num_committed;
@@ -253,6 +245,7 @@ typedef struct ImplicitList_t
     Block* deferred_free;
     AtomicQueue thread_free;
     void* _d;
+    size_t block_size;
     void *prev;
     void *next;
     
@@ -290,6 +283,9 @@ typedef struct Arena_t
     Block* deferred_free;
     AtomicQueue thread_free;
     void* _d;
+    
+    size_t block_size;
+    
     void *prev;
     void *next;
     
@@ -305,11 +301,11 @@ typedef struct Arena_t
 
 typedef struct Partition_t
 {
-    uint64_t area_mask;     // which parts have been allocated.
-    uint64_t range_mask;    // the extends for each part.
-    uint64_t zero_mask;     // which parts have been initilized.
-    uint64_t full_mask;     // which parts have free internal memory.
-    uint64_t commit_mask;
+    _Atomic(uint64_t) area_mask;     // which parts have been allocated.
+    _Atomic(uint64_t) range_mask;    // the extends for each part.
+    _Atomic(uint64_t) zero_mask;     // which parts have been initilized.
+    _Atomic(uint64_t) full_mask;     // which parts have free internal memory.
+    _Atomic(uint64_t) commit_mask;
 } Partition;
 
 
@@ -374,6 +370,7 @@ typedef struct deferred_free_t
     uint32_t owned;
     uintptr_t start;
     uintptr_t end;
+    size_t block_size;
 } deferred_free;
 
 static inline int32_t is_arena_type(Heap* h)
@@ -392,7 +389,7 @@ static inline void deferred_enqueue( deferred_free*c, Heap* dl)
     }
     else
     {
-        deferred_thread_enqueue(&dl->thread_free, c->items.head, c->items.tail);
+        deferred_thread_enqueue(dl, c->items.head);
     }
     c->items.head = NULL;
     c->items.tail = NULL;
@@ -444,8 +441,7 @@ Allocator *get_instance(uintptr_t tid);
 static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator* pa, Partition* queue)
 {
     uintptr_t delta = (uintptr_t)queue - (uintptr_t)&pa->area[0];
-    uintptr_t id = (uint32_t)(delta / sizeof(Partition));
-    return  id;
+    return  (uint32_t)(delta / sizeof(Partition));
 }
 
 static inline uint32_t partition_allocator_get_arena_idx_from_queue(PartitionAllocator *pa, Arena *arena, Partition *queue)
@@ -464,6 +460,20 @@ static inline bool qnode_is_connected(QNode* n)
 }
 static inline bool heap_is_connected(Heap *p) { return p->prev != NULL || p->next != NULL; }
 
+static inline void _list_append(void *queue, void *node, size_t head_offset, size_t prev_offset)
+{
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    if (tq->tail != 0) {
+        QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
+        tn->next = 0;
+        tn->prev = tq->tail;
+        QNode *temp = (QNode *)((uint8_t *)tq->tail + prev_offset);
+        temp->next = tq->tail = node;
+    } else {
+        tq->tail = tq->head = node;
+    }
+}
+
 static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
@@ -479,6 +489,7 @@ static inline void _list_enqueue(void *queue, void *node, size_t head_offset, si
 }
 
 void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offset);
+#define list_append(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 
