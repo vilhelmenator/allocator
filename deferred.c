@@ -180,23 +180,7 @@ void deferred_release(Allocator* a, void* p)
                     if(pool_is_connected(pool) && queue->head == pool)
                     {
                         list_remove(queue, pool);
-                    }
-                    /*
-                    if(header->allocations == 1)
-                    {
-                        uint8_t pid = partition_id_from_addr((uintptr_t)p);
-                        Partition* partition = &a->part_alloc->area[pid];
-                        int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, header, partition);
-                        partition->full_mask &= ~(1ULL << aidx);
-                    }
-                     */
-                }
-                else
-                {
-                    Queue *queue = &a->part_alloc->pools[pool->block_idx];
-                    if(!pool_is_connected(pool) && queue->head != pool)
-                    {
-                        list_enqueue(queue, pool);
+                        list_append(queue, pool);
                     }
                 }
             }

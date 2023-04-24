@@ -261,29 +261,12 @@ static inline void allocator_release_pool_slot(Allocator *a)
         rem_blocks = (a->c_slot.end - a->c_slot.offset)/a->c_slot.block_size;
         p->num_used -= rem_blocks;
         p->num_committed -= rem_blocks;
-        if (!pool_is_empty(p)) {
-            
-            if(pool_is_full(p))
-            {
-                pool_post_free(p, a);
-                Queue *queue = &a->part_alloc->pools[p->block_idx];
-                if(pool_is_connected(p) || queue->head == p)
-                {
-                    list_remove(queue, p);
-                }
-            }
-            
-            else
-            {
-                Queue *queue = &a->part_alloc->pools[p->block_idx];
-                if(!pool_is_connected(p) && queue->head != p)
-                {
-                    list_enqueue(queue, p);
-                }
-            }
-        }
     }
-    
+    else
+    {
+        list_remove(queue, p);
+        list_append(queue, p);
+    }
 
     //
     a->c_slot.offset = 0;
@@ -702,9 +685,10 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
     
     if(start != NULL)
     {
-        list_remove(queue, start);
-        return allocator_set_pool_slot(alloc, (Pool *)start);
-
+        if(!pool_is_empty((Pool*)start))
+        {
+            return allocator_set_pool_slot(alloc, (Pool *)start);
+        }
     }
     return allocator_slot_alloc_null;
 }
@@ -832,7 +816,12 @@ internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, con
             Pool* new_pool = (Pool*)((uintptr_t)arena + (midx * block_size));
             pool_init(new_pool, midx, pc, (uint32_t)block_size);
             res = allocator_set_pool_slot(alloc, new_pool);
-            Queue *queue = &alloc->part_alloc->pools[pc];            
+            Queue *queue = &alloc->part_alloc->pools[pc];
+            if(!pool_is_connected(new_pool) && queue->head != new_pool)
+            {
+                list_enqueue(queue, new_pool);
+            }
+            
         }
     }
     
