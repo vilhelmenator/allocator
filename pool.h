@@ -59,6 +59,9 @@ static inline uint8_t size_to_pool(const size_t as)
     }
 }
 static inline bool pool_is_connected(Pool *p) { return p->prev != NULL || p->next != NULL; }
+static inline bool pool_is_full(const Pool *p) { return p->num_used == p->thread_free_counter; }
+static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
+static inline bool pool_is_maybe_empty(const Pool *p) { return p->free == NULL; }
 static inline uint8_t* pool_base_address(Pool *p)
 {
     return (uint8_t*)(ALIGN_UP_2((uintptr_t)p + sizeof(Pool), p->alignment));
@@ -111,7 +114,7 @@ static inline void pool_post_reserved(Pool *p, Allocator* a)
 #endif
     
 }
-static inline void pool_set_empty(Pool *p, Allocator* a)
+static inline void pool_set_full(Pool *p, Allocator* a)
 {
     pool_post_free(p, a);
     // the last piece was returned so make the first item the start of the free
@@ -126,7 +129,7 @@ static inline void pool_move_deferred(Pool *p)
         return;
     }
     
-    if(p->num_used == 0)
+    if(pool_is_full(p))
     {
         p->num_committed = 0;
         p->free = NULL;
@@ -144,32 +147,26 @@ static inline void *pool_extend(Pool *p)
     return (pool_base_address(p) + (p->num_committed++ * p->block_size));
 }
 
-static inline bool pool_is_maybe_empty(const Pool *p) { return p->free == NULL; }
 static inline bool pool_is_empty(Pool *p)
 {
     if (p->num_used < p->num_available) {
         return false;
     }
+    
     if (p->deferred_free != NULL) {
+        p->free = p->deferred_free;
+        p->deferred_free = NULL;
         return false;
     }
-    const AtomicQueue *q = &p->thread_free;
-    if (q->head != q->tail) {
-        p->num_used -= deferred_move_thread_free((Heap *)p);
-        if (p->deferred_free != NULL) {
-            pool_move_deferred(p);
-        }
-        return false;
-    }
+    
     return true;
 }
-static inline bool pool_is_full(const Pool *p) { return p->num_used == 0; }
-static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
 
 static inline void pool_free_block(Pool *p, void *block, Allocator* a)
 {
-    if (--p->num_used == 0) {
-        pool_set_empty(p, a);
+    --p->num_used;
+    if (pool_is_full(p)) {
+        pool_set_full(p, a);
         return;
     }
 
@@ -203,7 +200,6 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
     if (!pool_is_fully_commited(p)) {
         return pool_extend(p);
     } else {
-        p->num_used -= deferred_move_thread_free((Heap *)p);
         if (p->deferred_free != NULL) {
             pool_move_deferred(p);
             return pool_get_free_block(p, a);
@@ -212,26 +208,6 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
     }
 }
 
-static void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize)
-{
-    init_heap((Heap *)p);
-    p->idx = pidx << 1;
-    p->block_idx = block_idx;
-    p->block_size = pool_sizes[block_idx];
-    p->num_committed = 0;
-    p->alignment = (uint32_t)(1ULL << __builtin_ctzll(p->block_size));
-    
-    p->num_used = 0;
-    p->next = NULL;
-    p->prev = NULL;
-    p->free = NULL;
-    
-    void *blocks = pool_base_address(p);
-    const uintptr_t section_end = ALIGN_UP_2((uintptr_t)blocks, SECTION_SIZE);
-    
-    const size_t block_memory = psize - ALIGN_UP_2(sizeof(Pool), p->alignment);
-    const size_t remaining_size = section_end - (uintptr_t)blocks;
-    p->num_available = (uint32_t)(MIN(remaining_size, block_memory)/p->block_size);
-}
+void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize);
 
 #endif

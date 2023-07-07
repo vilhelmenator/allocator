@@ -22,11 +22,7 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     Queue *heap_queue = (Queue *)thr_mem;
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * HEAP_TYPE_COUNT);
     Queue *section_queue = (Queue *)thr_mem;
-    thr_mem += CACHE_LINE;
     
-    AtomicQueue *mqueue = (AtomicQueue *)thr_mem;
-    mqueue->head = (uintptr_t)thr_mem;
-    mqueue->tail = (uintptr_t)thr_mem;
     thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
     thr_mem -= ALIGN_CACHE(sizeof(PartitionAllocator));
     
@@ -36,8 +32,6 @@ PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
     palloc->sections = section_queue;
     palloc->heaps = heap_queue;
     palloc->pools = pool_queue;
-    palloc->thread_messages = NULL;
-    palloc->thread_free_queue = mqueue;
 
     return palloc;
 }
@@ -60,25 +54,6 @@ PartitionAllocator *partition_allocator_aquire(size_t idx)
     return partition_allocators[idx];
 }
 
-AtomicMessage *partition_allocator_get_last_message(PartitionAllocator *pa)
-{
-    AtomicMessage *msg = pa->thread_messages;
-    if (msg == NULL) {
-        return NULL;
-    }
-    while ((uintptr_t)msg->next != 0) {
-        msg = (AtomicMessage *)(uintptr_t)msg->next;
-    }
-    return msg;
-}
-
-void partition_allocator_thread_free(PartitionAllocator *pa, void *p)
-{
-    AtomicMessage *new_free = (AtomicMessage *)p;
-    new_free->next = (uintptr_t)pa->thread_messages;
-    pa->thread_messages = new_free;
-    pa->message_count++;
-}
 
 int32_t partition_allocator_get_next_area(PartitionAllocator *pa, Partition *area_queue, uint64_t size, uint64_t alignment)
 {
@@ -236,7 +211,7 @@ bool partition_allocator_try_release_containers(PartitionAllocator *pa, Area *ar
 void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Partition *list, size_t idx)
 {
     
-    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, list);
+    
     uint64_t range = get_range((uint32_t)idx, list->range_mask);
     uint64_t new_mask = ((1ULL << range) - 1UL) << idx;
     list->area_mask = list->area_mask & ~new_mask;
@@ -245,6 +220,7 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     list->full_mask = list->full_mask & ~new_mask;
     list->commit_mask = list->full_mask & ~new_mask;
 #if defined(ARENA_PATH)
+    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, list);
     free_memory(a, area_type_to_size[at]*range);
 #else
     free_memory(a, area_get_size(a)*range);
@@ -344,9 +320,9 @@ void partition_allocator_release_deferred(PartitionAllocator *pa, Allocator* a)
         {
             Pool* next = start->next;
             pool_move_deferred(start);
-            if(start->num_used == 0)
+            if(pool_is_full(start))
             {
-                pool_set_empty(start, a);
+                pool_set_full(start, a);
             }
             start = next;
         }

@@ -152,11 +152,18 @@ typedef struct IndexQueue_t
 } IndexQueue;
 
 // lockless message queue
+typedef struct MessageHeader_t
+{
+    uint16_t idx;
+    uint16_t count;
+    uint32_t next;
+} MessageHeader;
+
+
+// lockless message queue
 typedef struct AtomicMessage_t
 {
-    uint16_t idx;   // next block idx
-    uint16_t count; // number of blocks in this message
-    _Atomic(uint32_t) next; // next message idx
+    _Atomic(uintptr_t) next; // next message idx
 } AtomicMessage;
 
 typedef struct AtomicQueue_t
@@ -191,9 +198,7 @@ typedef struct Section_t
 typedef struct Heap_t
 {
     Block* free;
-    AtomicQueue thread_free;
-    //
-    void* thread_i;
+    _Atomic(uintptr_t) thread_free_counter;
     size_t block_size;
     void *prev;
     void *next;
@@ -202,14 +207,14 @@ typedef struct Heap_t
 static inline void init_heap(Heap*f)
 {
     f->free = NULL;
-    f->thread_i = NULL;
-    f->thread_free = (AtomicQueue){(uintptr_t)&f->thread_i,(uintptr_t)&f->thread_i};
+    f->thread_free_counter = 0;
     f->prev = NULL;
     f->next = NULL;
 }
 
 uint32_t deferred_move_thread_free(Heap* d);
-void deferred_thread_enqueue(Heap *d, AtomicMessage *msg);
+void deferred_thread_enqueue_ptr(Heap *d, uintptr_t msg);
+void deferred_thread_enqueue_message(Heap *d, uintptr_t msg, uintptr_t header);
 
 // to infer between a pool and an arena.
 // the first bit after the heap header:
@@ -219,8 +224,7 @@ typedef struct Pool_t
 {
     // 56 byte header
     Block* deferred_free;
-    AtomicQueue thread_free;
-    void* _d;
+    _Atomic(uintptr_t) thread_free_counter;
     size_t block_size;
     void *prev;
     void *next;
@@ -237,14 +241,14 @@ typedef struct Pool_t
     uint32_t alignment;
     
     Block* free;
+    void*  _mask; // just a placeholder. Will be positioned 8 bytes before the first block.
 } Pool;
 
 typedef struct ImplicitList_t
 {
     // 56 byte header
     Block* deferred_free;
-    AtomicQueue thread_free;
-    void* _d;
+    _Atomic(uintptr_t) thread_free_counter;
     size_t block_size;
     void *prev;
     void *next;
@@ -281,8 +285,7 @@ typedef struct QIndexNode_t
 typedef struct Arena_t
 {
     Block* deferred_free;
-    AtomicQueue thread_free;
-    void* _d;
+    _Atomic(uintptr_t) thread_free_counter;
     
     size_t block_size;
     
@@ -313,19 +316,14 @@ typedef struct PartitionAllocator_t
 {
     int64_t idx;
     Partition area[NUM_AREA_PARTITIONS];
+    
     // sections local to this thread with free heaps or pools
     Queue *sections;
     // free pages that have room for various size allocations.
     Queue *heaps;
-    
     // free pools of various sizes.
     Queue *pools;
     
-    // collection of messages for other threads
-    AtomicMessage *thread_messages;
-    uint32_t message_count; // how many threaded message have we acccumuated for passing out
-    // a queue of messages from other threads.
-    AtomicQueue *thread_free_queue;
     struct PartitionAllocator_t *prev;
     struct PartitionAllocator_t *next;
 
@@ -380,20 +378,6 @@ static inline int32_t is_arena_type(Heap* h)
     return val & 0x1;
 }
 
-static inline void deferred_enqueue( deferred_free*c, Heap* dl)
-{
-    if(c->owned)
-    {
-        ((Block*)c->items.tail)->next = dl->free;
-        dl->free = c->items.head;
-    }
-    else
-    {
-        deferred_thread_enqueue(dl, c->items.head);
-    }
-    c->items.head = NULL;
-    c->items.tail = NULL;
-}
 
 static inline void deferred_add(deferred_free*c, void* p)
 {
@@ -489,7 +473,7 @@ static inline void _list_enqueue(void *queue, void *node, size_t head_offset, si
 }
 
 void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offset);
-#define list_append(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
+#define list_append(q, n) _list_append(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 

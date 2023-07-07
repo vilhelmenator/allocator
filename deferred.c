@@ -9,49 +9,7 @@
 extern int64_t partition_owners[MAX_THREADS]; 
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
 
-uint32_t deferred_move_thread_free(Heap* d)
-{
-    AtomicMessage *back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
-    AtomicMessage *curr = (AtomicMessage *)(uintptr_t)d->thread_free.head;
-    uint32_t count = 0;
-    if (curr == back)
-    {
-        return count;
-    }
-    
-    uint32_t offset = (uint32_t)atomic_load_explicit(&curr->next, memory_order_acquire);
-    if(offset)
-    {
-        
-        if ((void*)curr == &d->thread_i) {
-            curr = (AtomicMessage*)((uintptr_t)d + offset);
-            d->thread_i = NULL;
-            deferred_thread_enqueue(d, (AtomicMessage *)&d->thread_i);
-            back = (AtomicMessage *)atomic_load_explicit(&d->thread_free.tail, memory_order_relaxed);
-            offset = (uint32_t)atomic_load_explicit(&curr->next, memory_order_acquire);
-        }
-        
-        if(curr != back)
-        {
-            count =  curr->count;
-            int32_t idx = curr->idx;
-            ((Block*)curr)->next = (Block*)((uintptr_t)d + idx*d->block_size);
-            d->free = (Block*)curr;
-            curr = (AtomicMessage*)((uintptr_t)d + offset);
-        }
-    }
-    
-    d->thread_free.head = (uintptr_t)curr;
-    return count;
-}
 
-void deferred_thread_enqueue(Heap *d, AtomicMessage *msg)
-{
-    AtomicQueue* queue = &d->thread_free;
-    AtomicMessage *prev = (AtomicMessage *)atomic_exchange_explicit(&queue->tail, (uintptr_t)msg,
-                                                         memory_order_release); // swap back and last
-    atomic_store_explicit(&prev->next, (uintptr_t)msg - (uintptr_t)d, memory_order_release); // prev.next = first
-}
 
 // compute bounds and initialize
 void deferred_init(Allocator* a, void*p)
@@ -173,15 +131,9 @@ void deferred_release(Allocator* a, void* p)
             {
                 Pool *pool = (Pool*)c->start;
                 pool->num_used -= c->num;
-                if(pool->num_used == 0)
+                if(pool_is_full(pool))
                 {
-                    pool_set_empty(pool, a);
-                    Queue *queue = &a->part_alloc->pools[pool->block_idx];
-                    if(pool_is_connected(pool) && queue->head == pool)
-                    {
-                        list_remove(queue, pool);
-                        list_append(queue, pool);
-                    }
+                    pool_set_full(pool, a);
                 }
             }
 #else
@@ -202,9 +154,9 @@ void deferred_release(Allocator* a, void* p)
                 {
                     Pool *pool = (Pool*)c->start;
                     pool->num_used -= c->num;
-                    if(pool->num_used == 0)
+                    if(pool_is_full(pool))
                     {
-                        pool_set_empty(pool, a);
+                        pool_set_full(pool, a);
                         Queue *queue = &a->part_alloc->pools[pool->block_idx];
                         if(pool_is_connected(pool) && queue->head == pool)
                         {
@@ -280,11 +232,8 @@ void deferred_release(Allocator* a, void* p)
         else
         {
             Heap *d = (Heap*)c->start;
-            uintptr_t next = (uintptr_t)((Block*)c->items.head)->next;
-            AtomicMessage* msg = (AtomicMessage*)c->items.head;
-            msg->count = c->num;
-            msg->idx = (next - c->start)/d->block_size;
-            deferred_thread_enqueue(d, c->items.head);
+            atomic_fetch_add_explicit(&d->thread_free_counter,c->num,memory_order_relaxed);
+            
         }
         if(p)
         {
