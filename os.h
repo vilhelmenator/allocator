@@ -29,6 +29,7 @@
 #include <unistd.h>
 #endif
 
+
 static inline bool commit_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
@@ -172,22 +173,19 @@ static inline uintptr_t get_thread_id(void)
 #if defined(WINDOWS)
     return (uintptr_t)NtCurrentTeb();
 #elif defined(__GNUC__)
-    void *res;
+    void **res;
 #if defined(__APPLE__)
 #if defined(__x86_64__)
     const size_t ofs = 0;
-    __asm__("movq %%gs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
+    __asm__("movq %%gs:%1, %0" : "=r"(*res) : "m"(*((void **)ofs)) :);
 #elif defined(__aarch64__)
-    void **tcb;
-    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tcb));
-    tcb = (void **)((uintptr_t)tcb & ~0x07UL);
-    res = *tcb;
+    __asm__ volatile ("mrs %0, tpidrro_el0\nbic %0, %0, #7" : "=r" (res));
 #endif
 #elif defined(__x86_64__)
     const size_t ofs = 0;
-    __asm__("movq %%fs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
+    __asm__("movq %%fs:%1, %0" : "=r"(*res) : "m"(*((void **)ofs)) :);
 #endif
-    return (uintptr_t)res;
+    return (uintptr_t)*res;
 #else
     return (uintptr_t)&thread_instance;
 #endif
