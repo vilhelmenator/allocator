@@ -6,8 +6,9 @@
 #include "arena.h"
 #include "callocator.inl"
 #include <stdlib.h>
-//#include "mimalloc.h"
+#include "mimalloc.h"
 
+/*
 void* mi_malloc(size_t s)
 {
     return NULL;
@@ -16,7 +17,7 @@ void mi_free(void* p)
 {
     
 }
-
+*/
 //#include "cthread.h"
 //#include <iostream>
 
@@ -1078,6 +1079,7 @@ int main(void)
     //  m = cmalloc_os(123);
     //  cfree(m);
 
+    /*
     uint32_t temp_count = 8181 + 511;
     char **variables = (char **)malloc(temp_count * sizeof(char *));
 
@@ -1091,6 +1093,7 @@ int main(void)
     variables[1] = (char *)cmalloc(8);
     cfree(variables[0]);
     cfree(variables[1]);
+     */
     int test_local = 1;
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
