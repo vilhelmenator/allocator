@@ -93,11 +93,7 @@ int32_t partition_allocator_get_next_area2(PartitionAllocator *pa, Partition *pa
     uint32_t range = (uint32_t)(size >> type_exponent);
     range += (size & (1 << type_exponent) - 1) ? 1 : 0;
     size = type_size * range;
-    /*
-    do{
-        
-    }while(!atomic_compare_exchange_weak)
-     */
+
     int32_t idx = find_first_nzeros(partition->commit_mask, range, 0);
     if (idx == -1) {
         return -1; // no room.
@@ -218,7 +214,7 @@ void partition_allocator_free_area_from_list(PartitionAllocator *pa, Area *a, Pa
     list->range_mask = list->range_mask & ~new_mask;
     list->zero_mask = list->zero_mask & ~new_mask;
     list->full_mask = list->full_mask & ~new_mask;
-    list->commit_mask = list->full_mask & ~new_mask;
+    list->commit_mask = list->commit_mask & ~new_mask;
 #if defined(ARENA_PATH)
     AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, list);
     free_memory(a, area_type_to_size[at]*range);
