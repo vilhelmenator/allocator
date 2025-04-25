@@ -58,7 +58,7 @@ typedef SSIZE_T ssize_t;
 #define ADDR_START (1ULL << 39)
 #define BASE_ADDR(idx) ((1ULL << 40) + ((1ULL << 38) << (idx)))
 #define DEFAULT_ALIGNMENT sizeof(intptr_t)
- 
+#define clz(x) (x == 0? 32:__builtin_clz(x))
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 
 // 9 arena types.
@@ -105,7 +105,7 @@ static inline int8_t partition_id_from_addr(uintptr_t p)
     }
     else
     {
-        return 32 - __builtin_clz(ptrp >> 39);
+        return 32 - clz(ptrp >> 39);
     }
 }
 
