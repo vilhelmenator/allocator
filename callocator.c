@@ -23,12 +23,12 @@ static inline void decr_thread_count(void)
     atomic_fetch_sub_explicit(&num_threads,1,memory_order_relaxed);
 }
 
-uintptr_t main_thread_id;
-Allocator *main_instance;
+cache_align uintptr_t main_thread_id;
+cache_align Allocator *main_instance;
 
-const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0,0,0,0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
-static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
-static tls_t _thread_key = (tls_t)(-1);
+cache_align const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0,0,0,0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
+cache_align static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
+cache_align static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
 {
     if (a != NULL) {
