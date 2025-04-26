@@ -650,23 +650,23 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
 {
     // check if there are any pools available.
     Queue *queue = &alloc->part_alloc->pools[pc];
-    Heap* start = queue->head;
+    Pool* start = (Pool*)queue->head;
     
-    start = queue->head;
+    // we don't need to loop over the queue
+    // the items with available memory are at the front.
+    // when pools re-gain memory, the deferred free will put those
+    // pools at the front of this list.
     if(start != NULL)
     {
-        Heap* next = start->next;
-        if(pool_is_full((Pool*)start))
+        if(pool_is_full(start))
         {
-            pool_set_full((Pool*)start, alloc);
-            return allocator_set_pool_slot(alloc, (Pool *)start);
+            pool_set_full(start, alloc);
+            return allocator_set_pool_slot(alloc, start);
         }
-        else if(!pool_is_empty((Pool*)start))
+        else if(!pool_is_empty(start))
         {
-            return allocator_set_pool_slot(alloc, (Pool *)start);
+            return allocator_set_pool_slot(alloc, start);
         }
-        
-        start = next;
     }
     return allocator_slot_alloc_null;
 }
@@ -773,12 +773,12 @@ int32_t allocator_get_arena(Allocator* alloc, size_t size, const size_t alignmen
 
 internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
 {
-    int32_t row_map[] = {0,0,0,0,0,4,5,5,5,5};
-    uint8_t pc = size_to_pool(size);
-    internal_alloc res = allocator_malloc_pool_find_fit(alloc, pc);
+    const int32_t row_map[] = {0,0,0,0,0,4,5,5,5,5};
+    uint8_t ps = size_to_pool(size);
+    internal_alloc res = allocator_malloc_pool_find_fit(alloc, ps);
     if(res == allocator_slot_alloc_null)
     {
-        int32_t row = pc/8;
+        int32_t row = ps>>3;
         
         uint8_t arena_idx = row_map[row];
         Heap* start = allocator_alloc_arena(alloc, arena_idx, zero);
@@ -792,13 +792,23 @@ internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, con
             size_t block_size = area_size >> 6;
             
             Pool* new_pool = (Pool*)((uintptr_t)arena + (midx * block_size));
-            pool_init(new_pool, midx, pc, (uint32_t)block_size);
+            pool_init(new_pool, midx, ps, (uint32_t)block_size);
             res = allocator_set_pool_slot(alloc, new_pool);
-            Queue *queue = &alloc->part_alloc->pools[pc];
+            Queue *queue = &alloc->part_alloc->pools[ps];
             if(!pool_is_connected(new_pool) && queue->head != new_pool)
             {
                 list_enqueue(queue, new_pool);
             }
+            /*
+            if (!arena_is_connected(arena)) {
+                PartitionAllocator *_part_alloc = partition_allocators[part_id];
+                Queue *sections = _part_alloc->sections;
+
+                if (sections->head != arena && sections->tail != section) {
+                    list_enqueue(sections, section);
+                }
+            }
+             */
             
         }
     }
@@ -941,6 +951,8 @@ static inline void _allocator_free_ex(Allocator *a, void *p)
 
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
+    
+    
     if(a->c_deferred.end == 0)
     {
         allocator_release_slot(a);
@@ -997,8 +1009,12 @@ static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as,
 {
     allocator_release_slot(a);
 #ifdef ARENA_PATH
-    deferred_release(a, NULL);
-    a->prev_size = (uint32_t)as;
+    if(a->prev_size != (uint32_t)as)
+    {
+        deferred_release(a, NULL);
+        a->prev_size = (uint32_t)as;
+    }
+    
     return allocator_malloc_base(a, ALIGN(as), alignment, zero);
 #else
     
