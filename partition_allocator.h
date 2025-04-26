@@ -2,7 +2,7 @@
 #define PARTITION_ALLOCATOR_H
 
 #include "area.h"
-#define PARTITION_ALLOCATOR_BASE_SIZE (1ULL << 13)
+#define PARTITION_ALLOCATOR_BASE_SIZE (1ULL << 13) // 8k
 
 PartitionAllocator* partition_allocator_init_default(void);
 PartitionAllocator *partition_allocator_aquire(size_t idx);
