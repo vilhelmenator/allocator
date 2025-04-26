@@ -363,7 +363,7 @@ typedef struct alloc_slot_t
 
 typedef struct deferred_free_t
 {
-    Queue items;
+    Block items;
     uint32_t num;
     uint32_t owned;
     uintptr_t start;
@@ -378,11 +378,10 @@ static inline int32_t is_arena_type(Heap* h)
     return val & 0x1;
 }
 
-
 static inline void deferred_add(deferred_free*c, void* p)
 {
-    ((Block*)p)->next = c->items.head;
-    c->items.head =  p;
+    ((Block*)p)->next = c->items.next;
+    c->items.next =  p;
     c->num++;
 }
 

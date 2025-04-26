@@ -26,7 +26,7 @@ static inline void decr_thread_count(void)
 cache_align uintptr_t main_thread_id;
 cache_align Allocator *main_instance;
 
-cache_align const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0,0,0,0,0,0,0,0}, {{NULL, NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
+cache_align const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0,0,0,0,0,0,0,0}, {{NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
 cache_align static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
 cache_align static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
@@ -243,7 +243,6 @@ static int allocator_init()
     uintptr_t end = ((uintptr_t)part_alloc + ALIGN_CACHE(sizeof(PartitionAllocator)));
     uintptr_t alloc_addr = end - DEFAULT_OS_PAGE_SIZE;
     Allocator *new_alloc = (Allocator *)alloc_addr;
-    allocator_set_counter_slot(new_alloc, (void*)end, DEFAULT_OS_PAGE_SIZE, 0, 0);
     allocator_list[0] = new_alloc;
     partition_owners[0] = 0;
     new_alloc->part_alloc = part_alloc;

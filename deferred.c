@@ -107,8 +107,7 @@ void deferred_init(Allocator* a, void*p)
 #endif
         ((Block*)p)->next = d->free;
         d->free = NULL;
-        c->items.head = p;
-        c->items.tail = p;
+        c->items.next = p;
         c->num = 1;
         c->block_size = d->block_size;
     }
@@ -123,7 +122,7 @@ void deferred_release(Allocator* a, void* p)
         if(c->owned)
         {
             Heap *d = (Heap*)c->start;
-            d->free = c->items.head;
+            d->free = c->items.next;
             
 #ifdef ARENA_PATH
             
