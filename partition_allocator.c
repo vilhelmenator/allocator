@@ -7,11 +7,12 @@
 
 cache_align PartitionAllocator *partition_allocators[MAX_THREADS];
 cache_align uint8_t* default_allocator_buffer = 0;
-extern int32_t temp_hit_counter;
+
 PartitionAllocator *partition_allocator_init(size_t idx, uintptr_t thr_mem)
 {
     // partition owners
     // the allocator is at 4k alignment
+    // 
     Allocator *alloc = (Allocator *)thr_mem;
     alloc->idx = (int32_t)idx;
     alloc->prev_size = -1;
@@ -454,7 +455,7 @@ Partition *partition_allocator_get_free_area(PartitionAllocator *pa, uint8_t par
         {
             partition_allocator_release_local_areas(pa);
         }
-        temp_hit_counter++;
+        
         *new_area_idx = partition_allocator_get_next_area2(pa, current_queue, s, alignment);
         if (*new_area_idx == -1) {
             return NULL;
