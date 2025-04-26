@@ -235,6 +235,6 @@ static inline uint32_t arena_get_local_offsets(Arena* arena, uintptr_t addr)
 };
 
 Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent);
-
+static inline bool arena_is_connected(const Arena *s) { return s->prev != NULL || s->next != NULL; }
 
 #endif // ARENA_H

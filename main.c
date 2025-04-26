@@ -856,6 +856,65 @@ uint32_t minor_test(void)
     return lz;
 }
 
+void test_size_iter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
+{
+
+    START_TEST(allocator, {});
+    char **variables = (char **)malloc(num_items * sizeof(char *));
+    if(t)
+    {
+        MEASURE_TIME(allocator, cmalloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++) {
+                    variables[i] = (char *)cmalloc(alloc_size);
+                }
+            }
+        });
+    }
+    else
+    {
+        MEASURE_TIME(Allocator, mi_malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                    variables[i] = (char *)mi_malloc(alloc_size);
+            }
+        });
+    }
+    END_TEST(allocator, {});
+    free(variables);
+}
+void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
+{
+
+    START_TEST(allocator, {});
+    char **variables = (char **)malloc(num_items * sizeof(char *));
+    if(t)
+    {
+        MEASURE_TIME(allocator, cmalloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++) {
+                    variables[i] = (char *)cmalloc(alloc_size);
+                    cfree(variables[i]);
+                }
+                
+            }
+        });
+    }
+    else
+    {
+        MEASURE_TIME(Allocator, mi_malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                {
+                    variables[i] = (char *)mi_malloc(alloc_size);
+                    mi_free(variables[i]);
+                }
+            }
+        });
+    }
+    END_TEST(allocator, {});
+    free(variables);
+}
 void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
 
@@ -889,6 +948,68 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int
     END_TEST(allocator, {});
     free(variables);
 }
+void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
+{
+
+    START_TEST(allocator, {});
+    char **variables = (char **)malloc(num_items * sizeof(char *));
+    size_t sizes[] = {alloc_size, alloc_size*2, alloc_size*4};
+    if(t)
+    {
+        MEASURE_TIME(allocator, cmalloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++) {
+                    variables[i] = (char *)cmalloc(sizes[i%3]);
+                }
+                for (uint64_t i = 0; i < num_items; i++) {
+                    cfree(variables[i]);
+                }
+            }
+        });
+    }
+    else
+    {
+        MEASURE_TIME(Allocator, mi_malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                    variables[i] = (char *)mi_malloc(sizes[i%3]);
+
+                for (uint64_t i = 0; i < num_items; i++)
+                    mi_free(variables[i]);
+            }
+        });
+    }
+    END_TEST(allocator, {});
+    free(variables);
+}
+ void test_size_iter_scatter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
+ {
+
+     START_TEST(allocator, {});
+     char **variables = (char **)malloc(num_items * sizeof(char *));
+     size_t sizes[] = {alloc_size, alloc_size*2, alloc_size*4};
+     if(t)
+     {
+         MEASURE_TIME(allocator, cmalloc, {
+             for (uint64_t j = 0; j < num_loops; j++) {
+                 for (uint64_t i = 0; i < num_items; i++) {
+                     variables[i] = (char *)cmalloc(sizes[i%3]);
+                 }
+             }
+         });
+     }
+     else
+     {
+         MEASURE_TIME(Allocator, mi_malloc, {
+             for (uint64_t j = 0; j < num_loops; j++) {
+                 for (uint64_t i = 0; i < num_items; i++)
+                     variables[i] = (char *)mi_malloc(sizes[i%3]);
+             }
+         });
+     }
+     END_TEST(allocator, {});
+     free(variables);
+ }
 void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
 {
 
@@ -1056,6 +1177,21 @@ int test(void *p)
 int32_t temp_hit_counter = 0;
 int main(void)
 {
+    //
+    //  pluck areas into the section queue for fast lookup.
+    //  add area slots.
+    //  add counter alloc and fallback paths.
+    //  finish old tests.
+    //
+    //  delete old coth paths.
+    //
+    //  align_tests
+    //  zero allocatin tests.
+    //  re-allocation tests.
+    //  thread allocation tests.
+    //  benchmark against mi_malloc
+    //  cleanup document, finish.
+            
     /*
     size_t size = 1ULL << 22;
     void *t1 = mmap(BASE_ADDR(0), size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
@@ -1094,9 +1230,20 @@ int main(void)
     cfree(variables[0]);
     cfree(variables[1]);
      */
-    int test_local = 1;
     for (int i = 0; i < 14; i++) {
-        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
+        //printf("hit %d \n", temp_hit_counter);
+    }
+    for (int i = 13; i >= 0; i--) {
+        //test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 0);
+        //printf("hit %d \n", temp_hit_counter);
+    }
+    for (int i = 0; i < 10; i++) {
+        //test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
+        //printf("hit %d \n", temp_hit_counter);
+    }
+    for (int i = 0; i < 10; i++) {
+        //test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
         //printf("hit %d \n", temp_hit_counter);
     }
     //test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS*10, test_local);
