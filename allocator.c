@@ -370,7 +370,7 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
             pool_set_full((Pool*)start, alloc);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
-        else if(!pool_is_empty(start))
+        else if(!pool_is_empty((Pool*)start))
         {
             list_remove(queue, start);
             return allocator_set_pool_slot(alloc, (Pool *)start);
@@ -382,6 +382,8 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
 static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int64_t arena_idx, int32_t min_free_blocks, uint8_t exp, bool zero, int32_t* midx, size_t* block_size)
 {
     Queue* aqueue = &alloc->arenas[arena_idx];
+
+
     Heap* start = NULL;
     *midx = 0;
     if(exp == 0)
@@ -739,9 +741,6 @@ static void *allocator_malloc_slot(Allocator *a, size_t s, void* res)
 
 void *allocator_malloc(Allocator_param *prm)
 {
-    T_INCR(allocation_size, prm->size);
-    T_INCR(num_allocations, 1);
-    T_SET(alignment, prm->alignment);
     
     size_t s = prm->size;
     size_t align = prm->alignment;
@@ -759,7 +758,6 @@ void *allocator_malloc(Allocator_param *prm)
     
     void* res = (void*)(uintptr_t)((a->c_slot.header & ~0x3) + a->c_slot.offset);
     //
-    T_SET(slot_used, 0);
     if(a->prev_size == s)
     {
         if(IS_ALIGNED(res, align))
@@ -767,28 +765,23 @@ void *allocator_malloc(Allocator_param *prm)
             int32_t offset = a->c_slot.offset + a->c_slot.req_size;
             if(offset <= a->c_slot.end)
             {
-                T_SET(slot_used, 1);
                 a->c_slot.offset = offset;
                 return res;
             }
         }
     }
     
-    T_SET(slot_reused, 0);
     res = allocator_malloc_slot(a, s, res);
     if(res != NULL)
     {
-        T_SET(slot_reused, 1);
         return res;
     }
     
-    T_SET(fallback, 0);
     // get the internal allocation slot
     internal_alloc ialloc = allocator_load_memory_slot(a, s, align, zero);
     // if we were handed the null allocator
     if(ialloc == allocator_slot_alloc_null)
     {
-        T_SET(fallback, 1);
         // we will attemp only once to get a new partition set
         // if our current one is failing us.
         // if this fails, we have exhausted all options.

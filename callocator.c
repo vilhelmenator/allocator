@@ -10,7 +10,7 @@ extern int64_t partition_owners[MAX_THREADS];
 extern Allocator *allocator_list[MAX_THREADS];
 mutex_t allocation_mutex = {0};
 mutex_t partition_mutex = {0};
-static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
+static _Atomic(size_t) num_threads = (1);
 static inline size_t  get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
 }

@@ -65,32 +65,7 @@ typedef SSIZE_T ssize_t;
 #define PREV_POWER_OF_TWO(x) (1ULL << (63 - __builtin_clzll(x)))
 #define IS_ALIGNED(x,y)(((uintptr_t)x & ((uintptr_t)y - 1)) == 0)
 
-
-#define API_TRACE_ENABLED
-#if defined(API_TRACE_ENABLED)
-typedef struct api_tracer_t
-{
-    int32_t num_allocations;
-    int64_t allocation_size;
-    int64_t arena_size;
-    int64_t alignment;
-    int64_t slot_used;
-    int64_t slot_idx;
-    int64_t slots_remaining;
-    int64_t slot_reused;
-    int64_t deferred_free;
-    int64_t fallback;
-} api_tracer;
-extern __thread api_tracer _test_tracer;
 #define clz(x) (x == 0? 32:__builtin_clz(x))
-#define T_INCR(label, x) (_test_tracer.label += x)
-#define T_DECR(label, x) (_test_tracer.label -= x)
-#define T_SET(label, x) (_test_tracer.label = x)
-#else
-#define T_INCR(label, x) void
-#define T_DECR(label, x) void
-#define T_SET(label, x) void
-#endif
  
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 

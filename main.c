@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include "pool.h"
 //#include "mimalloc.h"
-__thread api_tracer _test_tracer = {0,0,0,0,0,0,0,0,0,0};
+
 //extern __thread api_tracer _test_tracer;
 
 
@@ -115,7 +115,6 @@ bool test_alloc(size_t allocation_size, bool test_align)
     
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         void *all = cmalloc(allocation_size);
-        int32_t na =_test_tracer.num_allocations;
         if (all == NULL) {
             result = false;
             goto end;
@@ -208,13 +207,8 @@ bool test_alloc_aligned(size_t allocation_size)
     //double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
     uint32_t shift = 0;
-    _test_tracer.fallback = 0;
     for (uint32_t i = 0; i < num_small_allocations; i++) {
-        if(_test_tracer.fallback)
-        {
-            num_small_allocations = i;
-            break;
-        }
+        
         uint32_t alignment = 8<<(shift%24);
         if(alignment > allocation_size)
         {
