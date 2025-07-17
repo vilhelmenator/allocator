@@ -2,13 +2,15 @@
 #define CTEST_ENABLED
 #include "../ctest/ctest.h"
 #include "../cthread/cthread.h"
-#include "area.h"
 #include "arena.h"
 #include "callocator.inl"
 #include <stdlib.h>
-#include "mimalloc.h"
+#include "pool.h"
+//#include "mimalloc.h"
+__thread api_tracer _test_tracer = {0,0,0,0,0,0,0,0,0,0};
+//extern __thread api_tracer _test_tracer;
 
-/*
+
 void* mi_malloc(size_t s)
 {
     return NULL;
@@ -17,66 +19,6 @@ void mi_free(void* p)
 {
     
 }
-*/
-//#include "cthread.h"
-//#include <iostream>
-
-/*
-
- mremap on systems that support it.
-    - enables very fast realloc.
-    - allows to move and copy memory very efficiently between thread areas.
-    - windows has its own unique api.
-    - mach os has vm_remap functions that could be used.
-    - if mremamp avaialble
-        - fast path to realloc
-        - fast path to move thread memory
-        - very fast realloc of aligned memory.
-
- each thread in the tread pool aquires a thread id for the memory to use after
- each run. enableing the system to move memory from one thread ownership over to
- another. allowing the system to copy a ptr network to another thread. allow one
- thread to inherit the memory of another.
-    - but it can only free from that memory.
-    - any re-allocatinos happens within its native space.
-
- Another random thought.
-    - if a complicated structure is something that the allocator understands.
- Such as a tree, or a graph. : Can the allocator be used like a persistence util
- to traverse through the pointers and release them. : A user app could collect
- all pointers into an array and call free for the whole buffer. : Calling a
- destructor on an object would cause the system to defer free all the items
- until the destructor is done. : allot::destruct( obj ) -> any nested calls to
- destruct would cause a deferred free operation. : pass in a pointer to a
- struct. pass in a struct to describe the navigation path of a pointer tree. :
- traverse the network of pointers and pass them to their correct pools or heaps.
-        : destruct( ptr, schema ) -> no nested destruct calls.
-        : construct( ptr, schema ) ->
- */
-
-//
-//
-// 49152*8 + 65536*8 = 344064 + 458752 = 802816 max 12.8gigs or 3.8gigs of
-// heaps. test exhausting all the pools on main thread. then on the last thread
-// and various random threads. do the same for each size class.
-//
-// another test to test heap allocations. small and large.
-// allocate all the heaps.
-// test on various thread ids
-//
-// partition 1. 4 meg heaps.
-// 192 areas 32 megs. each has 8 sections. each section has 32 pools.
-// sections = 192 * 8;  // 1536
-// pools = sections*32; // 49152, 12288, 1536
-//
-// 64 areas * 32        // 2048
-// pools = sections*32  // 65536, 16384, 2048
-//
-// pools can bleed into second partition
-// heaps can bleed into third partition.
-//
-
-//#include "include/mimalloc-override.h"  // redefines malloc etc.
 const uint64_t NUMBER_OF_ITEMS = 800000L;
 const uint64_t NUMBER_OF_ITERATIONS = 10UL;
 const uint64_t OBJECT_SIZE = (1 << 3UL);
@@ -126,114 +68,63 @@ static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
         return (sm / alignment) * alignment;
     }
 }
-// const int64_t total_mem = NUMBER_OF_ITEMS*OBJECT_SIZE;
-// how many 16k objects to exhaust all areas for small items.
-// how many large items to exhaust all areas for large items.
-//
-// thread_init::thread_init() { allocator_main_index = reserve_any_partition_set(); }
 
-// thread_init::~thread_init() { release_partition_set(allocator_main_index); }
-
-// malloc calls init thread
-//
-// auto vv = allocator::malloc(2);
-/*
-1.
-Area tests.
-Pools.
- [x] Collect memory on NULL in malloc and try again.
-[x] Allocate all puny areas avaialable.
- [x]  test exhausting promotions.
-[x] Allocate all mid areas avaiailable. > 16k < 2Mb
- [x] test exhausting promotions.
-[x] each ptr returned can't be less than the size from next sectin multiple.
-Pages.
- [x] test small heaps.
-[x] Allocate 2 - 32 megs.
- - exhaust all areas.
-[x] Allocate 32 - 256 megs.
-    -- exhaust all areas.
-[x] Allocate slabs.
-     -- exhuast all areas.
-[x] Test the order of the areas.
-        - if I remove an area from the list, will it alocate from the empty
-spot.
-
-
-[ ] Allocation of an area fails.
-[ ] Allocation can't inherit a new partition set
-[ ] thread-free
-
- perf.
- [ ] test small heap coalesce rules.
- [ ] test pools vs heaps for small sizes
-
-
- 2.
-[ ] random allocations sizes.
-   - within a pool size class.
-   - within a partition size class.
-   - mix pool size classes.
-   - mix partition size classes.
-   - when allocator is empty.
-   - when allocator is getting half full and bleeding over partitions.
-   - when allocator is getting full and running out of memory.
-
-3.
-[ ] test thread free performance from multiple threads.
-[ ] random allocations sizes.
-   - same as previous allocation test, but with multiple threads.
-   - all memory in separate threads.
-   - distribute memory among threads so that each thread is freeing memory into
-other threads and its own.
-   - distribute memory among threads so that each thread is only freeing memory
-into other threads. 4. [ ] improve heap allocations. ordererd lists. double free
-tests. [ ] memory API. alloc and string functions.
-
-5.
-[ ] add memory block objects and implicit list alocation support.
-[ ] stats. leaks.
-[ ] integrate with ALLOT
-[ ] test with builder. DONE!
-*/
-
-bool test_pools(size_t allocation_size)
+bool test_alloc(size_t allocation_size, bool test_align)
 {
-    size_t pool_size = 0;
-    if (allocation_size <= max_small_size) {
-        pool_size = small_pool_size;
-    } else if (allocation_size <= max_mid_size) {
-        pool_size = mid_pool_size;
-    } else {
-        pool_size = large_pool_size;
-    }
 
     bool result = true;
+    bool from_pool = false;
+    if(allocation_size <= (1 << 15))
+    {
+        from_pool = true;
+    }
 
-    uint64_t pools_per_section = section_size / pool_size;
+    // size > 32k, goes into an arena.
+    // size > 4m, goes into the largest arena.
+    // 
+    //
+    //  in what arena is this pool size going to be allocated
+    //  the number of pools.
+    //
+    
+    int32_t row_map[] = {0,1,2, 3,4,5, 5,5,5, 5,6,6, 6, 6, 6, 6, 6};
+    uint8_t pc = size_to_pool(allocation_size);
+    int32_t row = pc/8;
+    uint8_t arena_idx = row_map[row];
+    size_t area_size = area_size_from_partition_id(arena_idx);
+    
+    size_t pool_size = area_size >> 6;
+    
+    uint64_t pools_per_section = 63;
     uint64_t max_count_per_pool = (pool_size - 64) / allocation_size;
-    uint64_t num_small_sections = num_sections_part0 + num_sections_part1;
+    if(!from_pool)
+    {
+        max_count_per_pool = 63;
+        pool_size = area_size;
+    }
+    uint64_t num_small_sections = 64;
     uint64_t num_pools = num_small_sections * pools_per_section;
     uint64_t num_small_allocations = num_pools * max_count_per_pool;
 
-    uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
-    uint64_t actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
+    //uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
+    //uint64_t actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
 
     uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
 
-    double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
+    //double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
-    int8_t pid = 0;
+    
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         void *all = cmalloc(allocation_size);
-        pid = partition_id_from_addr((uintptr_t)all);
+        int32_t na =_test_tracer.num_allocations;
         if (all == NULL) {
             result = false;
             goto end;
         }
         variables[i] = (uint64_t *)all;
-        uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
-        if ((end - (uintptr_t)variables[i]) < allocation_size) {
+        uintptr_t end = align_up((uintptr_t)variables[i], pool_size);
+        intptr_t delta = (end - (uintptr_t)variables[i]);
+        if (delta < allocation_size) {
             result = false;
             goto end;
         }
@@ -242,44 +133,16 @@ bool test_pools(size_t allocation_size)
             goto end;
         }
     }
-    for (uint32_t i = 0; i < num_small_allocations; i++) {
-        cfree(variables[i]);
-    }
-    free(variables);
-    // release all the system resources
-    if (!callocator_release()) {
-        return false;
-    }
-
-    num_small_sections = num_sections_part0 + num_sections_part1 + num_sections_part2;
-    num_pools = num_small_sections * pools_per_section;
-    num_small_allocations = num_pools * max_count_per_pool;
-    expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
-    actual_reserver_mem = allocation_size * num_small_allocations;        // if all the owned pages would be touched
-
-    readable_reserved = (double)expected_reserved_mem / (SZ_GB);
-    variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
-    // exhaust part 0, 1, and 2
-    for (uint32_t i = 0; i < num_small_allocations; i++) {
-        variables[i] = (uint64_t *)cmalloc(allocation_size);
-        pid = partition_id_from_addr((uintptr_t)variables[i]);
-        uintptr_t end = align_up((uintptr_t)variables[i], SECTION_SIZE);
-        if ((end - (uintptr_t)variables[i]) < allocation_size) {
-            result = false;
-            goto end;
-        }
-        if (variables[i] == NULL) {
-            result = false;
-            goto end;
-        }
-    }
+    
     // next allocation should be from a different partition id
+    int8_t pid = partition_allocator_from_addr((uintptr_t)variables[0]);
     void *nll = cmalloc(allocation_size);
-    int8_t npid = partition_id_from_addr((uintptr_t)nll);
+    int8_t npid = partition_allocator_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
     cfree(nll);
+    
 end:
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         cfree(variables[i]);
@@ -297,135 +160,148 @@ end:
     }
 }
 
-bool test_pools_small(void) { return test_pools(max_small_size); }
-bool test_medium_pools(void) { return test_pools(max_mid_size); }
+bool test_pools_small(void) { return test_alloc(max_small_size, false); }
+bool test_medium_pools(void) { return test_alloc(max_mid_size,false); }
 
-bool test_large_pools(void) { return test_pools(max_large_size); }
+bool test_large_pools(void) { return test_alloc(max_large_size,false); }
 
-bool test_heaps(size_t allocation_size)
+bool test_alloc_aligned(size_t allocation_size)
 {
     bool result = true;
-    uint64_t num_allocations = 0;
-    uint64_t num_extended_allocations = 0;
-    uint64_t max_count_per_heap_1 = ((1 << HT_32M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
-    uint64_t max_count_per_heap_2 = ((1 << HT_64M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
-    uint64_t max_count_per_heap_3 = ((1 << HT_128M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
-    uint64_t max_count_per_heap_4 = ((1 << HT_256M) - sizeof(Area) - sizeof(ImplicitList)) / allocation_size;
-    if (allocation_size <= max_small_size) { // 8 - 16k
-        uint64_t base_parts = num_areas_part0 * 8 + num_areas_part1 * 16;
-        uint64_t max_count_per_heap = ((1 << HT_4M) - sizeof(Section) - sizeof(ImplicitList)) / allocation_size;
-        num_allocations = max_count_per_heap * base_parts;
-        uint64_t max_count_extended_heap = max_count_per_heap * num_areas_part2 * 32;
-        num_extended_allocations = num_allocations + max_count_extended_heap;
-    } else if (allocation_size <= max_mid_size) { // 16k - 128k
-        num_allocations = max_count_per_heap_1 * num_areas_part0 + max_count_per_heap_2 * num_areas_part1;
-        uint64_t extended_parts = max_count_per_heap_3 * num_areas_part2;
-        num_extended_allocations = num_allocations + extended_parts;
-    } else if (allocation_size <= max_large_size) { // 4Mb - 32Mb
-        num_allocations = max_count_per_heap_2 * num_areas_part1;
-        uint64_t extended_parts = max_count_per_heap_3 * num_areas_part2;
-        num_extended_allocations = num_allocations + extended_parts;
-    } else if (allocation_size <= max_huge_size) { // 4Mb - 32Mb
-        num_allocations = max_count_per_heap_3 * num_areas_part2;
-        uint64_t extended_parts = max_count_per_heap_4 * num_areas_part3;
-        num_extended_allocations = num_allocations + extended_parts;
-    } else { // for large than 32Mb objects.
-        num_allocations = max_count_per_heap_4 * num_areas_part3;
-        num_extended_allocations = 0;
+    bool from_pool = false;
+    if(allocation_size <= (1 << 15))
+    {
+        from_pool = true;
     }
-    uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_allocations; // if all pools are touched
-    uint64_t actual_reserver_mem = allocation_size * num_allocations;        // if all the owned heaps would be touched
-    double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
 
-    uint64_t **variables = (uint64_t **)malloc(num_allocations * sizeof(uint64_t));
-    int8_t pid = 0;
+    // size > 32k, goes into an arena.
+    // size > 4m, goes into the largest arena.
+    //
+    //
+    //  in what arena is this pool size going to be allocated
+    //  the number of pools.
+    //
+    
+    int32_t row_map[] = {0,1,2, 3,4,5, 5,5,5, 5, 0, 1, 2, 3, 4, 5, 6};
+    uint8_t pc = size_to_pool(allocation_size);
+    int32_t row = pc/8;
+    uint8_t arena_idx = row_map[row];
+    size_t area_size = area_size_from_partition_id(arena_idx);
+    
+    size_t pool_size = area_size >> 6;
+    
+    uint64_t pools_per_section = 63;
+    uint64_t max_count_per_pool = (pool_size - 64) / allocation_size;
+    if(!from_pool)
+    {
+        max_count_per_pool = 63;
+        pool_size = area_size;
+    }
+    uint64_t num_small_sections = 64;
+    uint64_t num_pools = num_small_sections * pools_per_section;
+    uint64_t num_small_allocations = num_pools * max_count_per_pool;
+
+    //uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
+    //uint64_t actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
+
+    uint64_t **variables = (uint64_t **)malloc(num_small_allocations * sizeof(uint64_t));
+
+    //double readable_reserved = (double)expected_reserved_mem / (SZ_GB);
     // exhaust part 0 and 1
-    for (uint32_t i = 0; i < num_allocations; i++) {
-        uint64_t *new_addr = (uint64_t *)caligned_alloc(32, allocation_size);
-        pid = partition_id_from_addr((uintptr_t)new_addr);
-        variables[i] = new_addr;
-        uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
-        if ((end - (uintptr_t)variables[i]) < allocation_size) {
+    uint32_t shift = 0;
+    _test_tracer.fallback = 0;
+    for (uint32_t i = 0; i < num_small_allocations; i++) {
+        if(_test_tracer.fallback)
+        {
+            num_small_allocations = i;
+            break;
+        }
+        uint32_t alignment = 8<<(shift%24);
+        if(alignment > allocation_size)
+        {
+            alignment = 8;
+            shift = 0;
+        }
+        else
+        {
+            shift++;
+        }
+        pc = size_to_pool(MAX(alignment, allocation_size));
+        row = pc/8;
+        arena_idx = row_map[MIN(row, 16)];
+        area_size = area_size_from_partition_id(arena_idx);
+        if(row < 10)
+        {
+            pool_size = area_size >> 6;
+        }
+        else
+        {
+            pool_size = area_size;
+        }
+        
+        void *all = caligned_alloc(alignment, allocation_size);
+        if (all == NULL) {
+            num_small_allocations = i;
             result = false;
             goto end;
         }
-        if (variables[i] == NULL) {
+        
+        if(!IS_ALIGNED(all, alignment))
+        {
+            num_small_allocations = i;
             result = false;
+            cfree(all);
             goto end;
         }
-    }
-    if (num_extended_allocations == 0) {
-        // next allocation should be NULL;
-        void *nll = caligned_alloc(64, allocation_size);
-        int8_t npid = partition_id_from_addr((uintptr_t)nll);
-        if (npid == pid) {
+        uintptr_t end = align_up((uintptr_t)all, pool_size);
+        intptr_t delta = (end - (uintptr_t)all);
+        if (delta < allocation_size) {
+            num_small_allocations = i;
             result = false;
-        }
-        cfree(nll);
-    }
-    for (uint32_t i = 0; i < num_allocations; i++) {
-        cfree(variables[i]);
-    }
-    free(variables);
-
-    // release all the system resources
-    if (!callocator_release()) {
-        return false;
-    }
-
-    if (num_extended_allocations == 0) {
-        return result;
-    }
-
-    expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_extended_allocations; // if all pools are touched
-    actual_reserver_mem = allocation_size * num_extended_allocations;        // if all the owned heaps would be touched
-
-    readable_reserved = (double)expected_reserved_mem / (SZ_GB);
-    num_allocations = num_extended_allocations;
-    variables = (uint64_t **)malloc(num_allocations * sizeof(uint64_t));
-    // exhaust part 0, 1, and 2
-    for (uint32_t i = 0; i < num_allocations; i++) {
-        uint64_t *new_addr = (uint64_t *)caligned_alloc(128, allocation_size);
-        pid = partition_id_from_addr((uintptr_t)new_addr);
-        variables[i] = new_addr;
-        uintptr_t end = align_up((uintptr_t)variables[i], area_size_from_addr((uintptr_t)new_addr));
-        if ((end - (uintptr_t)variables[i]) < allocation_size) {
-            result = false;
+            cfree(all);
             goto end;
         }
-        if (variables[i] == NULL) {
-            result = false;
-            goto end;
-        }
+        variables[i] = (uint64_t *)all;
     }
-    // next allocation should be NULL;
-    void *nll = caligned_alloc(256, allocation_size);
-    int8_t npid = partition_id_from_addr((uintptr_t)nll);
+    
+    /*
+    // next allocation should be from a different partition id
+    int8_t pid = partition_allocator_from_addr((uintptr_t)variables[0]);
+    void *nll = cmalloc(allocation_size);
+    int8_t npid = partition_allocator_from_addr((uintptr_t)nll);
     if (npid == pid) {
         result = false;
     }
     cfree(nll);
+     */
+    
 end:
-    for (uint32_t i = 0; i < num_allocations; i++) {
+    
+    for (uint32_t i = 0; i < num_small_allocations; i++) {
         cfree(variables[i]);
     }
     free(variables);
     // release all the system resources
-    if (!callocator_release()) {
-        result = false;
+    
+    if(callocator_release())
+    {
+        return true;
     }
-    return result;
+    else
+    {
+        return false;
+    }
 }
 
-bool test_huge_heaps(void) { return test_heaps(max_huge_size_heap); }
+bool test_huge_heaps(void) { return test_alloc_aligned(max_huge_size_heap); }
 
-bool test_large_heaps(void) { return test_heaps(max_large_size_heap); }
+bool test_large_heaps(void) { return test_alloc_aligned(max_large_size_heap); }
 
-bool test_medium_heaps(void) { return test_heaps(max_mid_size_heap); }
+bool test_medium_heaps(void) { return test_alloc_aligned(max_mid_size_heap); }
 
-bool test_small_heaps(void) { return test_heaps(max_small_size_heap); }
+bool test_small_heaps(void) { return test_alloc_aligned(max_small_size_heap); }
 
-bool test_puny_heaps(void) { return test_heaps(max_puny_size_heap); }
+bool test_puny_heaps(void) { return test_alloc_aligned(max_puny_size_heap); }
 
 bool test_slabs(void)
 {
@@ -441,11 +317,16 @@ bool test_slabs(void)
     // exhaust part 0 and 1
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         variables[i] = (uint64_t *)caligned_alloc(512, allocation_size);
-        uintptr_t end = align_up((uintptr_t)variables[i], 256 * sz_mb);
-        if ((end - (uintptr_t)variables[i]) < allocation_size) {
-            state = false;
-            goto end;
+        uintptr_t all = (uintptr_t)variables[i];
+        uintptr_t end = align_up(all, 256 * sz_mb*64);
+        if(all != end)
+        {
+            if ((end - (uintptr_t)variables[i]) < allocation_size) {
+                state = false;
+                goto end;
+            }
         }
+        
         if (variables[i] == NULL) {
             state = false;
             goto end;
@@ -705,43 +586,6 @@ void run_tests(void)
     }
 }
 
-bool testAreaFail(void)
-{
-    // Why am I stalling this!
-    // this is sort of the last fallback step and allows you allocate all the
-    // ranges with a single thread. if allocations fail, it can move into other
-    // partition sets. then I can move into the thread free part. Which should
-    // be a lot simpler.
-    //   then it is just testing and cleaning things up..
-    void *m = cmalloc_area(48 * sz_mb, AT_FIXED_32);
-    //
-
-    // two areas should be marked as bad.
-    // see if those areas are marked as bad.
-    // how should we mark those areas as bad.
-    // if the size of an area is -1, then it is bad.
-    void *bb = cmalloc(24);
-    //
-    // next allocate most of the first partition. forcing the next allocation to
-    // be from another partition set. if that is reserved already. then promote
-    // to the next partition.
-    //
-    //
-    // allocate some memory at where the initial thread assumes is free
-    //  - verify that the next area it returns is correct.
-    // allocate some memory that overlaps the rangeo of two partition sets.
-    //  -- verify that the nex tarea is in the next partition set
-    //  ensure that the areas that are invalid are all marked as invalid.
-    //  ensure that the partition-set is allocated only if it is available.
-    //
-    cfree(bb);
-    cfree(m);
-    callocator_release();
-    bb = cmalloc(24);
-    cfree(bb);
-    callocator_release();
-    return false;
-}
 
 
 
@@ -1173,25 +1017,13 @@ int test(void *p)
     cfree(test);
     return 1;
 }
+
 #include <sys/mman.h>
 int32_t temp_hit_counter = 0;
+
 int main(void)
 {
-    //
-    //  pluck areas into the section queue for fast lookup.
-    //  add area slots.
-    //  add counter alloc and fallback paths.
-    //  finish old tests.
-    //
-    //  delete old coth paths.
-    //
-    //  align_tests
-    //  zero allocatin tests.
-    //  re-allocation tests.
-    //  thread allocation tests.
-    //  benchmark against mi_malloc
-    //  cleanup document, finish.
-            
+    
     /*
     size_t size = 1ULL << 22;
     void *t1 = mmap(BASE_ADDR(0), size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
@@ -1206,16 +1038,63 @@ int main(void)
     //thrd_t trd;
     //thrd_create(&trd, &test, NULL);
     // test_new_heap();
-    //  thrd_t trd;
-    //  thrd_create(&trd, &test, NULL);
+    //thrd_t trd;
+    //thrd_create(&trd, &test, NULL);
+    //thrd_t trd2;
+    //thrd_create(&trd2, &test, NULL);
     //  blach();
-    //run_tests();
+    run_tests();
     //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
     //  cfree(m);
     //  m = cmalloc_os(123);
     //  cfree(m);
 
+    
+    // TODO
     /*
+     // tests
+     [ ] - Test structs.
+         - run_test:
+         - trace_struct:
+         - test_struct:
+             - allocation:
+             -
+         - Define test.
+             - run_test(ALLOCATOR)
+     
+     [ ] Run the old tests with the new code path.
+     
+     [ ] Pool allocation tests. All sizes and bounds.
+        - run on one partition allocator.
+        - use test struct to monitor internal state.
+        - check alignment.
+     [ ] Arena allocation tests. All sizes and bounds.
+        - Alignment tests.
+     [ ] Slab allocations tests. All sizes and bounds.
+     
+     // new tests.
+     [ ] Zero allocation tests.
+     [ ] Reallocation tests.
+     
+     [x] Remove all the old code paths.
+
+     // new thread local approach
+     [ ] Allocator and thread locals.
+     [ ] Partition allocators and mutexes.
+
+     // new tests and perf checks.
+     [ ] aligned_alloc test.
+     [ ] zalloc_tests.
+     [ ] realloc_tests.
+
+     // compare with mimalloc
+     [ ] mimalloc comparison.
+     [ ] thread tests.
+     [ ] stress tests.
+
+     // see how it compares against the big boys.
+     [ ] Benchmarks. compare against other allocators.
+     */
     uint32_t temp_count = 8181 + 511;
     char **variables = (char **)malloc(temp_count * sizeof(char *));
 
@@ -1229,7 +1108,11 @@ int main(void)
     variables[1] = (char *)cmalloc(8);
     cfree(variables[0]);
     cfree(variables[1]);
-     */
+    
+    char* c = (char *)cmalloc(1ULL << 23);
+    cfree(c);
+    
+    int test_local = 1;
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
         //printf("hit %d \n", temp_hit_counter);
@@ -1246,13 +1129,7 @@ int main(void)
         //test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
         //printf("hit %d \n", temp_hit_counter);
     }
-    //test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS*10, test_local);
-    //test_size_iter_sparse_reverse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS*10, test_local);
-    size_t item_count = 100;
-    for (int i = 0; i < 6; i++) {
-        //test_size_iter(1 << 3, item_count, NUMBER_OF_ITERATIONS, test_local);
-        item_count *= 10;
-    }
 
+    
     return 0;
 }

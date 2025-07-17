@@ -18,9 +18,6 @@ void *zalloc( size_t num, size_t size ); // initilized to zero
 
 bool callocator_release(void);
 void *cmalloc_at(size_t s, uintptr_t vm_addr);
-void *cmalloc_area(size_t s, size_t partition_idx);
-void *cmalloc_arena(size_t s, size_t partition_idx);
-void cfree_arena(void* p);
 void *cmalloc_os(size_t s);
 
 // NOT DONE

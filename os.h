@@ -23,10 +23,12 @@
 #include <mach/vm_map.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #else
 #include <errno.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #endif
 
 
@@ -156,7 +158,13 @@ static inline bool remap_memory(void *old_addr, void *new_addr, size_t size)
 #endif
     return false;
 }
+static inline size_t get_stack_limit()
+{
+    struct rlimit limit;
 
+    getrlimit (RLIMIT_STACK, &limit);
+    return limit.rlim_max;
+}
 static inline size_t get_os_page_size(void)
 {
 #ifdef WINDOWS
@@ -168,6 +176,7 @@ static inline size_t get_os_page_size(void)
 #endif
 }
 
+extern __thread Allocator *thread_instance;
 static inline uintptr_t get_thread_id(void)
 {
 #if defined(WINDOWS)
@@ -179,7 +188,7 @@ static inline uintptr_t get_thread_id(void)
     const size_t ofs = 0;
     __asm__("movq %%gs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
 #elif defined(__aarch64__)
-    __asm__ volatile ("mrs %0, tpidrro_el0\nbic %0, %0, #7" : "=r" (res));
+    __asm__ volatile ("mrs %0,tpidrro_el0" : "=r" (res));
 #endif
 #elif defined(__x86_64__)
     const size_t ofs = 0;

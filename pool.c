@@ -15,7 +15,7 @@ void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int3
     p->free = NULL;
     
     void *blocks = pool_base_address(p);
-    const uintptr_t section_end = ALIGN_UP_2((uintptr_t)blocks, SECTION_SIZE);
+    const uintptr_t section_end = ALIGN_UP_2((uintptr_t)blocks, psize);
     
     const size_t block_memory = psize - ALIGN_UP_2(sizeof(Pool), p->alignment);
     const size_t remaining_size = section_end - (uintptr_t)blocks;

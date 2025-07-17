@@ -2,14 +2,14 @@
 #include "callocator.inl"
 #include "../cthread/cthread.h"
 #include "allocator.h"
-#include "area.h"
 #include "os.h"
 #include "partition_allocator.h"
 
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
 extern int64_t partition_owners[MAX_THREADS];
 extern Allocator *allocator_list[MAX_THREADS];
-static mutex_t allocation_mutex = {0};
+mutex_t allocation_mutex = {0};
+mutex_t partition_mutex = {0};
 static _Atomic(size_t) num_threads = ATOMIC_VAR_INIT(1);
 static inline size_t  get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
@@ -26,9 +26,8 @@ static inline void decr_thread_count(void)
 cache_align uintptr_t main_thread_id;
 cache_align Allocator *main_instance;
 
-cache_align const Allocator default_alloc = {-1, -1, NULL, {0,0,0,0,0,0,0,0,0,0,0,0}, {{NULL}, 0, 0, 0, 0}, NULL, {NULL, NULL}};
-cache_align static __thread Allocator *thread_instance = (Allocator *)&default_alloc;
-cache_align static tls_t _thread_key = (tls_t)(-1);
+__thread Allocator *thread_instance = NULL;
+static tls_t _thread_key = (tls_t)(-1);
 static void thread_done(void *a)
 {
     if (a != NULL) {
@@ -95,7 +94,7 @@ static inline bool is_main_thread(void)
 Allocator *get_instance(uintptr_t tid)
 {
     Allocator *ti = thread_instance;
-    if (ti == &default_alloc) {
+    if (ti == NULL) {
         init_thread_instance();
     }
     return thread_instance;
@@ -107,20 +106,11 @@ static inline Allocator *get_thread_instance(void)
         return main_instance;
     } else {
         Allocator *ti = thread_instance;
-        if (ti == &default_alloc) {
+        if (ti == NULL) {
             init_thread_instance();
         }
         return thread_instance;
     }
-}
-
-static Allocator *reserve_allocator()
-{
-    int32_t idx = reserve_any_partition_set();
-    Allocator *new_alloc = allocator_aquire(idx);
-    new_alloc->part_alloc = partition_allocators[idx];
-    list_enqueue(&new_alloc->partition_allocators, new_alloc->part_alloc);
-    return new_alloc;
 }
 
 static inline bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
@@ -166,7 +156,6 @@ start:
         // allocate next part to our unaligned part.
         // if that is successfull,
         //
-        void *aligned_p = (void *)(((uintptr_t)ptr + (alignment - 1)) & ~(alignment - 1));
         free_memory(ptr, size);
         
         // Now we attempt to overallocate
@@ -190,7 +179,7 @@ start:
         // we are still not aligned, but we have an address that is aligned.
         free_memory(ptr, adj_size);
 
-        aligned_p = (void *)(((uintptr_t)ptr + (alignment - 1)) & ~(alignment - 1));
+        void* aligned_p = (void *)(((uintptr_t)ptr + (alignment - 1)) & ~(alignment - 1));
         // get our aligned address
         ptr = alloc_memory(aligned_p, size, false);
         if (ptr != aligned_p) {
@@ -211,6 +200,7 @@ err:
     mutex_unlock(&allocation_mutex);
     return ptr;
 }
+
 static int allocator_destroy()
 {
     tls_set(_thread_key, NULL);
@@ -234,10 +224,11 @@ static int allocator_init()
 
     // reserve the first allocator for the main thread.
     mutex_init(&allocation_mutex);
+    mutex_init(&partition_mutex);
+    
     main_thread_id = get_thread_id();
     os_page_size = get_os_page_size();
     tls_create(&_thread_key, &thread_done);
-    
     
     PartitionAllocator* part_alloc = partition_allocator_init_default();
     uintptr_t end = ((uintptr_t)part_alloc + ALIGN_CACHE(sizeof(PartitionAllocator)));
@@ -297,7 +288,7 @@ extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, siz
     {
         return NULL;
     }
-    Allocator_param params = {get_thread_id(), size, alignment, false};
+    Allocator_param params = {get_thread_id(), MAX(size, alignment), alignment, false};
     return allocator_malloc(&params);
 }
 
@@ -308,7 +299,7 @@ extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
     {
         return NULL;
     }
-    Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), false};
+    Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), true};
     return allocator_malloc(&params);
 }
 extern inline void cfree(void *p)
@@ -364,50 +355,6 @@ void *cmalloc_at(size_t size, uintptr_t vm_addr)
     return NULL;
 }
 
-void *cmalloc_arena(size_t s, size_t partition_idx)
-{
-    if (partition_idx > (NUM_AREA_PARTITIONS - 1)) {
-        return NULL;
-    }
-    Allocator *alloc = get_thread_instance();
-    int32_t area_idx = -1;
-    void *partition = partition_allocator_get_free_area(alloc->part_alloc, partition_idx, area_type_to_size[partition_idx], &area_idx, false);
-    if(partition == NULL)
-    {
-        return NULL;
-    }
-    void* arena = partition_allocator_area_at_idx(alloc->part_alloc, partition, area_idx);
-    Arena *header = (Arena *)(uintptr_t)arena;
-    header->partition_id = (uint32_t)alloc->part_alloc->idx;
-
-    return arena;
-}
-
-void cfree_arena(void* p)
-{
-    int8_t pid = partition_id_from_addr((uintptr_t)p);
-    if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
-        Arena *arena = (Arena *)(uintptr_t)p;
-        const uint32_t part_id = arena->partition_id;
-        PartitionAllocator *_part_alloc = partition_allocators[part_id];
-        
-        partition_allocator_free_area(_part_alloc, (Area*)arena);
-    } else {
-        free_extended_part(pid, p);
-    }
-}
-
-void *cmalloc_area(size_t s, size_t partition_idx)
-{
-    Area *area = cmalloc_arena(sizeof(Area) + s, partition_idx);
-    if (area == NULL) {
-        return NULL;
-    }
-    area_reserve_all(area);
-    area_set_container_type(area, CT_SLAB);
-    return (void *)((uintptr_t)area + sizeof(Area));
-}
-
 bool callocator_release(void)
 {
     Allocator *alloc = get_thread_instance();
@@ -417,26 +364,9 @@ bool callocator_release(void)
     return false;
 }
 
-bool callocator_reset(void)
-{
-    /*
-    void* blocks = (uint8_t*)p + sizeof(Pool);
-    int32_t psize = (1 << size_clss_to_exponent[section->type]);
-    const size_t block_memory = psize - sizeof(Pool) - sizeof(uintptr_t);
-    const uintptr_t section_end = ((uintptr_t)p + (SECTION_SIZE - 1)) & ~(SECTION_SIZE - 1);
-    const size_t remaining_size = section_end - (uintptr_t)blocks;
-    const size_t the_end = MIN(remaining_size, block_memory);
-    const uintptr_t start_addr = (uintptr_t)blocks;
-    const uintptr_t first_page = (start_addr + (os_page_size - 1)) & ~(os_page_size - 1);
-    const size_t mem_size = the_end - first_page;
-    reset_memory((void*)first_page, mem_size);
-    */
-    return true;
-}
-
 void *crealloc(void *p, size_t s)
 {
-    size_t csize = allocator_get_allocation_size(get_thread_instance(), p);
+    size_t csize = 0;
     // if was in a pool. move it to a heap where it is cheaper to resize.
     // heap can grow.
     size_t min_size = MIN(csize, s);
