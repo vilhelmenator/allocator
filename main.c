@@ -1,7 +1,6 @@
 
 #define CTEST_ENABLED
 #include "../ctest/ctest.h"
-#include "../cthread/cthread.h"
 #include "arena.h"
 #include "callocator.inl"
 #include <stdlib.h>

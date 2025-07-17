@@ -2,7 +2,6 @@
 #ifndef POOL_H
 #define POOL_H
 
-#include "../cthread/cthread.h"
 #include "callocator.inl"
 #include "os.h"
 

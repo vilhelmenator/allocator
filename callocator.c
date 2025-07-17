@@ -1,9 +1,9 @@
 
 #include "callocator.inl"
-#include "../cthread/cthread.h"
 #include "allocator.h"
 #include "os.h"
 #include "partition_allocator.h"
+
 
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
 extern int64_t partition_owners[MAX_THREADS];

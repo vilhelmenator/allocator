@@ -6,7 +6,6 @@
 #include "os.h"
 #include "arena.h"
 
-#include "../cthread/cthread.h"
 
 extern PartitionAllocator *partition_allocators[MAX_THREADS];
 cache_align int64_t partition_owners[MAX_THREADS];

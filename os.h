@@ -31,6 +31,224 @@
 #include <sys/resource.h>
 #endif
 
+#if defined(__cplusplus)
+#include <atomic>
+#define memory_order_relaxed std::memory_order_relaxed
+#define memory_order_consume std::memory_order_consume
+#define memory_order_acquire std::memory_order_acquire
+#define memory_order_release std::memory_order_release
+#define memory_order_acq_rel std::memory_order_acq_rel
+#define memory_order_seq_cst std::memory_order_seq_cst
+#define _Atomic(tp) std::atomic<tp>
+#elif defined(_MSC_VER)
+#define _Atomic(tp) tp
+#define ATOMIC_VAR_INIT(x) x
+#else
+#include <stdatomic.h>
+#endif
+
+typedef int (*thrd_start_t)(void *);
+typedef void (*tls_dtor_t)(void *);
+enum { thrd_success, thrd_nomem, thrd_timedout, thrd_busy, thrd_error };
+
+#if defined(PLATFORM_WINDOWS)
+#include <fibersapi.h>
+#include <process.h>
+#include <windows.h>
+
+#if !defined(__cplusplus)
+#define thread_local __declspec(thread);
+#endif
+
+typedef HANDLE thrd_t;
+typedef DWORD tls_t;
+typedef CRITICAL_SECTION mutex_t;
+
+#define thrd_current() (thrd_t) GetCurrentThreadId()
+#define thrd_equal(a, b) a == b
+#define thrd_yield() (void)SwitchToThread()
+#define thrd_exit(res) _endthreadex((unsigned)(size_t)res)
+
+static inline int thrd_create(thrd_t *thr, thrd_start_t func, void *arg)
+{
+    uintptr_t handle;
+    if (!thr)
+        return thrd_error;
+    handle = _beginthread(func 0, arg);
+    if (handle == 0) {
+        if (errno == EAGAIN || errno == EACCES)
+            return thrd_nomem;
+        return thrd_error;
+    }
+    *thr = (thrd_t)handle;
+    return thrd_success;
+}
+
+static inline int thrd_sleep(const struct timespec *ts_in)
+{
+    Sleep((DWORD)((ts_in->tv_sec * 1000u) + (ts_in->tv_nsec / 1000000)));
+    return 0;
+}
+
+static int thrd_join(thrd_t *thread, int *res)
+{
+    DWORD code;
+    DWORD w = WaitForSingleObject(thread, INFINITE);
+    if (w != WAIT_OBJECT_0)
+        return thrd_error;
+    if (res) {
+        if (!GetExitCodeThread(thr, &code)) {
+            CloseHandle(thr);
+            return thrd_error;
+        }
+        *res = (int)code;
+    }
+    CloseHandle(thr);
+    return thrd_success;
+}
+
+static int thrd_detach(thrd_t *thread, int *res)
+{
+    if (CloseHandle(*thread)) {
+        return thrd_success;
+    }
+    return thrd_error;
+}
+
+static int mutex_init(mutex_t *mutex)
+{
+    InitializeCriticalSection(mutex);
+    return 0;
+}
+
+static int mutex_lock(mutex_t *mutex)
+{
+    EnterCriticalSection(mutex);
+    return 0;
+}
+
+static int mutex_trylock(mutex_t *mutex)
+{
+    return !TryEnterCriticalSection(mutex);
+}
+
+static int mutex_unlock(mutex_t *mutex)
+{
+    LeaveCriticalSection(mutex);
+    return 0;
+}
+
+static int mutex_destroy(mutex_t *mutex)
+{
+    DeleteCriticalSection(mutex);
+    return 0;
+}
+
+static int tls_create(tls_t *key, tls_dtor_t dtor)
+{
+    if (!key)
+        return thrd_error;
+    *key = FlsAlloc(dtor);
+    return (*key != 0xFFFFFFFF) ? thrd_success : thrd_error;
+}
+
+static void tls_delete(tls_t key) { FlsFree(key); }
+
+static void *tls_get(tls_t key) { return FlsGetValue(key); }
+
+static int tls_set(tls_t key, void *val)
+{
+    return FlsSetValue(key, val) ? thrd_success : thrd_error;
+}
+#else
+#include <errno.h>
+#include <pthread.h>
+#include <sched.h>
+
+#if !defined(__cplusplus)
+#define thread_local __thread
+#endif
+
+typedef pthread_t thrd_t;
+typedef pthread_key_t tls_t;
+typedef int (*thrd_start_t)(void *);
+typedef pthread_mutex_t mutex_t;
+
+#define thrd_current() pthread_self()
+#define thrd_equal(a, b) pthread_equal(a, b)
+#define thrd_yield() sched_yield();
+#define thrd_exit(res) pthread_exit((void *)(size_t)res)
+#define thrd_detach(thr) pthread_detach(thr) == 0 ? thrd_success : thrd_error
+
+static inline int thrd_create(thrd_t *thr, thrd_start_t func, void *arg)
+{
+    if (!thr)
+        return thrd_error;
+    if (pthread_create(thr, NULL, (void *(*)(void *))func, arg) != 0) {
+        return thrd_error;
+    }
+    return thrd_success;
+}
+
+static inline int thrd_join(thrd_t thr, int *res)
+{
+    int64_t *code;
+    if (pthread_join(thr, (void **)&code) != 0)
+        return thrd_error;
+    if (res)
+        *res = (int32_t)*code;
+    return thrd_success;
+}
+
+static inline int thrd_sleep(const struct timespec *ts_in)
+{
+    if (nanosleep(ts_in, NULL) < 0) {
+        if (errno == EINTR)
+            return -1;
+        return -2;
+    }
+    return 0;
+}
+
+static inline int mutex_init(mutex_t *mutex)
+{
+    return pthread_mutex_init(mutex, NULL);
+}
+
+static inline int mutex_lock(mutex_t *mutex)
+{
+    return pthread_mutex_lock(mutex);
+}
+
+static inline int mutex_trylock(mutex_t *mutex)
+{
+    return pthread_mutex_trylock(mutex);
+}
+
+static inline int mutex_unlock(mutex_t *mutex)
+{
+    return pthread_mutex_unlock(mutex);
+}
+
+static inline int mutex_destroy(mutex_t *mutex)
+{
+    return pthread_mutex_destroy(mutex);
+}
+
+static int tls_create(tls_t *key, tls_dtor_t dtor)
+{
+    if (!key)
+        return thrd_error;
+    return (pthread_key_create(key, dtor) == 0) ? thrd_success : thrd_error;
+}
+
+static void tls_delete(tls_t key) { pthread_key_delete(key); }
+static void *tls_get(tls_t key) { return pthread_getspecific(key); }
+static int tls_set(tls_t key, void *val)
+{
+    return (pthread_setspecific(key, val) == 0) ? thrd_success : thrd_error;
+}
+#endif
 
 static inline bool commit_memory(void *base, size_t size)
 {

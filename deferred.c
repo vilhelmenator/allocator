@@ -2,7 +2,7 @@
 #include "callocator.inl"
 #include "pool.h"
 #include "partition_allocator.h"
-#include "../cthread/cthread.h"
+#include <stdatomic.h>
 #include "arena.h"
 
 extern int64_t partition_owners[MAX_THREADS]; 
