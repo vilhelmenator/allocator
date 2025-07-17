@@ -21,6 +21,7 @@
         "optional": "cpp",
         "ios": "cpp",
         "locale": "cpp",
-        "atomic": "cpp"
+        "atomic": "cpp",
+        "__bit_reference": "c"
     }
 }

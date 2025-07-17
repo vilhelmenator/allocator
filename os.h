@@ -6,36 +6,33 @@
 //  Copyright © 2022 Vilhelm Sævarsson. All rights reserved.
 //
 
-#ifndef os_inl
-#define os_inl
-
-#include "callocator.inl"
-
+#ifndef OS_H
+#define OS_H
+#include "callocator.h"
 #if defined(_MSC_VER)
 #define WINDOWS
 #endif
 #if defined(WINDOWS)
+#include <windows.h>
 #include <intrin.h>
 #include <memoryapi.h>
-#include <windows.h>
+
 #elif defined(__APPLE__)
+#include <errno.h>
 #include <mach/mach.h>
 #include <mach/vm_map.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #else
+#include <errno.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #endif
 
-#define CACHE_LINE 64
-#if defined(WINDOWS)
-#define cache_align __declspec(align(CACHE_LINE))
-#else
-#define cache_align __attribute__((aligned(CACHE_LINE)))
-#endif
 
-bool commit_memory(void *base, size_t size)
+static inline bool commit_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
     return VirtualAlloc(base, size, MEM_COMMIT, PAGE_READWRITE) == base;
@@ -44,7 +41,7 @@ bool commit_memory(void *base, size_t size)
 #endif
 }
 
-bool decommit_memory(void *base, size_t size)
+static inline bool decommit_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
     return VirtualFree(base, size, MEM_DECOMMIT);
@@ -53,16 +50,25 @@ bool decommit_memory(void *base, size_t size)
 #endif
 }
 
-bool free_memory(void *ptr, size_t size)
+static inline bool free_memory(void *ptr, size_t size)
 {
 #if defined(WINDOWS)
-    return VirtualFree(ptr, 0, MEM_RELEASE) == 0;
+    MEMORY_BASIC_INFORMATION info = { 0 };
+    VirtualQuery(ptr, &info, sizeof(info));
+    if(info.AllocationBase < (uintptr_t)ptr)
+    {
+        return VirtualFree(info.AllocationBase, 0, MEM_RELEASE);
+    }
+    else
+    {
+        return VirtualFree(ptr, 0, MEM_RELEASE);
+    }
 #else
-    return (munmap(ptr, size) == -1);
+    return (munmap(ptr, size) == 0);
 #endif
 }
 
-bool release_memory(void *ptr, size_t size, bool commit)
+static inline bool release_memory(void *ptr, size_t size, bool commit)
 {
     if (commit) {
         return decommit_memory(ptr, size);
@@ -71,7 +77,7 @@ bool release_memory(void *ptr, size_t size, bool commit)
     }
 }
 
-void *alloc_memory(void *base, size_t size, bool commit)
+static inline void *alloc_memory(void *base, size_t size, bool commit)
 {
 #if defined(WINDOWS)
     int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
@@ -82,7 +88,7 @@ void *alloc_memory(void *base, size_t size, bool commit)
 #endif
 }
 
-bool reset_memory(void *base, size_t size)
+static inline bool reset_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
     void *p = VirtualAlloc(base, size, MEM_RESET, PAGE_READWRITE);
@@ -102,7 +108,7 @@ bool reset_memory(void *base, size_t size)
 #endif
 }
 
-bool protect_memory(void *addr, size_t size, bool protect)
+static inline bool protect_memory(void *addr, size_t size, bool protect)
 {
 #if defined(WINDOWS)
     DWORD prev_value = 0;
@@ -112,7 +118,7 @@ bool protect_memory(void *addr, size_t size, bool protect)
 #endif
 }
 
-bool remap_memory(void *old_addr, void *new_addr, size_t size)
+static inline bool remap_memory(void *old_addr, void *new_addr, size_t size)
 {
 #if defined(WINDOWS)
     /*
@@ -152,8 +158,14 @@ bool remap_memory(void *old_addr, void *new_addr, size_t size)
 #endif
     return false;
 }
+static inline size_t get_stack_limit()
+{
+    struct rlimit limit;
 
-size_t get_os_page_size(void)
+    getrlimit (RLIMIT_STACK, &limit);
+    return limit.rlim_max;
+}
+static inline size_t get_os_page_size(void)
 {
 #ifdef WINDOWS
     SYSTEM_INFO si;
@@ -164,24 +176,22 @@ size_t get_os_page_size(void)
 #endif
 }
 
-static uintptr_t main_thread_id = 0;
+extern __thread Allocator *thread_instance;
 static inline uintptr_t get_thread_id(void)
 {
 #if defined(WINDOWS)
     return (uintptr_t)NtCurrentTeb();
 #elif defined(__GNUC__)
     void *res;
-    const size_t ofs = 0;
 #if defined(__APPLE__)
 #if defined(__x86_64__)
+    const size_t ofs = 0;
     __asm__("movq %%gs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
 #elif defined(__aarch64__)
-    void **tcb;
-    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tcb));
-    tcb = (void **)((uintptr_t)tcb & ~0x07UL);
-    res = *tcb;
+    __asm__ volatile ("mrs %0,tpidrro_el0" : "=r" (res));
 #endif
 #elif defined(__x86_64__)
+    const size_t ofs = 0;
     __asm__("movq %%fs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
 #endif
     return (uintptr_t)res;
@@ -189,32 +199,5 @@ static inline uintptr_t get_thread_id(void)
     return (uintptr_t)&thread_instance;
 #endif
 }
-// Allocating memory from the OS that will not conflict with any memory region
-// of the allocator.
-static spinlock os_alloc_lock = {0};
-static uintptr_t os_alloc_hint = (uintptr_t)64 << 40;
-void *cmalloc_os(size_t size)
-{
-    // align size to page size
-    size += CACHE_LINE;
-    size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
 
-    // look the counter while fetching our os memory.
-    spinlock_lock(&os_alloc_lock);
-    void *ptr = alloc_memory((void *)os_alloc_hint, size, true);
-    os_alloc_hint = (uintptr_t)ptr + size;
-    if (os_alloc_hint >= (uintptr_t)127 << 40) {
-        // something has been running for a very long time!
-        os_alloc_hint = (uintptr_t)64 << 40;
-    }
-    spinlock_unlock(&os_alloc_lock);
-
-    // write the allocation header
-    uint64_t *_ptr = (uint64_t *)ptr;
-    *_ptr = (uint64_t)(uintptr_t)ptr + CACHE_LINE;
-    *(++_ptr) = size;
-
-    return (void *)((uintptr_t)ptr + CACHE_LINE);
-}
-
-#endif /* os_inl */
+#endif
