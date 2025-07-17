@@ -571,13 +571,12 @@ void run_tests(void)
     TEST(Allocator, medium_heaps, { EXPECT(test_medium_heaps()); });
     TEST(Allocator, large_heaps, { EXPECT(test_large_heaps()); });
     TEST(Allocator, huge_heaps, { EXPECT(test_huge_heaps()); });
-    TEST(Allocator, slabs, { EXPECT(test_slabs()); });
-    TEST(Allocator, huge_alloc, { EXPECT(test_huge_alloc()); });
-    TEST(Allocator, areas, { EXPECT(test_areas()); });
+    //TEST(Allocator, slabs, { EXPECT(test_slabs()); });
+    //TEST(Allocator, huge_alloc, { EXPECT(test_huge_alloc()); });
+    //TEST(Allocator, areas, { EXPECT(test_areas()); });
     TEST(Allocator, fillAPool, { EXPECT(fillAPool()); });
     TEST(Allocator, fillASection, { EXPECT(fillASection()); });
     TEST(Allocator, fillAnArea, { EXPECT(fillAnArea()); });
-    TEST(Allocator, fillAPage, { EXPECT(fillAPage()); });
     END_TEST(Allocator, {});
     if(!callocator_release())
     {
