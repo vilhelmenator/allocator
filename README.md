@@ -40,6 +40,8 @@ Memory allocation within each arena is driven by size and alignment requirements
 - Functionality for managing larger allocations is in development.
 
 ## Build and run
-clang *c -o test -O3
-./test
+
+  clang *c -o test -O3
+  
+  ./test
 
