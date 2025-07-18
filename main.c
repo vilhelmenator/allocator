@@ -5,19 +5,20 @@
 #include "callocator.inl"
 #include <stdlib.h>
 #include "pool.h"
-//#include "mimalloc.h"
 
-//extern __thread api_tracer _test_tracer;
-
-
+#ifdef MI_DEBUG
+#include "mimalloc.h"
+#else
 void* mi_malloc(size_t s)
 {
     return NULL;
 }
 void mi_free(void* p)
 {
-    
+
 }
+#endif
+
 const uint64_t NUMBER_OF_ITEMS = 800000L;
 const uint64_t NUMBER_OF_ITERATIONS = 10UL;
 const uint64_t OBJECT_SIZE = (1 << 3UL);
@@ -694,7 +695,7 @@ uint32_t minor_test(void)
 
 void test_size_iter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
-
+    printf("Test without free -> size: %ud, num items: %zu, num_iterations %zu\n", alloc_size, num_items, num_loops);
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t)
@@ -721,7 +722,6 @@ void test_size_iter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops
 }
 void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
-
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t)
@@ -753,7 +753,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
 }
 void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
-
+    
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t)
@@ -820,7 +820,6 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
 }
  void test_size_iter_scatter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
  {
-
      START_TEST(allocator, {});
      char **variables = (char **)malloc(num_items * sizeof(char *));
      size_t sizes[] = {alloc_size, alloc_size*2, alloc_size*4};
@@ -848,7 +847,6 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
  }
 void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
 {
-
     size_t alloc_size = 8;
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
@@ -887,7 +885,6 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
 
 void test_size_iter_sparse_reverse(size_t num_items, size_t num_loops,int t)
 {
-
     size_t alloc_size = 8;
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
@@ -1013,115 +1010,52 @@ int test(void *p)
 #include <sys/mman.h>
 int32_t temp_hit_counter = 0;
 
-int main(void)
+int main(int argc, char *argv[])
 {
-    
-    /*
-    size_t size = 1ULL << 22;
-    void *t1 = mmap(BASE_ADDR(0), size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
-    int32_t p1 = mprotect(t1, size, (PROT_READ | PROT_WRITE));
-    int32_t res = munmap(t1, size);
-    void *t2 = mmap(BASE_ADDR(0)+0x40000, size, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
-    int32_t p2 = mprotect(t2, size, (PROT_READ | PROT_WRITE));
-    int32_t res2 = munmap(t2, size);
-     */
-    //void *t2 = mmap((1ULL << 39), 1ULL << 16, PROT_NONE, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
-    //cfree(BASE_ADDR(0) - 8);
-    //thrd_t trd;
-    //thrd_create(&trd, &test, NULL);
-    // test_new_heap();
-    //thrd_t trd;
-    //thrd_create(&trd, &test, NULL);
-    //thrd_t trd2;
-    //thrd_create(&trd2, &test, NULL);
-    //  blach();
-    run_tests();
-    //  void* m = cmalloc_at(DEFAULT_OS_PAGE_SIZE*4, ((uintptr_t)32 << 40)+DEFAULT_OS_PAGE_SIZE);
-    //  cfree(m);
-    //  m = cmalloc_os(123);
-    //  cfree(m);
-
-    
-    // TODO
-    /*
-     // tests
-     [ ] - Test structs.
-         - run_test:
-         - trace_struct:
-         - test_struct:
-             - allocation:
-             -
-         - Define test.
-             - run_test(ALLOCATOR)
-     
-     [ ] Run the old tests with the new code path.
-     
-     [ ] Pool allocation tests. All sizes and bounds.
-        - run on one partition allocator.
-        - use test struct to monitor internal state.
-        - check alignment.
-     [ ] Arena allocation tests. All sizes and bounds.
-        - Alignment tests.
-     [ ] Slab allocations tests. All sizes and bounds.
-     
-     // new tests.
-     [ ] Zero allocation tests.
-     [ ] Reallocation tests.
-     
-     [x] Remove all the old code paths.
-
-     // new thread local approach
-     [ ] Allocator and thread locals.
-     [ ] Partition allocators and mutexes.
-
-     // new tests and perf checks.
-     [ ] aligned_alloc test.
-     [ ] zalloc_tests.
-     [ ] realloc_tests.
-
-     // compare with mimalloc
-     [ ] mimalloc comparison.
-     [ ] thread tests.
-     [ ] stress tests.
-
-     // see how it compares against the big boys.
-     [ ] Benchmarks. compare against other allocators.
-     */
-    uint32_t temp_count = 8181 + 511;
-    char **variables = (char **)malloc(temp_count * sizeof(char *));
-
-    for (uint64_t i = 0; i < temp_count; i++) {
-        variables[i] = (char *)cmalloc(8);
+    void *r = cmalloc(48);
+    cfree(r);
+    // Check if at least one argument was provided (argv[0] is the program name)
+    if (argc < 2) {
+        printf("Usage: %s <option>\n", argv[0]);
+        return 1; // Exit with error
     }
-    for (uint64_t i = 0; i < temp_count; i++) {
-        cfree(variables[i]);
-    }
-    variables[0] = (char *)cmalloc(8);
-    variables[1] = (char *)cmalloc(8);
-    cfree(variables[0]);
-    cfree(variables[1]);
-    
-    char* c = (char *)cmalloc(1ULL << 23);
-    cfree(c);
-    
+
     int test_local = 1;
-    for (int i = 0; i < 14; i++) {
-        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
-        //printf("hit %d \n", temp_hit_counter);
-    }
-    for (int i = 13; i >= 0; i--) {
-        //test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 0);
-        //printf("hit %d \n", temp_hit_counter);
-    }
-    for (int i = 0; i < 10; i++) {
-        //test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
-        //printf("hit %d \n", temp_hit_counter);
-    }
-    for (int i = 0; i < 10; i++) {
-        //test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, 1);
-        //printf("hit %d \n", temp_hit_counter);
-    }
+    // Compare the argument to decide the path
+    if (strcmp(argv[1], "mi_malloc") == 0) {
+        
+        test_local = 0;
+    } 
 
+    //run_tests();
+    printf("Test with free -> size: [8,..8192], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 0; i < 14; i++) {
+        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+    }
+    printf("Test with immediate free -> size: [8,..8192], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 0; i < 14; i++) {
+        test_size_iter_immediate(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+    }
+    printf("Test with free -> size: [8192,..8], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 13; i >= 0; i--) {
+        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+    }
+    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 0; i < 10; i++) {
+        test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+    }
+    
+    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 0; i < 10; i++) {
+        test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+    }
+    printf("Test sparse sizes ([8,16,32,...1024]) with free -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+
+    test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+
+    printf("Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+
+    test_size_iter_sparse_reverse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     
     return 0;
 }

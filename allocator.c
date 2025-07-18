@@ -540,7 +540,14 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
     
-    
+    void* res = (void*)(uintptr_t)((a->c_slot.header & ~0x3) + a->c_slot.offset) - a->c_slot.req_size;
+    if(res == p)
+    {
+        // we just returned the last memory allocated
+        // so we just offset our slot 
+        a->c_slot.offset -=a->c_slot.req_size;
+        return;
+    }
     if(a->c_deferred.end == 0)
     {
         allocator_release_slot(a);
