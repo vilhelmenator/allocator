@@ -51,21 +51,23 @@ clang *c ../mimalloc-master/src/static.c -I ../mimalloc-master/include -O3 -DMI_
 
 ./test mi_malloc
 ```
-| Test with free -> size: [8,..8192], num items: 800000, num_iterations 10                  |
-[ TIME     ] mi_malloc (68 (milli sec))               [ TIME     ] cmalloc (57 (milli sec))
-[ TIME     ] mi_malloc (45 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
-[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (39 (milli sec))
-[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))
-[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
-[ TIME     ] mi_malloc (48 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
-[ TIME     ] mi_malloc (56 (milli sec))               [ TIME     ] cmalloc (45 (milli sec))
-[ TIME     ] mi_malloc (103 (milli sec))              [ TIME     ] cmalloc (63 (milli sec))
-[ TIME     ] mi_malloc (118 (milli sec))              [ TIME     ] cmalloc (75 (milli sec))
-[ TIME     ] mi_malloc (144 (milli sec))              [ TIME     ] cmalloc (96 (milli sec))
-[ TIME     ] mi_malloc (179 (milli sec))              [ TIME     ] cmalloc (127 (milli sec))
-[ TIME     ] mi_malloc (265 (milli sec))              [ TIME     ] cmalloc (204 (milli sec))
-[ TIME     ] mi_malloc (373 (milli sec))              [ TIME     ] cmalloc (207 (milli sec))
-[ TIME     ] mi_malloc (632 (milli sec))              [ TIME     ] cmalloc (361 (milli sec))
+Test with free -> size: [1,2,4,8,..8192], num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (68 (milli sec))               [ TIME     ] cmalloc (57 (milli sec))   [ TIME     ] malloc (379 (milli sec))
+[ TIME     ] mi_malloc (45 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))   [ TIME     ] malloc (371 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (39 (milli sec))   [ TIME     ] malloc (364 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))   [ TIME     ] malloc (371 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))   [ TIME     ] malloc (370 (milli sec))
+[ TIME     ] mi_malloc (48 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))   [ TIME     ] malloc (440 (milli sec))
+[ TIME     ] mi_malloc (56 (milli sec))               [ TIME     ] cmalloc (45 (milli sec))   [ TIME     ] malloc (526 (milli sec))
+[ TIME     ] mi_malloc (103 (milli sec))              [ TIME     ] cmalloc (63 (milli sec))   [ TIME     ] malloc (630 (milli sec))
+[ TIME     ] mi_malloc (118 (milli sec))              [ TIME     ] cmalloc (75 (milli sec))   [ TIME     ] malloc (782 (milli sec))
+[ TIME     ] mi_malloc (144 (milli sec))              [ TIME     ] cmalloc (96 (milli sec))   [ TIME     ] malloc (1 seconds : 12 (milli sec))
+[ TIME     ] mi_malloc (179 (milli sec))              [ TIME     ] cmalloc (127 (milli sec))  [ TIME     ] malloc (326 (milli sec))
+[ TIME     ] mi_malloc (265 (milli sec))              [ TIME     ] cmalloc (204 (milli sec))  [ TIME     ] malloc (341 (milli sec))
+[ TIME     ] mi_malloc (373 (milli sec))              [ TIME     ] cmalloc (207 (milli sec))  [ TIME     ] malloc (365 (milli sec))
+[ TIME     ] mi_malloc (632 (milli sec))              [ TIME     ] cmalloc (361 (milli sec))  [ TIME     ] malloc (417 (milli sec))
+Committed physical pages post:
+[ 403265   ]                                          [ 506912.  ]                            [ 3200.    ]
 
 Test with immediate free -> size: [8,..8192], num items: 800000, num_iterations 10
 [ TIME     ] mi_malloc (57 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))

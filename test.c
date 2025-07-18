@@ -5,6 +5,50 @@
 #include "callocator.inl"
 #include <stdlib.h>
 #include "pool.h"
+#if defined(_WIN32)
+    #include <windows.h>
+    #include <stdio.h>
+    #include <psapi.h>
+
+    void get_committed_pages() {
+        PROCESS_MEMORY_COUNTERS pmc;
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+            // Divide by page size (typically 4KB) to get page count
+            return pmc.WorkingSetSize
+        }
+        return 0;
+    }
+#elif defined(__linux__)
+    #include <stdio.h>
+
+    int get_committed_pages() {
+        unsigned long vm_size, rss;
+        FILE* f = fopen("/proc/self/statm", "r");
+        if (f) {
+            // The second field is resident set size (RSS) in pages
+            fscanf(f, "%*lu %lu", &rss);
+            fclose(f);
+            return rss;
+        }
+        return 0;
+    }
+#elif defined(__APPLE__)
+    #include <mach/mach.h>
+#include <stdio.h>
+
+int get_committed_pages() {
+    struct task_basic_info t_info;
+    mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
+    
+    if (task_info(mach_task_self(), TASK_BASIC_INFO,
+                 (task_info_t)&t_info, &t_info_count) == KERN_SUCCESS) {
+        return t_info.resident_size / getpagesize();
+    }
+    return 0;
+}
+#else
+    #error "Platform not supported"
+#endif
 
 #ifdef MI_DEBUG
 #include "mimalloc.h"
@@ -695,7 +739,6 @@ uint32_t minor_test(void)
 
 void test_size_iter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
-    printf("Test without free -> size: %ud, num items: %zu, num_iterations %zu\n", alloc_size, num_items, num_loops);
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t)
@@ -756,7 +799,7 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int
     
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
-    if(t)
+    if(t == 2)
     {
         MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -769,7 +812,7 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int
             }
         });
     }
-    else
+    else if( t == 1)
     {
         MEASURE_TIME(Allocator, mi_malloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -778,6 +821,18 @@ void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int
 
                 for (uint64_t i = 0; i < num_items; i++)
                     mi_free(variables[i]);
+            }
+        });
+    }
+    else 
+    {
+        MEASURE_TIME(Allocator, malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                    variables[i] = (char *)malloc(alloc_size);
+
+                for (uint64_t i = 0; i < num_items; i++)
+                    free(variables[i]);
             }
         });
     }
@@ -1012,26 +1067,33 @@ int32_t temp_hit_counter = 0;
 
 int main(int argc, char *argv[])
 {
-    void *r = cmalloc(48);
-    cfree(r);
     // Check if at least one argument was provided (argv[0] is the program name)
     if (argc < 2) {
         printf("Usage: %s <option>\n", argv[0]);
         return 1; // Exit with error
     }
 
-    int test_local = 1;
+    int test_local = 2;
     // Compare the argument to decide the path
     if (strcmp(argv[1], "mi_malloc") == 0) {
+        
+        test_local = 1;
+    }
+    if (strcmp(argv[1], "malloc") == 0) {
         
         test_local = 0;
     } 
 
+    int cp = get_committed_pages();
+    printf("Committed pages prior %d\n", cp);
     //run_tests();
     printf("Test with free -> size: [8,..8192], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
+    cp = get_committed_pages();
+    printf("Committed pages post %d\n", cp);
+    
     printf("Test with immediate free -> size: [8,..8192], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 14; i++) {
         test_size_iter_immediate(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
