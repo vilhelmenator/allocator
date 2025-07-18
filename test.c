@@ -767,7 +767,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
 {
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
-    if(t)
+    if(t == 2)
     {
         MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -779,7 +779,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
             }
         });
     }
-    else
+    else if(t == 1)
     {
         MEASURE_TIME(Allocator, mi_malloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -790,6 +790,20 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
                 }
             }
         });
+    }
+    else
+    {
+        MEASURE_TIME(Allocator, malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                {
+                    variables[i] = (char *)malloc(alloc_size);
+                    __asm__ __volatile__("");
+                    free(variables[i]);
+                    
+                }
+            }
+        });   
     }
     END_TEST(allocator, {});
     free(variables);
@@ -845,7 +859,7 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
     size_t sizes[] = {alloc_size, alloc_size*2, alloc_size*4};
-    if(t)
+    if(t == 2)
     {
         MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -858,7 +872,7 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
             }
         });
     }
-    else
+    else if(t == 1)
     {
         MEASURE_TIME(Allocator, mi_malloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -870,6 +884,18 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
             }
         });
     }
+    else
+    {
+        MEASURE_TIME(Allocator, malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                    variables[i] = (char *)malloc(sizes[i%3]);
+
+                for (uint64_t i = 0; i < num_items; i++)
+                    free(variables[i]);
+            }
+        });
+    }
     END_TEST(allocator, {});
     free(variables);
 }
@@ -878,7 +904,7 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
      START_TEST(allocator, {});
      char **variables = (char **)malloc(num_items * sizeof(char *));
      size_t sizes[] = {alloc_size, alloc_size*2, alloc_size*4};
-     if(t)
+     if(t == 2)
      {
          MEASURE_TIME(allocator, cmalloc, {
              for (uint64_t j = 0; j < num_loops; j++) {
@@ -888,12 +914,21 @@ void test_size_iter_scatter(uint32_t alloc_size, size_t num_items, size_t num_lo
              }
          });
      }
-     else
+     else if(t == 1)
      {
          MEASURE_TIME(Allocator, mi_malloc, {
              for (uint64_t j = 0; j < num_loops; j++) {
                  for (uint64_t i = 0; i < num_items; i++)
                      variables[i] = (char *)mi_malloc(sizes[i%3]);
+             }
+         });
+     }
+     else
+     {
+         MEASURE_TIME(Allocator, malloc, {
+             for (uint64_t j = 0; j < num_loops; j++) {
+                 for (uint64_t i = 0; i < num_items; i++)
+                     variables[i] = (char *)malloc(sizes[i%3]);
              }
          });
      }
@@ -905,7 +940,7 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
     size_t alloc_size = 8;
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
-    if(t)
+    if(t == 2)
     {
         MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -919,7 +954,7 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
             }
         });
     }
-    else
+    else if(t == 1)
     {
         MEASURE_TIME(Allocator, mi_malloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -930,6 +965,20 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
                 }
                 for (uint64_t i = 0; i < num_items; i++)
                     mi_free(variables[i]);
+            }
+        });
+    }
+    else
+    {
+        MEASURE_TIME(Allocator, malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                {
+                    alloc_size += 8;
+                    variables[i] = (char *)malloc(alloc_size%1024);
+                }
+                for (uint64_t i = 0; i < num_items; i++)
+                    free(variables[i]);
             }
         });
     }
@@ -943,7 +992,7 @@ void test_size_iter_sparse_reverse(size_t num_items, size_t num_loops,int t)
     size_t alloc_size = 8;
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
-    if(t)
+    if(t == 2)
     {
         MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -957,7 +1006,7 @@ void test_size_iter_sparse_reverse(size_t num_items, size_t num_loops,int t)
             }
         });
     }
-    else
+    else if(t == 1)
     {
         MEASURE_TIME(Allocator, mi_malloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
@@ -968,6 +1017,20 @@ void test_size_iter_sparse_reverse(size_t num_items, size_t num_loops,int t)
                 }
                 for (uint64_t i = 0; i < num_items; i++)
                     mi_free(variables[i]);
+            }
+        });
+    }
+    else
+    {
+        MEASURE_TIME(Allocator, malloc, {
+            for (uint64_t j = 0; j < num_loops; j++) {
+                for (uint64_t i = 0; i < num_items; i++)
+                {
+                    alloc_size += 8;
+                    variables[i] = (char *)malloc(alloc_size%1024);
+                }
+                for (uint64_t i = 0; i < num_items; i++)
+                    free(variables[i]);
             }
         });
     }
@@ -1067,55 +1130,54 @@ int32_t temp_hit_counter = 0;
 
 int main(int argc, char *argv[])
 {
-    // Check if at least one argument was provided (argv[0] is the program name)
-    if (argc < 2) {
-        printf("Usage: %s <option>\n", argv[0]);
-        return 1; // Exit with error
-    }
-
     int test_local = 2;
-    // Compare the argument to decide the path
-    if (strcmp(argv[1], "mi_malloc") == 0) {
-        
-        test_local = 1;
+    if (argc > 1) {
+
+        if (strcmp(argv[1], "mi_malloc") == 0) {
+            
+            test_local = 1;
+        }
+        if (strcmp(argv[1], "malloc") == 0) {
+            
+            test_local = 0;
+        }
     }
-    if (strcmp(argv[1], "malloc") == 0) {
-        
-        test_local = 0;
-    } 
 
     int cp = get_committed_pages();
     printf("Committed pages prior %d\n", cp);
     //run_tests();
-    printf("Test with free -> size: [8,..8192], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
-    for (int i = 0; i < 14; i++) {
+    printf("Test with free -> size: [1,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 0; i < 16; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     cp = get_committed_pages();
     printf("Committed pages post %d\n", cp);
-    
-    printf("Test with immediate free -> size: [8,..8192], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test with free -> size: [32k,..512k], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    for (int i = 16; i < 20; i++) {
+        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+    }
+    printf("Test with immediate free -> size: [8,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 14; i++) {
         test_size_iter_immediate(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
-    printf("Test with free -> size: [8192,..8], num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test with free -> size: [8192,..8], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 13; i >= 0; i--) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
-    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 10; i++) {
         test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     
-    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 10; i++) {
         test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
-    printf("Test sparse sizes ([8,16,32,...1024]) with free -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test sparse sizes ([8,16,32,...1024]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
 
-    printf("Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: %zu, num_iterations %zu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse_reverse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     
