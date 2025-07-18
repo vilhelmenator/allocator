@@ -45,3 +45,87 @@ Memory allocation within each arena is driven by size and alignment requirements
   
   ./test
 
+## mi_malloc test comparisons.
+
+clang *c ../mimalloc-master/src/static.c -I ../mimalloc-master/include -O3 -DMI_DEBUG=0 -o test
+
+./test mi_malloc
+```
+| Test with free -> size: [8,..8192], num items: 800000, num_iterations 10                  |
+[ TIME     ] mi_malloc (68 (milli sec))               [ TIME     ] cmalloc (57 (milli sec))
+[ TIME     ] mi_malloc (45 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (39 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
+[ TIME     ] mi_malloc (48 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
+[ TIME     ] mi_malloc (56 (milli sec))               [ TIME     ] cmalloc (45 (milli sec))
+[ TIME     ] mi_malloc (103 (milli sec))              [ TIME     ] cmalloc (63 (milli sec))
+[ TIME     ] mi_malloc (118 (milli sec))              [ TIME     ] cmalloc (75 (milli sec))
+[ TIME     ] mi_malloc (144 (milli sec))              [ TIME     ] cmalloc (96 (milli sec))
+[ TIME     ] mi_malloc (179 (milli sec))              [ TIME     ] cmalloc (127 (milli sec))
+[ TIME     ] mi_malloc (265 (milli sec))              [ TIME     ] cmalloc (204 (milli sec))
+[ TIME     ] mi_malloc (373 (milli sec))              [ TIME     ] cmalloc (207 (milli sec))
+[ TIME     ] mi_malloc (632 (milli sec))              [ TIME     ] cmalloc (361 (milli sec))
+
+Test with immediate free -> size: [8,..8192], num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (57 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (56 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (57 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (57 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (58 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (59 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (60 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (66 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (68 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (75 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (68 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (103 (milli sec))              [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (105 (milli sec))              [ TIME     ] cmalloc (35 (milli sec))
+[ TIME     ] mi_malloc (92 (milli sec))               [ TIME     ] cmalloc (35 (milli sec))
+
+Test with free -> size: [8192,..8], num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (379 (milli sec))              [ TIME     ] cmalloc (104 (milli sec))
+[ TIME     ] mi_malloc (249 (milli sec))              [ TIME     ] cmalloc (76 (milli sec))
+[ TIME     ] mi_malloc (190 (milli sec))              [ TIME     ] cmalloc (67 (milli sec))
+[ TIME     ] mi_malloc (151 (milli sec))              [ TIME     ] cmalloc (65 (milli sec))
+[ TIME     ] mi_malloc (121 (milli sec))              [ TIME     ] cmalloc (69 (milli sec))
+[ TIME     ] mi_malloc (113 (milli sec))              [ TIME     ] cmalloc (64 (milli sec))
+[ TIME     ] mi_malloc (98 (milli sec))               [ TIME     ] cmalloc (59 (milli sec))
+[ TIME     ] mi_malloc (52 (milli sec))               [ TIME     ] cmalloc (42 (milli sec))
+[ TIME     ] mi_malloc (47 (milli sec))               [ TIME     ] cmalloc (40 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (39 (milli sec))
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (38 (milli sec))
+
+Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (44 (milli sec))
+[ TIME     ] mi_malloc (44 (milli sec))               [ TIME     ] cmalloc (44 (milli sec))
+[ TIME     ] mi_malloc (38 (milli sec))               [ TIME     ] cmalloc (44 (milli sec))
+[ TIME     ] mi_malloc (34 (milli sec))               [ TIME     ] cmalloc (46 (milli sec))
+[ TIME     ] mi_malloc (38 (milli sec))               [ TIME     ] cmalloc (53 (milli sec))
+[ TIME     ] mi_malloc (56 (milli sec))               [ TIME     ] cmalloc (62 (milli sec))
+[ TIME     ] mi_malloc (79 (milli sec))               [ TIME     ] cmalloc (66 (milli sec))
+[ TIME     ] mi_malloc (100 (milli sec))              [ TIME     ] cmalloc (75 (milli sec))
+[ TIME     ] mi_malloc (119 (milli sec))              [ TIME     ] cmalloc (77 (milli sec))
+[ TIME     ] mi_malloc (150 (milli sec))              [ TIME     ] cmalloc (81 (milli sec))
+
+Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (44 (milli sec))
+[ TIME     ] mi_malloc (43 (milli sec))               [ TIME     ] cmalloc (44 (milli sec))
+[ TIME     ] mi_malloc (38 (milli sec))               [ TIME     ] cmalloc (45 (milli sec))
+[ TIME     ] mi_malloc (34 (milli sec))               [ TIME     ] cmalloc (46 (milli sec))
+[ TIME     ] mi_malloc (38 (milli sec))               [ TIME     ] cmalloc (52 (milli sec))
+[ TIME     ] mi_malloc (53 (milli sec))               [ TIME     ] cmalloc (62 (milli sec))
+[ TIME     ] mi_malloc (79 (milli sec))               [ TIME     ] cmalloc (66 (milli sec))
+[ TIME     ] mi_malloc (100 (milli sec))              [ TIME     ] cmalloc (74 (milli sec))
+[ TIME     ] mi_malloc (120 (milli sec))              [ TIME     ] cmalloc (72 (milli sec))
+[ TIME     ] mi_malloc (150 (milli sec))              [ TIME     ] cmalloc (78 (milli sec))
+
+Test sparse sizes ([8,16,32,...1024]) with free -> num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (131 (milli sec))              [ TIME     ] cmalloc (499 (milli sec))
+
+Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: 800000, num_iterations 10
+[ TIME     ] mi_malloc (131 (milli sec))              [ TIME     ] cmalloc (380 (milli sec))
+```
