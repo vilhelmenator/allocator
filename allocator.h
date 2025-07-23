@@ -7,7 +7,7 @@ int32_t reserve_any_partition_set_for(const int32_t midx);
 bool reserve_partition_set(const int32_t idx, const int32_t midx);
 void release_partition_set(const int32_t idx);
 
-Allocator *allocator_aquire(size_t idx);
+Allocator *allocator_aquire(void);
 internal_alloc allocator_set_counter_slot(Allocator *a, void *p, uint32_t slot_size, uintptr_t pheader, int32_t pend);
 void *allocator_malloc(Allocator_param *prm);
 bool allocator_release_local_areas(Allocator *a);

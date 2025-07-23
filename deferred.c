@@ -5,31 +5,89 @@
 #include <stdatomic.h>
 #include "arena.h"
 
-extern int64_t partition_owners[MAX_THREADS]; 
-extern PartitionAllocator *partition_allocators[MAX_THREADS];
+extern PartitionAllocator *partition_allocator;
+void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks) {
+    // Clear area_mask bits.
+    uint64_t area_add_mask =
+        (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
+    atomic_fetch_or_explicit(&a->allocations,
+                              area_add_mask,
+                              memory_order_release);
 
+    // Clear range_mask bits if needed.
+    if (size_in_blocks > 1) {
+        uint64_t range_add_mask = (1ULL << start_bit) | (1ULL << (start_bit + size_in_blocks - 1));
+        atomic_fetch_or_explicit(&a->ranges,
+                                  range_add_mask,
+                                  memory_order_relaxed);
+    }
+    
+    if(a->allocations == UINT64_MAX)
+    {
+        // if arena is full... we remove from allocator queue.
+        Queue *queue = &alloc->arenas[a->partition_id];
+        if(arena_is_connected(a) || queue->head == a)
+        {
+            list_remove(queue, a);
+        }
+    }
+}
+void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks) {
+    // Clear area_mask bits.
+    uint64_t area_clear_mask =
+        (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
+    atomic_fetch_and_explicit(&a->allocations,
+                              ~area_clear_mask,
+                              memory_order_release);
 
-
+    // Clear range_mask bits if needed.
+    if (size_in_blocks > 1) {
+        uint64_t range_clear_mask = (1ULL << start_bit) | (1ULL << (start_bit + size_in_blocks - 1));
+        atomic_fetch_and_explicit(&a->ranges,
+                                  ~range_clear_mask,
+                                  memory_order_relaxed);
+    }
+    if(a->allocations > 1)
+    {
+        Queue *queue = &alloc->arenas[a->partition_id];
+        if(!arena_is_connected(a) && queue->head != a)
+        {
+            list_enqueue(queue, a);
+        }
+    }
+    else
+    {
+        // if arena is full... we remove from allocator queue.
+        //Queue *queue = &alloc->arenas[a->partition_id];
+        //if(arena_is_connected(a) || queue->head == a)
+        //{
+        //    list_remove(queue, a);
+        //}
+        //partition_allocator_free_blocks(partition_allocator, a, true);
+    }
+}
 // compute bounds and initialize
 void deferred_init(Allocator* a, void*p)
 {
     int32_t pid = partition_id_from_addr((uintptr_t)p);
-    if (pid >= 0 && pid < NUM_AREA_PARTITIONS) {
+    if (pid >= 0 && pid < PARTITION_COUNT) {
         
         deferred_free*c = &a->c_deferred;
-        const int32_t part_id = partition_allocator_from_addr_and_part((uintptr_t)p, (uint32_t)pid);
-        c->owned = a->idx == partition_owners[part_id];
-        size_t area_size = area_size_from_partition_id(pid);
+        size_t area_size = region_size_from_partition_id(pid);
         Heap *d = NULL;
         
         const arena_size_table *stable = arena_get_size_table_by_idx(pid);
         Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
+        c->owned = h->thread_id == a->thread_id;
         int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, stable->exponents[0]);
         if(idx == 0)
         {
-            // slab
-            PartitionAllocator *_part_alloc = partition_allocators[part_id];
-            partition_allocator_free_area(_part_alloc, (uintptr_t)p);
+            // This would be a whole region that is allocated
+            // since an arena would have its first area reserved for
+            // masks.
+            
+            partition_allocator_free_blocks(partition_allocator, p, true);
+            // we can decommit the memory in this case.
             a->c_slot.header = 0;
             return;
         }
@@ -40,9 +98,10 @@ void deferred_init(Allocator* a, void*p)
             if(top_aligned)
             {
                 uint32_t range = get_range(idx, h->ranges);
-                uintptr_t sub_mask = ~reserve_range_idx(range, idx);
-                h->allocations &= sub_mask;
-                h->ranges &= sub_mask;
+                arena_free_blocks(a, h, idx, range);
+                // if an arena becomes empty
+                // we remove it from our lists of arenas...
+                // but we still keep one arena around.
                 a->c_slot.header = 0;
                 return;
             }
@@ -78,12 +137,8 @@ void deferred_release(Allocator* a, void* p)
                 pool->num_used -= c->num;
                 if(pool_is_full(pool))
                 {
-                    pool_set_full(pool, a);
-                    Queue *queue = &a->pools[pool->block_idx];
-                    if(pool_is_connected(pool) && queue->head == pool)
-                    {
-                        list_remove(queue, pool);
-                    }
+                    pool_post_free(pool, a);
+                    
                 }
             }
         }
@@ -91,7 +146,6 @@ void deferred_release(Allocator* a, void* p)
         {
             Heap *d = (Heap*)c->start;
             atomic_fetch_add_explicit(&d->thread_free_counter,c->num,memory_order_relaxed);
-            
         }
         if(p)
         {

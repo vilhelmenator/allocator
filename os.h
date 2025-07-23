@@ -250,6 +250,17 @@ static int tls_set(tls_t key, void *val)
 }
 #endif
 
+static inline void *alloc_memory(void *base, size_t size, bool commit)
+{
+#if defined(WINDOWS)
+    int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
+    return VirtualAlloc(base, size, flags, PAGE_READWRITE);
+#else
+    int flags = commit ? (PROT_WRITE | PROT_READ) : PROT_NONE;
+    return mmap(base, size, flags, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
+#endif
+}
+
 static inline bool commit_memory(void *base, size_t size)
 {
 #if defined(WINDOWS)
@@ -295,35 +306,30 @@ static inline bool release_memory(void *ptr, size_t size, bool commit)
     }
 }
 
-static inline void *alloc_memory(void *base, size_t size, bool commit)
-{
-#if defined(WINDOWS)
-    int flags = commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE;
-    return VirtualAlloc(base, size, flags, PAGE_READWRITE);
-#else
-    int flags = commit ? (PROT_WRITE | PROT_READ) : PROT_NONE;
-    return mmap(base, size, flags, (MAP_PRIVATE | MAP_ANONYMOUS), -1, 0);
-#endif
-}
 
-static inline bool reset_memory(void *base, size_t size)
-{
-#if defined(WINDOWS)
+
+static inline bool reset_memory(void *base, size_t size) {
+    if (!base || size == 0) return false;
+
+#if defined(_WIN32)
+    // Windows: MEM_RESET + explicit unlock
     void *p = VirtualAlloc(base, size, MEM_RESET, PAGE_READWRITE);
-    if (p == base && base != NULL) {
-        VirtualUnlock(base, size);
+    if (p == base) {
+        VirtualUnlock(base, size);  // Optional but recommended
+        return true;
     }
-    return (p == base);
 #else
-    int err;
-    while ((err = madvise(base, size, MADV_FREE)) != 0 && errno == EAGAIN) {
-        errno = 0;
-    };
-    if (err != 0 && errno == EINVAL) {
-        err = madvise(base, size, MADV_DONTNEED);
+    // Linux/macOS: MADV_FREE fallback to MADV_DONTNEED
+    int err = madvise(base, size, MADV_FREE);
+    if (err == -1) {
+        if (errno == EINVAL) {  // MADV_FREE not supported
+            err = madvise(base, size, MADV_DONTNEED);
+        }
+        return (err == 0);
     }
-    return (err != 0);
+    return true;
 #endif
+    return false;
 }
 
 static inline bool protect_memory(void *addr, size_t size, bool protect)
@@ -376,7 +382,7 @@ static inline bool remap_memory(void *old_addr, void *new_addr, size_t size)
 #endif
     return false;
 }
-static inline size_t get_stack_limit()
+static inline size_t get_stack_limit(void)
 {
     struct rlimit limit;
 

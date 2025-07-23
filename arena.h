@@ -10,6 +10,7 @@
 #define ARENA_H
 
 #include "callocator.inl"
+#include <stdatomic.h>
 
 #define ARENA_BASE_SIZE_EXPONENT 22
 
@@ -24,16 +25,13 @@ typedef struct arena_empty_mask_table_t
 {
     uint64_t sizes[3];
 } arena_empty_mask_table;
-static const arena_size_table arena_tables[NUM_AREA_PARTITIONS] = {
+static const arena_size_table arena_tables[PARTITION_COUNT] = {
     {{16, 22}, {1 << 16, 1 << 22}},  {{17, 23}, {1 << 17, 1 << 23}},
     {{18, 24}, {1 << 18, 1 << 24}},  {{19, 25}, {1 << 19, 1 << 25}},
     {{20, 26}, {1 << 20, 1 << 26}},  {{21, 27}, {1 << 21, 1 << 27}},
     {{22, 28}, {1 << 22, 1 << 28}},  {{23, 29}, {1 << 23, 1 << 29}}, {{24, 30}, {1 << 24, 1 << 30}}};
 
-static inline const uint32_t arena_get_arena_index(Arena* a)
-{
-    return a->container_exponent - arena_level_offset;
-}
+
 static inline const arena_size_table *arena_get_size_table_by_idx(uint8_t aidx)
 {
     return &arena_tables[aidx];
@@ -41,7 +39,7 @@ static inline const arena_size_table *arena_get_size_table_by_idx(uint8_t aidx)
 
 static inline const arena_size_table *arena_get_size_table(Arena* a)
 {
-    return arena_get_size_table_by_idx(arena_get_arena_index(a));
+    return arena_get_size_table_by_idx(a->partition_id);
 }
 
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
@@ -70,7 +68,7 @@ static inline Arena* arena_get_header(uintptr_t addr)
     return (Arena*)header;
 }
 
-Arena *arena_init(uintptr_t base_addr, int32_t idx, size_t arena_size_exponent);
 static inline bool arena_is_connected(const Arena *s) { return s->prev != NULL || s->next != NULL; }
-
+void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks);
+void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks);
 #endif // ARENA_H

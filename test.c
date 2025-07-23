@@ -5,6 +5,11 @@
 #include "callocator.inl"
 #include <stdlib.h>
 #include "pool.h"
+#include <assert.h>
+#include <stdatomic.h>
+
+
+
 #if defined(_WIN32)
     #include <windows.h>
     #include <stdio.h>
@@ -135,7 +140,7 @@ bool test_alloc(size_t allocation_size, bool test_align)
     uint8_t pc = size_to_pool(allocation_size);
     int32_t row = pc/8;
     uint8_t arena_idx = row_map[row];
-    size_t area_size = area_size_from_partition_id(arena_idx);
+    size_t area_size = region_size_from_partition_id(arena_idx);
     
     size_t pool_size = area_size >> 6;
     
@@ -178,12 +183,9 @@ bool test_alloc(size_t allocation_size, bool test_align)
     }
     
     // next allocation should be from a different partition id
-    int8_t pid = partition_allocator_from_addr((uintptr_t)variables[0]);
+    
     void *nll = cmalloc(allocation_size);
-    int8_t npid = partition_allocator_from_addr((uintptr_t)nll);
-    if (npid == pid) {
-        result = false;
-    }
+    
     cfree(nll);
     
 end:
@@ -229,7 +231,7 @@ bool test_alloc_aligned(size_t allocation_size)
     uint8_t pc = size_to_pool(allocation_size);
     int32_t row = pc/8;
     uint8_t arena_idx = row_map[row];
-    size_t area_size = area_size_from_partition_id(arena_idx);
+    size_t area_size = region_size_from_partition_id(arena_idx);
     
     size_t pool_size = area_size >> 6;
     
@@ -267,7 +269,7 @@ bool test_alloc_aligned(size_t allocation_size)
         pc = size_to_pool(MAX(alignment, allocation_size));
         row = pc/8;
         arena_idx = row_map[MIN(row, 16)];
-        area_size = area_size_from_partition_id(arena_idx);
+        area_size = region_size_from_partition_id(arena_idx);
         if(row < 10)
         {
             pool_size = area_size >> 6;
@@ -512,25 +514,31 @@ bool fillAPool(void)
     return state;
 }
 
-bool fillASection(void)
+bool fillAChunk(void)
 {
     bool state = true;
-    const int num_pools = 32;
-    const int num_allocs = 16378;
+    const int num_pools = 63;
+    const int num_allocs = 8183;
+    
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * num_pools * sizeof(uint64_t **));
     for (int s = 0; s < num_pools; s++) {
         for (int i = 0; i < num_allocs; i++) {
-            allocs[i + (num_allocs * s)] = (uint64_t *)cmalloc(8);
-            *allocs[i + (num_allocs * s)] = (uint64_t)allocs[i + (num_allocs * s)];
+            uint64_t offset = i + (num_allocs * s);
+            uint64_t* addr = (uint64_t*)cmalloc(8);
+            allocs[offset] = addr;
+            *allocs[offset] = (uint64_t)allocs[offset];
         }
     }
 
     for (int s = 0; s < num_pools; s++) {
         for (int i = 0; i < num_allocs; i++) {
-            if (*allocs[i + (num_allocs * s)] != (uint64_t)allocs[i + (num_allocs * s)]) {
+            uint64_t offset = i + (num_allocs * s);
+            uint64_t* ref = allocs[offset];
+            uint64_t addr = (uint64_t)allocs[offset];
+            if (*ref != addr) {
                 state = false;
             }
-            cfree(allocs[i + (num_allocs * s)]);
+            cfree(allocs[offset]);
         }
     }
     free(allocs);
@@ -538,12 +546,12 @@ bool fillASection(void)
     return state;
 }
 
-bool fillAnArea(void)
+bool fillARegion(void)
 {
     bool state = true;
-    const int num_sections = 8;
-    const int num_pools = 32;
-    const int num_allocs = 16378;
+    const int num_sections = 64;
+    const int num_pools = 63;
+    const int num_allocs = 8182;
     const int total_allocs = num_sections * num_pools * num_allocs;
     uint64_t **allocs = (uint64_t **)malloc(total_allocs * sizeof(uint64_t **));
 
@@ -572,36 +580,12 @@ bool fillAnArea(void)
     return state;
 }
 
-bool fillAPage(void)
-{
-    bool state = true;
-    const int num_allocs = 1398094;
-    uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
-
-    for (int i = 0; i < num_allocs; i++) {
-        uint64_t *addr = (uint64_t *)caligned_alloc(4096, 8);
-        allocs[i] = addr;
-        *allocs[i] = (uint64_t)allocs[i];
-    }
-
-    for (int i = 0; i < num_allocs; i++) {
-
-        if (*allocs[i] != (uint64_t)allocs[i]) {
-            state = false;
-        }
-        cfree(allocs[i]);
-    }
-
-    free(allocs);
-
-    // fill all 8 pools of one sections
-    return state;
-}
 
 void run_tests(void)
 {
 
     START_TEST(Allocator, {});
+    
     TEST(Allocator, pools_small, { EXPECT(test_pools_small()); });
     TEST(Allocator, medium_pools, { EXPECT(test_medium_pools()); });
     TEST(Allocator, large_pools, { EXPECT(test_large_pools()); });
@@ -610,12 +594,13 @@ void run_tests(void)
     TEST(Allocator, medium_heaps, { EXPECT(test_medium_heaps()); });
     TEST(Allocator, large_heaps, { EXPECT(test_large_heaps()); });
     TEST(Allocator, huge_heaps, { EXPECT(test_huge_heaps()); });
+    
     //TEST(Allocator, slabs, { EXPECT(test_slabs()); });
     //TEST(Allocator, huge_alloc, { EXPECT(test_huge_alloc()); });
     //TEST(Allocator, areas, { EXPECT(test_areas()); });
     TEST(Allocator, fillAPool, { EXPECT(fillAPool()); });
-    TEST(Allocator, fillASection, { EXPECT(fillASection()); });
-    TEST(Allocator, fillAnArea, { EXPECT(fillAnArea()); });
+    TEST(Allocator, fillAChunk, { EXPECT(fillAChunk()); });
+    TEST(Allocator, fillARegion, { EXPECT(fillARegion()); });
     END_TEST(Allocator, {});
     if(!callocator_release())
     {
@@ -623,119 +608,6 @@ void run_tests(void)
     }
 }
 
-
-
-
-uint32_t numConsecutiveZeros(uint64_t test)
-{
-    if(test == 0)
-    {
-        return 64;
-    }
-    if((test & (test - 1)) == 0)
-    {
-        return MAX(__builtin_clzll(test), __builtin_ctzll(test));
-    }
-
-    if((~test & (~test >> 1)) == 0)
-    {
-        return 1;
-    }
-    uint32_t lz = __builtin_clzll(test);
-    uint32_t tz = __builtin_ctzll(test);
-    if(lz == 0)
-    {
-        uint32_t l1 = __builtin_clzll(~test);
-        if((64 - l1) <= tz)
-        {
-            return tz;
-        }
-        test &= (1ULL << (64 - (l1 - 1))) - 1;
-    }
-    
-    uint32_t mz = MAX(lz, tz);
-    if((64 - (lz + tz)) <= mz)
-    {
-        return mz;
-    }
-    
-    if(tz == 0)
-    {
-        test = test >> __builtin_ctzll(~test);
-    }
-    else
-    {
-        test = test >> (tz + 1);
-    }
-    
-    while(test >= (1ULL << mz))
-    {
-        tz = __builtin_ctzll(test);
-        mz = mz ^ ((mz ^ tz) & -(mz < tz));
-        test = test >> (tz + 1);
-        test = test >> __builtin_ctzll(~test);
-    }
-    return mz;
-}
-
-uint32_t _numConsecutiveZeros(uint64_t test)
-{
-    int32_t count = 0;
-    int32_t result = 0;
-    for(int i = 0; i < 64; i++)
-    {
-        if(!(test & (1ULL << i)))
-        {
-            count++;
-        }
-        else
-        {
-            if(count > result)
-            {
-                result = count;
-            }
-            count = 0;
-        }
-    }
-    if(count > result)
-    {
-        result = count;
-    }
-    return result;
-}
-uint32_t minor_test(void)
-{
-    START_TEST(allocator, {});
-    uint32_t lz = 0;
-    MEASURE_TIME(allocator, num_zeros, {
-        for (uint64_t j = 0; j < 100000000; j++) {
-            uint64_t test = j | (j << 32);
-            lz += __builtin_ctzll(test);
-            __asm__ __volatile__("");
-        }
-    });
-    MEASURE_TIME(allocator, num_zeros, {
-        for (uint64_t j = 0; j < 100000000; j++) {
-            uint64_t test = j | (j << 32);
-            lz = numConsecutiveZeros(test);
-            //lz = numConsecutiveZeros(~j);
-            __asm__ __volatile__("");
-        }
-    });
-    MEASURE_TIME(allocator, num_zeros_naive, {
-        for (uint64_t j = 0; j < 100000000; j++) {
-            uint64_t test = j | (j << 32);
-            lz = _numConsecutiveZeros(test);
-            if(lz != numConsecutiveZeros(test))
-            {
-                exit(1);
-            }
-            __asm__ __volatile__("");
-        }
-    });
-    END_TEST(allocator, {});
-    return lz;
-}
 
 void test_size_iter_leak(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
@@ -946,7 +818,7 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
             for (uint64_t j = 0; j < num_loops; j++) {
                 for (uint64_t i = 0; i < num_items; i++) {
                     alloc_size += 8;
-                    variables[i] = (char *)cmalloc(alloc_size%1024);
+                    variables[i] = (char *)cmalloc(rand()%1024);
                 }
                 for (uint64_t i = 0; i < num_items; i++) {
                     cfree(variables[i]);
@@ -961,7 +833,7 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
                 for (uint64_t i = 0; i < num_items; i++)
                 {
                     alloc_size += 8;
-                    variables[i] = (char *)mi_malloc(alloc_size%1024);
+                    variables[i] = (char *)mi_malloc(rand()%1024);
                 }
                 for (uint64_t i = 0; i < num_items; i++)
                     mi_free(variables[i]);
@@ -975,7 +847,7 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
                 for (uint64_t i = 0; i < num_items; i++)
                 {
                     alloc_size += 8;
-                    variables[i] = (char *)malloc(alloc_size%1024);
+                    variables[i] = (char *)malloc(rand()%1024);
                 }
                 for (uint64_t i = 0; i < num_items; i++)
                     free(variables[i]);
@@ -1060,76 +932,9 @@ void test_size_arena_iter(uint32_t alloc_size, size_t num_items, size_t num_loop
     free(variables);
 }
 
-void test_new_heap(size_t a_exp, size_t num_items_l0, size_t num_items_l1, size_t num_items_l2, size_t mult )
-{
-    // [ ] reserve all memory
-    // [ ] reserve all levels
-    // [ ] release all memory
-    // [ ] release all levels
-    //
-    /*
-    size_t err_count = 0;
-    size_t size_l0 = (1 << (a_exp - 18)) * mult;
-    size_t size_l1 = (1 << (a_exp - 12)) * mult;
-    size_t size_l2 = (1 << (a_exp - 6)) * mult;
-    size_t num_items = num_items_l0 + num_items_l1 + num_items_l2;
-    size_t size = (num_items_l0 * size_l0) + (num_items_l1 * size_l1) + (num_items_l2 * size_l2);
-    void *mem = cmalloc_arena(SZ_MB * 4, AT_FIXED_4);
-    Arena *nh = arena_init((uintptr_t)mem, 0, a_exp);
-    char **variables = (char **)malloc(num_items * size);
-    size_t current_count = 0;
-    
-    for(int i = 0; i < num_items_l2; i++)
-    {
-        void* all = arena_get_block(nh, size_l2);
-        if(all == NULL)
-        {
-            err_count++;
-        }
-        variables[current_count++] = all;
-    }
-    
-    for(int i = 0; i < num_items_l1; i++)
-    {
-        void* all = arena_get_block(nh, size_l1);
-        if(all == NULL)
-        {
-            err_count++;
-        }
-        variables[current_count++] = all;
-    }
-    
-    for(int i = 0; i < num_items_l0; i++)
-    {
-        void* all = arena_get_block(nh, size_l0);
-        if(all == NULL)
-        {
-            err_count++;
-        }
-        variables[current_count++] = all;
-    }
-    print_header(nh,(uintptr_t)variables[0]);
-    for (uint64_t i = 0; i < num_items; i++) {
-        arena_free(nh, variables[i], false);
-    }
-    print_header(nh,(uintptr_t)variables[0]);
-    free(variables);
-    printf("error count: %lu\n", err_count);
-    cfree_arena(mem);
-     */
-}
-int test(void *p)
-{
-    char *test = (char *)cmalloc(16);
-    cfree(test);
-    return 1;
-}
-
-#include <sys/mman.h>
-int32_t temp_hit_counter = 0;
-
 int main(int argc, char *argv[])
 {
+    
     int test_local = 2;
     if (argc > 1) {
 
@@ -1143,19 +948,33 @@ int main(int argc, char *argv[])
         }
     }
 
+    // partition
+    //  area->thread_idx
+    // instead of partitions being [0,7]
+    //
+    //minor_test();
+    //return 0;
+    //run_tests();
+    
+    
     int cp = get_committed_pages();
     printf("Committed pages prior %d\n", cp);
-    //run_tests();
+    
     printf("Test with free -> size: [1,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
-    for (int i = 0; i < 16; i++) {
+    for (int i = 3; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     cp = get_committed_pages();
     printf("Committed pages post %d\n", cp);
+    
     printf("Test with free -> size: [32k,..512k], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 16; i < 20; i++) {
-        test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
+        test_size_iter(1 << i, NUMBER_OF_ITEMS/10, NUMBER_OF_ITERATIONS, test_local);
     }
+    cp = get_committed_pages();
+    printf("Committed pages post %d\n", cp);
+    
+    
     printf("Test with immediate free -> size: [8,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 14; i++) {
         test_size_iter_immediate(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);

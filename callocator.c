@@ -4,12 +4,7 @@
 #include "os.h"
 #include "partition_allocator.h"
 
-
-extern PartitionAllocator *partition_allocators[MAX_THREADS];
-extern int64_t partition_owners[MAX_THREADS];
-extern Allocator *allocator_list[MAX_THREADS];
-mutex_t allocation_mutex = {0};
-mutex_t partition_mutex = {0};
+extern PartitionAllocator *partition_allocator;
 static _Atomic(size_t) num_threads = (1);
 static inline size_t  get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
@@ -32,16 +27,15 @@ static void thread_done(void *a)
 {
     if (a != NULL) {
         Allocator *alloc = (Allocator *)a;
-        release_partition_set((int32_t)alloc->idx);
+        free_memory(alloc, os_page_size);
         decr_thread_count();
     }
 }
 
-static Allocator *init_thread_instance(void)
+static Allocator *init_thread_instance(uintptr_t tid)
 {
-    int32_t idx = reserve_any_partition_set();
-    Allocator *new_alloc = allocator_aquire(idx);
-    new_alloc->part_alloc = partition_allocators[idx];
+    Allocator *new_alloc = allocator_aquire();
+    new_alloc->thread_id = tid;
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
     incr_thread_count();
@@ -95,7 +89,7 @@ Allocator *get_instance(uintptr_t tid)
 {
     Allocator *ti = thread_instance;
     if (ti == NULL) {
-        init_thread_instance();
+        init_thread_instance(tid);
     }
     return thread_instance;
 }
@@ -107,143 +101,42 @@ static inline Allocator *get_thread_instance(void)
     } else {
         Allocator *ti = thread_instance;
         if (ti == NULL) {
-            init_thread_instance();
+            init_thread_instance(get_thread_id());
         }
         return thread_instance;
     }
 }
 
-static inline bool safe_to_aquire(void *base, void *ptr, size_t size, uintptr_t end)
-{
-    if (base == ptr) {
-        return true;
-    }
-    uintptr_t range = (uintptr_t)((uint8_t *)ptr + size);
-    if (range > end) {
-        return false;
-    }
-    return true;
-}
 
-
-void *alloc_memory_aligned(void *base, uintptr_t end, size_t size, size_t alignment)
-{
-    // base must be aligned to alignment
-    // size must be at least the size of an os page.
-    // alignment is smaller than a page size or not a power of two.
-    if (!safe_to_aquire(base, NULL, size, end)) {
-        return NULL;
-    }
-    mutex_lock(&allocation_mutex);
-    // this is not frequently called
-    void *ptr = alloc_memory(base, size, false);
-    if (ptr == NULL) {
-        goto err;
-    }
-start:
-    if (!safe_to_aquire(base, ptr, size, end)) {
-        free_memory(ptr, size);
-        ptr = NULL;
-        goto err;
-    }
-
-    if ((((uintptr_t)ptr & (alignment - 1)) != 0)) {
-        // this should happen very rarely, if at all.
-        // we at first just allocate the missing part towards the target alignment of the end.
-        // be nice to any other thread that comes through here and hope that they at least find this without any problems.
-        //
-        // release our failed attempt.
-        // allocate next part to our unaligned part.
-        // if that is successfull,
-        //
-        free_memory(ptr, size);
-        
-        // Now we attempt to overallocate
-        size_t adj_size = size + alignment;
-        ptr = alloc_memory(base, adj_size, false);
-        if (ptr == NULL) {
-            goto err;
-        }
-
-        // if the new ptr is not in our current partition set
-        if (!safe_to_aquire(base, ptr, adj_size, end)) {
-            free_memory(ptr, adj_size);
-            ptr = NULL;
-            goto err;
-        }
-
-        // if we got our aligned memory
-        if (((uintptr_t)ptr & (alignment - 1)) != 0) {
-            goto success;
-        }
-        // we are still not aligned, but we have an address that is aligned.
-        free_memory(ptr, adj_size);
-
-        void* aligned_p = (void *)(((uintptr_t)ptr + (alignment - 1)) & ~(alignment - 1));
-        // get our aligned address
-        ptr = alloc_memory(aligned_p, size, false);
-        if (ptr != aligned_p) {
-            // Why would this fail?
-            free_memory(ptr, size);
-            ptr = NULL;
-            goto err;
-        }
-    }
-success:
-    if (!commit_memory(ptr, size)) {
-        // something is greatly foobar.
-        // not allowed to commit the memory we reserved.
-        free_memory(ptr, size);
-        ptr = NULL;
-    }
-err:
-    mutex_unlock(&allocation_mutex);
-    return ptr;
-}
-
-static int allocator_destroy()
+static int allocator_destroy(void)
 {
     tls_set(_thread_key, NULL);
     tls_delete(_thread_key);
     return 0;
 }
 
-static int allocator_init()
+static int allocator_init(void)
 {
     static bool init = false;
     if (init)
         return 0;
     init = true;
 
-    for(int32_t i = 0; i < MAX_THREADS; i++)
-    {
-        partition_allocators[i] = NULL;
-        allocator_list[i] = NULL;
-        partition_owners[i] = -1;
-    }
-
-    // reserve the first allocator for the main thread.
-    mutex_init(&allocation_mutex);
-    mutex_init(&partition_mutex);
-    
     main_thread_id = get_thread_id();
     os_page_size = get_os_page_size();
     tls_create(&_thread_key, &thread_done);
     
-    PartitionAllocator* part_alloc = partition_allocator_init_default();
-    uintptr_t end = ((uintptr_t)part_alloc + ALIGN_CACHE(sizeof(PartitionAllocator)));
-    uintptr_t alloc_addr = end - DEFAULT_OS_PAGE_SIZE;
-    Allocator *new_alloc = (Allocator *)alloc_addr;
-    allocator_list[0] = new_alloc;
-    partition_owners[0] = 0;
-    new_alloc->part_alloc = part_alloc;
-    list_enqueue(&new_alloc->partition_allocators, part_alloc);
-    
+    partition_allocator = partition_allocator__create();
+    Allocator *new_alloc = allocator_aquire();
+    new_alloc->thread_id = main_thread_id;
     main_instance = new_alloc;
     thread_instance = main_instance;
     return 0;
 }
 
+// just like mi_malloc.
+// This needs to get started as soon as the process starts up.
+// same tricks applied.
 #if defined(__cplusplus)
 struct thread_init
 {
@@ -379,13 +272,13 @@ void *crealloc(void *p, size_t s)
 
 // Allocating memory from the OS that will not conflict with any memory region
 // of the allocator.
-static uintptr_t os_alloc_hint = 1ULL << 39;
+static uintptr_t os_alloc_hint = BASE_OS_ALLOC_ADDRESS;
 void *cmalloc_os(size_t size)
 {
     // align size to page size
     size += CACHE_LINE;
     size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
-    mutex_lock(&allocation_mutex);
+    
     // look the counter while fetching our os memory.
     void *ptr = alloc_memory((void *)os_alloc_hint, size, true);
     if((uintptr_t)ptr == os_alloc_hint)
@@ -401,7 +294,6 @@ void *cmalloc_os(size_t size)
         // something has been running for a very long time!
         os_alloc_hint = 0;
     }
-    mutex_unlock(&allocation_mutex);
 
     // write the allocation header
     uint64_t *_ptr = (uint64_t *)ptr;

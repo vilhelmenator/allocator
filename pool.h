@@ -3,8 +3,11 @@
 #define POOL_H
 
 #include "callocator.inl"
+#include "arena.h"
 #include "os.h"
 
+
+extern PartitionAllocator *partition_allocator;
 static const int32_t pool_sizes[] = {
     // if pool block size is a power of two, it will align to that size.
     8,       16,      24,      32,      40,      48,      56,      64,          // 64k  8b
@@ -35,6 +38,7 @@ static inline uint8_t size_to_pool(const size_t as)
         return row * 8 + (uint8_t)((size_t)((as - 1) - base) >> incr_exp);
     }
 }
+
 static inline bool pool_is_connected(Pool *p) { return p->prev != NULL || p->next != NULL; }
 static inline bool pool_is_full(const Pool *p) { return p->num_used == p->thread_free_counter; }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
@@ -44,41 +48,27 @@ static inline uint8_t* pool_base_address(Pool *p)
 }
 static inline void pool_post_free(Pool *p, Allocator* a)
 {
+    Queue *queue = &a->pools[p->block_idx];
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
-    size_t asize = area_size_from_partition_id(pid);
+    size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
     int32_t pidx = p->idx >> 1;
     uint32_t range = get_range((uint32_t)pidx, arena->ranges);
-    uint64_t new_mask = ((1ULL << range) - 1UL) << pidx;
-    arena->ranges = arena->ranges & ~new_mask;
-    arena->allocations = arena->allocations & ~new_mask;
-    if(arena->allocations <= 1)
+    if(pool_is_connected(p) || queue->head == p)
     {
-        // add arena to free arenas.
-        Partition* partition = &a->part_alloc->area[pid];
-        int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, arena, partition);
-        partition->full_mask &= ~(1ULL << aidx);
+        list_remove(queue, p);
     }
+    arena_free_blocks(a, arena, pidx, range);
 }
 
 static inline void pool_post_reserved(Pool *p, Allocator* a)
 {
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
-    size_t asize = area_size_from_partition_id(pid);
+    size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
     uint32_t pidx = p->idx >> 1;
     uint32_t range = get_range((uint32_t)pidx, arena->ranges);
-    uint64_t new_mask = ((1ULL << range) - 1UL) << pidx;
-    arena->ranges |= apply_range(range, pidx);
-    arena->allocations = arena->allocations | new_mask;
-    arena->zero = arena->zero | new_mask;
-    if(arena->allocations == UINT64_MAX)
-    {
-        Partition* partition = &a->part_alloc->area[pid];
-        int32_t aidx = partition_allocator_get_arena_idx_from_queue(a->part_alloc, arena, partition);
-        partition->full_mask |= (1ULL << aidx%64);
-    }
-    
+    arena_allocate_blocks(a, arena, pidx, range);
 }
 static inline void pool_set_full(Pool *p, Allocator* a)
 {

@@ -20,27 +20,20 @@ typedef SSIZE_T ssize_t;
 #define SZ_GB (SZ_MB * SZ_KB)
 
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
-#define SECTION_SIZE (1ULL << 22ULL)
 
-#define BASE_AREA_SIZE SECTION_SIZE 
-#define AREA_SIZE_SMALL (BASE_AREA_SIZE * 8ULL) // 32Mb
-#define AREA_SIZE_MEDIUM (SECTION_SIZE * 16ULL) // 64Mb
-#define AREA_SIZE_LARGE (SECTION_SIZE * 32ULL)  // 128Mb
-#define AREA_SIZE_HUGE (SECTION_SIZE * 64ULL)   // 256Mb
-#define NUM_AREA_PARTITIONS 9
-
-#define SMALL_OBJECT_SIZE DEFAULT_OS_PAGE_SIZE * 4 // 16k
-#define MEDIUM_OBJECT_SIZE SMALL_OBJECT_SIZE * 8   // 128kb
-#define LARGE_OBJECT_SIZE MEDIUM_OBJECT_SIZE * 16  // 2Mb
-#define HUGE_OBJECT_SIZE LARGE_OBJECT_SIZE * 16    // 32Mb
+#define PARTITION_COUNT 9
+#define BASE_ADDRESS (2ULL * 1024 * 1024 * 1024 * 1024) // 2TB
+#define BASE_OS_ALLOC_ADDRESS (12ULL * 1024 * 1024 * 1024 * 1024) // 12TB
+#define PARTITION_SIZE_EXP (40) // 1TB
+#define PARTITION_SIZE (1ULL << PARTITION_SIZE_EXP)
+#define BASE_REGION_SIZE (1ULL << 22ULL)
 
 #define ARENA_LEVELS 3
 #define POOL_BIN_COUNT 80
-#define HEAP_TYPE_COUNT 5
 #define ARENA_SBIN_COUNT 7 // 1,2,4,8,16,32
 
-#define ARENA_BIN_COUNT (NUM_AREA_PARTITIONS*ARENA_LEVELS*ARENA_SBIN_COUNT)
-#define MAX_ARES 64
+#define ARENA_BIN_COUNT (PARTITION_COUNT*ARENA_LEVELS*ARENA_SBIN_COUNT)
+#define MAX_AREAS 64
 #define MAX_THREADS 1024
 #define MIN_BLOCKS_PER_COUNTER_ALLOC 8
 
@@ -58,20 +51,44 @@ typedef SSIZE_T ssize_t;
 #define ALIGN4(x) ALIGN_UP_2(x, 4)
 #define ALIGN_CACHE(x) (((x) + CACHE_LINE - 1) & ~(CACHE_LINE - 1))
 
-#define ADDR_START (1ULL << 39)
-#define BASE_ADDR(idx) ((1ULL << 40ULL) + ((1ULL << 38ULL) << (idx)))
+
 #define DEFAULT_ALIGNMENT sizeof(intptr_t)
 #define NEXT_POWER_OF_TWO(x) (1ULL << ((63 - __builtin_clzll(x)) + 1))
 #define PREV_POWER_OF_TWO(x) (1ULL << (63 - __builtin_clzll(x)))
 #define IS_ALIGNED(x,y)(((uintptr_t)x & ((uintptr_t)y - 1)) == 0)
 
+//
+
+
+
 #define clz(x) (x == 0? 32:__builtin_clz(x))
  
+/*
+
+Partition (64GB - 128GB)
+│
+├── Region/Zone (256MB/512MB/...)
+│   │
+│   ├── Arena (256MB)
+│   │   │
+│   │   ├── Chunk/Segment (4MB)
+│   │   │   │
+│   │   │   └── Pool (optional)
+│   │   │       │
+│   │   │       └── Block (e.g., 16KB)
+│   │   │
+│   │   └── ... (other Chunks)
+│   │
+│   └── ... (other Arenas)
+│
+└── ... (other Regions)
+*/
+
 static size_t os_page_size = DEFAULT_OS_PAGE_SIZE;
 
 // 9 arena types.
 // 4,8,16,32,64,128,256,512,1GB
-typedef enum AreaType_t {
+typedef enum  {
     AT_FIXED_4 = 0,
     AT_FIXED_8 = 1,
     AT_FIXED_16 = 2,
@@ -81,17 +98,18 @@ typedef enum AreaType_t {
     AT_FIXED_256 = 6,
     AT_FIXED_512 = 7,
     AT_FIXED_1024 = 8,
-    AT_VARIABLE = 9
-} AreaType;
+} RegionType;
 
-static cache_align const uintptr_t area_type_to_exponent[] = {
+static cache_align const uintptr_t region_type_to_exponent[] = {
     22, // 2^22 == 4MB
     23, // 2^23 == 8MB
     24, // 2^24 == 16MB
     25, // 2^25 == 32MB
     26, // 2^26 == 64MB
     27, // 2^27 == 128MB
-    28  // 2^28 == 256MB
+    28, // 2^28 == 256MB
+    29, // 2^29 == 512MB
+    30, // 2^30 == 1024MB
 };
 
 static const uintptr_t partition_type_to_exponent[] = {
@@ -104,54 +122,37 @@ static const uintptr_t partition_type_to_exponent[] = {
     34, // 16384 MB
     35, // 32GB
     36, // 64GB
-    37, // 128GB
 };
 
-static const uintptr_t area_type_to_size[] = {
-    AREA_SIZE_SMALL>>3, AREA_SIZE_SMALL>>2, AREA_SIZE_SMALL>>1,
-    AREA_SIZE_SMALL, AREA_SIZE_MEDIUM, AREA_SIZE_LARGE,
-    AREA_SIZE_HUGE, AREA_SIZE_HUGE<<1, AREA_SIZE_HUGE<<2};
+static const uintptr_t region_type_to_size[] = {
+    1 << region_type_to_exponent[0],
+    1 << region_type_to_exponent[1],
+    1 << region_type_to_exponent[2],
+    1 << region_type_to_exponent[3],
+    1 << region_type_to_exponent[4],
+    1 << region_type_to_exponent[5],
+    1 << region_type_to_exponent[6],
+    1 << region_type_to_exponent[7],
+    1 << region_type_to_exponent[8],
+};
 
-static inline uint64_t area_size_from_partition_id(uint8_t pid) { return BASE_AREA_SIZE << (pid%64); }
+static inline uint64_t region_size_from_partition_id(uint8_t pid) { return BASE_REGION_SIZE << (pid%64); }
 
-static inline int32_t partition_id_from_addr(uintptr_t p)
-{
-    intptr_t ptrp = p - (1ULL << 40);
-    if(ptrp < 0)
-    {
-        return -1;
+static inline int32_t partition_id_from_addr(uintptr_t p) {
+    
+    uintptr_t offset = p - BASE_ADDRESS;
+
+    // Check if the address is outside the allocator's range.
+    if (p < BASE_ADDRESS || offset >= (PARTITION_COUNT * PARTITION_SIZE)) {
+        return -1;  // Invalid address.
     }
-    else
-    {
-        return 32 - clz(ptrp >> 39);
-    }
+
+    // Compute partition ID: offset / 64GiB.
+    return (int32_t)(offset / PARTITION_SIZE);
 }
 
-static inline int32_t partition_allocator_from_addr_and_part(uintptr_t p, uint32_t at)
-{
-    size_t offset = BASE_ADDR(at);
-    const ptrdiff_t diff = (uint8_t *)p - (uint8_t *)offset;
-    return (uint32_t)(((size_t)diff) >> partition_type_to_exponent[at]);
-}
+static inline uint64_t area_size_from_addr(uintptr_t p) { return region_size_from_partition_id(partition_id_from_addr(p)); }
 
-static inline int32_t partition_allocator_from_addr(uintptr_t p)
-{
-    int32_t at = partition_id_from_addr(p);
-    if(at < 0)
-    {
-        return -1;
-    }
-    return partition_allocator_from_addr_and_part(p, at);
-}
-
-static inline uint64_t area_size_from_addr(uintptr_t p) { return area_size_from_partition_id(partition_id_from_addr(p)); }
-
-
-typedef union Bitmask_u
-{
-    uint64_t whole;
-    uint32_t _w32[2];
-} Bitmask;
 
 typedef struct Block_t
 {
@@ -164,36 +165,22 @@ typedef struct Queue_t
     void* tail;
 } Queue;
 
-// lockless message queue
-typedef struct MessageHeader_t
-{
-    uint16_t idx;
-    uint16_t count;
-    uint32_t next;
-} MessageHeader;
-
-
-// lockless message queue
-typedef struct AtomicMessage_t
-{
-    _Atomic(uintptr_t) next; // next message idx
-} AtomicMessage;
-
-typedef struct AtomicQueue_t
-{
-    uintptr_t head;
-    _Atomic(uintptr_t) tail;
-} AtomicQueue;
-
 
 typedef struct Heap_t
 {
-    Block* free;
     _Atomic(uintptr_t) thread_free_counter;
+    Block* free;
     size_t block_size;
     void *prev;
     void *next;
-} Heap;
+    
+    // 32 byte body
+    int32_t parent_idx;     // index in the parent container.
+                            // Shifted up by one to keep the lowest bit zero.
+                            // the lower bit is a type indicator.
+                            // 1 for arena, 0 for pool.
+    uint32_t local_idx;     // index in the local group.
+} Heap; // 64 bytes.
 
 static inline void init_heap(Heap*f)
 {
@@ -201,6 +188,8 @@ static inline void init_heap(Heap*f)
     f->thread_free_counter = 0;
     f->prev = NULL;
     f->next = NULL;
+    f->parent_idx = 0;
+    f->local_idx = 0;
 }
 
 uint32_t deferred_move_thread_free(Heap* d);
@@ -214,18 +203,18 @@ void deferred_thread_enqueue_message(Heap *d, uintptr_t msg, uintptr_t header);
 typedef struct Pool_t
 {
     // 56 byte header
-    Block* deferred_free;
     _Atomic(uintptr_t) thread_free_counter;
+    Block* deferred_free;
     size_t block_size;
     void *prev;
     void *next;
     
-    // 32 byte body
+    
     int32_t idx;        // index in the parent section. Shifted up by one to keep the lowest bit zero.
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
+    // 32 byte body
     int32_t num_used;
-    
     int32_t num_committed;
     int32_t num_available;
 
@@ -248,23 +237,24 @@ typedef struct QNode_t
 
 typedef struct Arena_t
 {
-    Block* deferred_free;
+    // 64 byte base heap header
     _Atomic(uintptr_t) thread_free_counter;
-    
+    Block* deferred_free;
     size_t block_size;
     
     void *prev;
     void *next;
     
-    // 40
-    uint64_t  allocations;
-    uint64_t  ranges;
-    uint64_t  zero;
+    int32_t  idx;           // index of the partition region
+    uint32_t partition_id;  // index of the partition
     
-    uint32_t partition_id;
-    uint8_t container_exponent;
+    // 64 byte cache line and arena body.
+    _Atomic(uint64_t)  allocations;
+    _Atomic(uint64_t)  ranges;
+    _Atomic(uint64_t)  zero;
     
-} Arena; // 64 bytes
+    uintptr_t thread_id;
+} Arena; // 128 bytes
 
 typedef struct Arena_alloc_t
 {
@@ -272,25 +262,29 @@ typedef struct Arena_alloc_t
     uint32_t block_idx;
 } Arena_alloc;
 
-typedef struct Partition_t
-{
-    _Atomic(uint64_t) area_mask;     // which parts have been allocated.
-    _Atomic(uint64_t) range_mask;    // the extends for each part.
-    _Atomic(uint64_t) zero_mask;     // which parts have been initilized.
-    _Atomic(uint64_t) full_mask;     // which parts have free internal memory.
-    _Atomic(uint64_t) commit_mask;
+
+typedef struct {
+    _Atomic(uint64_t) reserved;     // which parts have been reserved.
+    _Atomic(uint64_t) committed;    // which parts have committed virtual mem
+    _Atomic(uint64_t) ranges;       // the extends for each part.
+    
+    _Atomic(uint64_t) pending_release;
+    _Atomic(uint64_t) zero;         // which parts have been initilized.
+} PartitionMasks;
+
+typedef struct {
+    PartitionMasks* blocks; // Array of allocated blocks
+    size_t num_blocks;
+    size_t blockSize;          // Fixed block size for this partition
 } Partition;
 
-struct mutex_t;
-typedef struct PartitionAllocator_t
-{
-    int64_t idx;
-    Partition area[NUM_AREA_PARTITIONS];
-    struct mutex_t * part_lock;
-    struct PartitionAllocator_t *prev;
-    struct PartitionAllocator_t *next;
-
+typedef struct {
+    Partition partitions[PARTITION_COUNT];
+    size_t totalMemory;        // Total memory managed by the allocator
 } PartitionAllocator;
+
+struct mutex_t;
+
 
 typedef enum slot_type_t
 {
@@ -298,7 +292,7 @@ typedef enum slot_type_t
     SLOT_POOL = 1,
     SLOT_ARENA = 2,
     SLOT_COUNTER = 3,
-    SLOT_AREA = 4,
+    SLOT_REGION = 4,
 } slot_type;
 
 typedef struct alloc_slot_t
@@ -319,7 +313,7 @@ typedef struct alloc_slot_t
     
     uintptr_t pheader;  // parents contiguos header
     
-} alloc_slot;
+} alloc_slot; // 48 byte header.
 
 typedef struct deferred_free_t
 {
@@ -333,9 +327,7 @@ typedef struct deferred_free_t
 
 static inline int32_t is_arena_type(Heap* h)
 {
-    uintptr_t hptr = (uintptr_t)h + sizeof(Heap);
-    uint8_t val = *(uint8_t*)hptr;
-    return val & 0x1;
+    return h->parent_idx & 0x1;
 }
 
 static inline void deferred_add(deferred_free*c, void* p)
@@ -349,7 +341,6 @@ typedef struct Allocator_t
 {
     int32_t idx;
     int64_t prev_size;
-    PartitionAllocator *part_alloc;
     
     // free pools of various sizes.
     Queue *pools;
@@ -359,7 +350,7 @@ typedef struct Allocator_t
     alloc_slot c_slot;        // allocation cache structure.
     deferred_free c_deferred;  // release cache structure.
     
-    Queue partition_allocators;
+    uintptr_t thread_id;
 } Allocator;
 
 typedef struct Allocator_param_t
@@ -375,21 +366,6 @@ void deferred_release(Allocator* a, void* p);
 Allocator *get_instance(uintptr_t tid);
 void *alloc_memory_aligned(void *base, uintptr_t end, size_t size, size_t alignment);
 
-static inline uint32_t partition_allocator_get_partition_idx(PartitionAllocator* pa, Partition* queue)
-{
-    uintptr_t delta = (uintptr_t)queue - (uintptr_t)&pa->area[0];
-    return  (uint32_t)(delta / sizeof(Partition));
-}
-
-static inline uint32_t partition_allocator_get_arena_idx_from_queue(PartitionAllocator *pa, Arena *arena, Partition *partition)
-{
-    AreaType at = (AreaType)partition_allocator_get_partition_idx(pa, partition);
-    size_t base_size = BASE_AREA_SIZE * 64 << (uint64_t)at;
-    size_t offset = BASE_ADDR(at);
-    size_t start_addr = (pa->idx)*base_size + offset;
-    const ptrdiff_t diff = (uint8_t *)arena - (uint8_t *)start_addr;
-    return (uint32_t)(((size_t)diff) >> arena->container_exponent);
-}
 // list utilities
 static inline bool qnode_is_connected(QNode* n)
 {
@@ -431,54 +407,33 @@ void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offse
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 
 
-static inline int32_t find_first_nones(uintptr_t x, int64_t n, uint32_t step_exp)
-{
-    if(n > 64)
-    {
-        return -1;
-    }
-    
-    if(x == 0)
-    {
-        return -1;
-    }
-    
-    if(step_exp > 0)
-    {
-        uint64_t submask = (1ULL << n) - 1;
-        uint32_t width = 1U << step_exp;
-        uint32_t steps = 64 >> step_exp;
-        uint32_t tz = __builtin_ctzll(x);
-        int32_t i = (tz >> step_exp);
-        i += (tz & (1 << step_exp) - 1) ? 1 : 0;
-        for(; i < steps; i++)
-        {
-            uint64_t _x = x >> i*width;
-            if((submask & _x) == submask)
-            {
-                return i*width;
-            }
-            else if(_x == 0)
-            {
-                break;
-            }
+static inline int32_t find_first_nzeros(uint64_t x, int64_t n, uint32_t step_exp) {
+    if (n <= 0 || n > 64) return -1;
+    if (x == 0) return 0;  // All zeros case
+
+    const uint64_t mask = (1ULL << n) - 1;
+    const uint32_t width = (step_exp > 0) ? (1U << step_exp) : 1;
+    const uint32_t steps = 64 / width;
+
+    for (uint32_t i = 0; i < steps; i++) {
+        const uint32_t pos = i * width;
+        if (pos + n > 64) break;
+
+        // Check for n consecutive zeros starting at pos
+        const uint64_t window = (x >> pos) & mask;
+        if (window == 0) {
+            return pos;
         }
-        return -1;
     }
-    else
-    {
-        int64_t s;
-        while (n > 1) {
-            s = n >> 1;
-            x = x & (x >> s);
-            n = n - s;
-        }
-    
-        return x == 0 ? -1 : __builtin_ctzll(x);
-    }
+    return -1;
 }
 
-static inline int32_t find_first_nzeros(uintptr_t x, int64_t n, int32_t exp) { return find_first_nones(~x, n, exp); }
+static inline int32_t find_first_nones(uintptr_t x, int64_t n, int32_t exp) {
+    // Special case: if x is all 0s, the first n zeros start at bit 0
+    if (x == ~0ULL) return (n <= 64) ? 0 : -1;
+    
+    return find_first_nzeros(~x, n, exp);
+}
 static inline int32_t get_next_mask_idx(uint64_t mask, uint32_t cidx)
 {
     uint64_t msk_cpy = mask >> cidx;
@@ -512,46 +467,36 @@ static inline uint32_t get_range(uint32_t at, uint64_t mask)
 
 static inline uint32_t num_consecutive_zeros(uint64_t test)
 {
-    if(test == 0)
-    {
-        return 64;
-    }
+    if (~test == 0) return 64;  // All zeros
+    if (test == 0) return 64;   // All ones (just for symmetry)
+
+    uint32_t max_gap = 0;
+    uint32_t current_gap = 0;
     
-    uint32_t lz = __builtin_clzll(test);
-    uint32_t tz = __builtin_ctzll(test);
-    if(lz == 0)
-    {
-        uint32_t l1 = __builtin_clzll(~test);
-        if((64 - l1) <= tz)
-        {
-            return tz;
+    // Unroll the loop for better performance
+    for (int i = 0; i < 64; i++) {
+        if ((test & (1ULL << i)) == 0) {
+            current_gap++;
+        } else {
+            if (current_gap > max_gap) {
+                max_gap = current_gap;
+            }
+            current_gap = 0;
         }
-        test &= (1ULL << (64 - (l1 - 1))) - 1;
     }
     
-    uint32_t mz = MAX(lz, tz);
-    if((64 - (lz + tz)) <= mz)
-    {
-        return mz;
+    // Check if the longest gap ends at the MSB
+    if (current_gap > max_gap) {
+        max_gap = current_gap;
     }
     
-    if(tz == 0)
-    {
-        test = test >> __builtin_ctzll(~test);
-    }
-    else
-    {
-        test = test >> (tz + 1);
-    }
-    
-    while (test >= (1ULL << mz))
-    {
-        tz = __builtin_ctzll(test);
-        mz = mz ^ ((mz ^ tz) & -(mz < tz));
-        test = test >> (tz + 1);
-        test = test >> __builtin_ctzll(~test);
-    }
-    return mz;
+    return max_gap;
 }
 
+static uint64_t count_ones(uint64_t x) {
+    x = (x & 0x5555555555555555) + ((x >> 1) & 0x5555555555555555);
+    x = (x & 0x3333333333333333) + ((x >> 2) & 0x3333333333333333);
+    x = (x & 0x0F0F0F0F0F0F0F0F) + ((x >> 4) & 0x0F0F0F0F0F0F0F0F);
+    return (x * 0x0101010101010101) >> 56;
+}
 #endif /* callocator_inl */
