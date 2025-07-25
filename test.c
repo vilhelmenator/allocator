@@ -835,8 +835,9 @@ void test_size_iter_sparse(size_t num_items, size_t num_loops, int t)
                     alloc_size += 8;
                     variables[i] = (char *)mi_malloc(rand()%1024);
                 }
-                for (uint64_t i = 0; i < num_items; i++)
+                for (uint64_t i = 0; i < num_items; i++){
                     mi_free(variables[i]);
+                }
             }
         });
     }
@@ -955,7 +956,7 @@ int main(int argc, char *argv[])
     //minor_test();
     //return 0;
     //run_tests();
-    
+
     
     int cp = get_committed_pages();
     printf("Committed pages prior %d\n", cp);
@@ -992,6 +993,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 10; i++) {
         test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
+    
     printf("Test sparse sizes ([8,16,32,...1024]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);

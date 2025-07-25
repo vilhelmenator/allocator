@@ -53,21 +53,26 @@ static inline void pool_post_free(Pool *p, Allocator* a)
     size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
     int32_t pidx = p->idx >> 1;
-    uint32_t range = get_range((uint32_t)pidx, arena->ranges);
-    if(pool_is_connected(p) || queue->head == p)
+    
+    if(!pool_is_connected(p) && queue->head != p)
     {
-        list_remove(queue, p);
+        list_enqueue(queue, p);
     }
-    arena_free_blocks(a, arena, pidx, range);
+    arena_retain_blocks(a, arena, pidx);
 }
 
 static inline void pool_post_reserved(Pool *p, Allocator* a)
 {
+    Queue *queue = &a->pools[p->block_idx];
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
     size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
     uint32_t pidx = p->idx >> 1;
     uint32_t range = get_range((uint32_t)pidx, arena->ranges);
+    if(!pool_is_connected(p) && queue->head != p)
+    {
+        list_enqueue(queue, p);
+    }
     arena_allocate_blocks(a, arena, pidx, range);
 }
 static inline void pool_set_full(Pool *p, Allocator* a)
@@ -76,7 +81,7 @@ static inline void pool_set_full(Pool *p, Allocator* a)
     // the last piece was returned so make the first item the start of the free
     p->free = NULL;//(Block *)base_addr;
     p->num_committed = 0;
-    init_heap((Heap *)p);
+    //init_context((AllocatorContext *)p);
 }
 static inline void pool_move_deferred(Pool *p)
 {

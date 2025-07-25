@@ -18,17 +18,19 @@ Allocator *allocator_aquire(void)
     Allocator *alloc = (Allocator *)thr_mem;
     alloc->prev_size = -1;
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Allocator));
-    
-    thr_mem = ALIGN_CACHE(thr_mem + sizeof(mutex_t));
     // next come the partition allocator structs.
     Queue *pool_queue = (Queue *)thr_mem;
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * POOL_BIN_COUNT);
     Queue *arena_queue = (Queue *)thr_mem;
-    thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
-    thr_mem -= ALIGN_CACHE(sizeof(PartitionAllocator));
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * ARENA_BIN_COUNT);
+    Queue *impll_queue = (Queue *)thr_mem;
+    thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * IMPLICIT_LIST_BIN_COUNT);
     
+    uintptr_t t = thr_mem + os_page_size;
     alloc->pools = pool_queue;
     alloc->arenas = arena_queue;
+    alloc->implicit_lists =impll_queue;
+    
     return alloc;
 }
 
@@ -39,130 +41,91 @@ void* allocator_slot_alloc_null(Allocator*a,  const size_t as)
 
 void* allocator_slot_alloc_pool(Allocator*a,  const size_t as)
 {
-    return pool_aquire_block((Pool*)(a->c_slot.header & ~0x3), a);
+    return pool_aquire_block((Pool*)(a->c_slot), a);
 }
 
-static inline void* _allocator_slot_alloc(alloc_slot*a)
+static inline void* _allocator_slot_alloc(AllocatorContext*a)
 {
-    void* res = (void*)(uintptr_t)((a->header & ~0x3) + a->offset);
-    a->offset += a->req_size;
+    void* res = (void*)((uintptr_t)a + a->offset);
+    a->offset += a->block_size;
     return res;
 }
 
 void* allocator_slot_alloc(Allocator*a,  const size_t as)
 {
-    return _allocator_slot_alloc(&a->c_slot);
+    return _allocator_slot_alloc(a->c_slot);
 }
 
 
 void* allocator_slot_area_alloc(Allocator*a,  const size_t as)
 {
-    return (void *)((uintptr_t)(a->c_slot.header& ~0x7));
+    return (void *)((uintptr_t)(a->c_slot));
 }
 
-internal_alloc allocator_set_area_slot(Allocator *a, uintptr_t p, int32_t start_idx)
-{
-    if(p == 0UL)
-    {
-        return allocator_slot_alloc_null;
-    }
-    a->c_slot.header = (uintptr_t)p | SLOT_REGION;
-    a->c_slot.offset = 0;
-    a->c_slot.end = 0;
-    
-    a->c_slot.block_size = 0;
-    a->c_slot.alignment = 0;
-    a->c_slot.req_size = 0;
-
-    return allocator_slot_area_alloc;
-}
-
-internal_alloc allocator_set_pool_slot(Allocator *a, Pool *p)
+AllocatorContext* allocator_set_pool_slot(Allocator *a, Pool *p)
 {
     if(p == NULL)
     {
-        return allocator_slot_alloc_null;
+        return NULL;
     }
-    a->c_slot.header = (uintptr_t)p | SLOT_POOL;
-    a->c_slot.block_size = (int32_t)p->block_size;
-    a->c_slot.alignment = p->alignment;
-    a->c_slot.req_size = (int32_t)p->block_size;
-    a->c_slot.pheader = 0;
-    a->c_slot.pend = 0;
-    int32_t rem_blocks = p->num_available - p->num_committed;
-    pool_post_reserved(p, a);
-    
-    if(rem_blocks > 0)
+    if(p->start == 0 && p->end == 0)
     {
-        a->c_slot.offset = (int32_t)((uintptr_t)pool_base_address(p) - (uintptr_t)p);
-        a->c_slot.start = a->c_slot.offset;
-        a->c_slot.end = (int32_t)(((uintptr_t)pool_base_address(p) - (uintptr_t)p) + (p->num_available * p->block_size));
-        // reserve all memory from the pool
-        p->num_used = p->num_available;
-        p->num_committed = p->num_available;
-        return allocator_slot_alloc;
+        int32_t rem_blocks = p->num_available - p->num_committed;
+        pool_post_reserved(p, a);
+        
+        if(rem_blocks > 0)
+        {
+            p->end = (int32_t)(((uintptr_t)pool_base_address(p) - (uintptr_t)p) + (p->num_available * p->block_size));
+            p->start = p->end - (rem_blocks *(int32_t)p->block_size);
+            if((rem_blocks *(int32_t)p->block_size) > p->end)
+            {
+                int bb = 0;
+            }
+            p->offset = p->start;
+            // reserve all memory from the pool
+            p->num_used = p->num_available;
+            p->num_committed = p->num_available;
+            return (AllocatorContext*)p;
+        }
+        p->offset = 0;
+        p->end = 0;
+        p->start = 0;
     }
-    a->c_slot.offset = 0;
-    a->c_slot.end = 0;
-    a->c_slot.start = 0;
-    
-    return allocator_slot_alloc_pool;
+
+    return (AllocatorContext*)p;
 }
 
-internal_alloc allocator_set_counter_slot(Allocator *a, void *p, uint32_t slot_size, uintptr_t pheader, int32_t pend)
-{
-    a->c_slot.header = (uintptr_t)p | SLOT_COUNTER;
-    a->c_slot.offset = sizeof(uintptr_t);
-    a->c_slot.start = a->c_slot.offset;
-    a->c_slot.end = slot_size;
-    a->c_slot.block_size = slot_size;
-    a->c_slot.counter = 0;
-    a->c_slot.req_size = 1;
-    a->c_slot.alignment = sizeof(uintptr_t);
-    
-    // set up our parent links back
-    a->c_slot.pheader = pheader;
-    a->c_slot.pend = pend;
-    
-    return allocator_slot_alloc;
-}
 
-internal_alloc allocator_set_arena_slot(Allocator *a, void *p, uint32_t block_size, uint32_t exp, uint32_t block_count, int32_t start_idx)
+AllocatorContext* allocator_set_arena_slot(Allocator *a, void *p, uint32_t block_size, uint32_t exp, uint32_t block_count, int32_t start_idx)
 {
-    uintptr_t start_addr = (uintptr_t)p;
-    if (start_addr == a->c_slot.header || p == NULL) {
-        return allocator_slot_alloc_null;
+    if (p == a->c_slot || p == NULL) {
+        return NULL;
     }
     Arena* arena = (Arena*)p;
-    a->c_slot.header = (uintptr_t)p| SLOT_ARENA;
-    
-    a->c_slot.block_size = block_size;
-    a->c_slot.alignment = block_size << exp;
-    a->c_slot.req_size = block_size*block_count;
-    
+    arena->block_size = block_size;
     //int32_t _max_zeros = num_consecutive_zeros(arena->allocations | ((1ULL << (exp + 1)) - 1));
     //int32_t _offset = find_first_nzeros(arena->allocations, _max_zeros, exp);
     
-    uintptr_t end_mask = arena->allocations & ~((1ULL << start_idx) - 1);
+    uintptr_t end_mask = arena->in_use & ~((1ULL << start_idx) - 1);
     int32_t end_idx = end_mask == 0? 64 :__builtin_ctzll(end_mask);
     int32_t max_zeros = end_idx - start_idx;
     
     // from the start idx... count the number of zeros
-    a->c_slot.start = start_idx*a->c_slot.block_size;
-    a->c_slot.offset = a->c_slot.start;
-    a->c_slot.end = a->c_slot.offset + max_zeros*a->c_slot.block_size;
+    arena->start = start_idx*(int32_t)arena->block_size;
+    arena->offset = arena->start;
+    arena->end = arena->offset + max_zeros*(int32_t)arena->block_size;
     
-    return allocator_slot_alloc;
+    return (AllocatorContext*)arena;
 }
 
-static inline void allocator_release_pool_slot(Allocator *a)
+static inline void allocator_release_pool_slot(Allocator *a, AllocatorContext* c)
 {
-    Pool* p = (Pool*)(a->c_slot.header & ~0x3);
+    Pool* p = (Pool*)(c);
     Queue *queue = &a->pools[p->block_idx];
     uint32_t rem_blocks = 0;
-    if(a->c_slot.offset < a->c_slot.end)
+    if(p->offset < p->end)
     {
-        rem_blocks = (a->c_slot.end - a->c_slot.offset)/a->c_slot.block_size;
+        rem_blocks = (p->end - p->offset)/p->block_size;
         p->num_used -= rem_blocks;
         p->num_committed -= rem_blocks;
         if (!pool_is_empty(p)) {
@@ -173,44 +136,36 @@ static inline void allocator_release_pool_slot(Allocator *a)
                 
             }
         }
-        else
+        if(!pool_is_connected(p) && queue->head != p)
         {
-            if(!pool_is_connected(p) && queue->head != p)
-            {
-                list_enqueue(queue, p);
-            }
+            list_enqueue(queue, p);
+        }
+    }
+    else
+    {
+        if(pool_is_connected(p) || queue->head == p)
+        {
+            list_remove(queue, p);
         }
     }
 
     //
-    a->c_slot.offset = 0;
-    a->c_slot.end = 0;
-    a->c_slot.header = 0;
-    a->c_slot.start = 0;
+    p->offset = 0;
+    p->end = 0;
+    p->start = 0;
 }
 
-static inline void allocator_release_arena_slot(Allocator *a)
+static inline void allocator_release_arena_slot(Allocator *a, AllocatorContext* c)
 {
-    Arena* p = (Arena*)(a->c_slot.header & ~0x3);
+    Arena* p = (Arena*)c;
     
-    size_t count = (a->c_slot.offset - a->c_slot.start)/ a->c_slot.req_size;
-    size_t cidx = a->c_slot.offset / a->c_slot.block_size;
-    uint32_t block_count = a->c_slot.req_size/a->c_slot.block_size;
-    uint64_t mask = (1ULL << (count*block_count) ) - 1;
-    size_t sidx = cidx - (count*block_count);
-    p->allocations |= (mask << sidx);
+    size_t count = (p->offset - p->start)/ p->block_size;
+    size_t cidx = p->offset / p->block_size;
+    uint64_t mask = (1ULL << (count) ) - 1;
+    size_t sidx = cidx - (count);
+    p->in_use |= (mask << sidx);
     
-    if(block_count > 1)
-    {
-        // we need to assign our ranges.
-        for(int32_t i = 0; i < count; i++)
-        {
-            size_t offset = sidx+(i*block_count);
-            p->ranges |= apply_range(block_count, (uint32_t)offset);
-        }
-    }
-    
-    if(p->allocations == UINT64_MAX)
+    if(p->in_use == UINT64_MAX)
     {
         // the arenas that have free items in them are in the front.
         // so anything that gets free memory will be promoted to the front of
@@ -223,75 +178,28 @@ static inline void allocator_release_arena_slot(Allocator *a)
             list_remove(queue,p);
         }
     }
-    a->c_slot.offset = 0;
-    a->c_slot.end = 0;
-    a->c_slot.header = 0;
-    a->c_slot.start = 0;
-}
-
-static inline void allocator_release_counter_slot(Allocator *a)
-{
-    int32_t* counter = (int32_t*)(a->c_slot.header & ~0x3);
-    uint32_t count = (a->c_slot.offset - a->c_slot.start)/a->c_slot.req_size;
-    a->c_slot.counter += count;
-    *counter = a->c_slot.counter;
-    a->c_slot.offset = 0;
-    a->c_slot.end = 0;
-    a->c_slot.header = 0;
-    a->c_slot.start = 0;
-    // reinstate the previous slot if we had been dealt out of a parent container
-    if(a->c_slot.pheader != 0)
-    {
-        slot_type st = a->c_slot.pheader & 0x3;
-        a->c_slot.start = (int32_t)((uintptr_t)counter + a->c_slot.block_size);
-        a->c_slot.offset = a->c_slot.start;
-        a->c_slot.end = a->c_slot.pend;
-        a->c_slot.header = a->c_slot.pheader;
-        a->c_slot.req_size = a->c_slot.block_size;
-        if(st == SLOT_POOL)
-        {
-            return allocator_release_pool_slot(a);
-        }
-        else
-        {
-            return allocator_release_arena_slot(a);
-        }
-    }
-}
-
-static inline void allocator_release_slot(Allocator *a)
-{
-    
-    if (a->c_slot.header) {
-        slot_type st = a->c_slot.header & 0x3;
-        switch(st)
-        {
-            case SLOT_POOL:
-                return allocator_release_pool_slot(a);
-            case SLOT_COUNTER:
-                return allocator_release_counter_slot(a);
-            case SLOT_ARENA:
-                return allocator_release_arena_slot(a);
-            default:
-                break;
-        }
-    }
+    p->offset = 0;
+    p->end = 0;
+    p->start = 0;
 }
 
 
-internal_alloc allocator_load_area_slot(Allocator *a, const size_t s)
+static inline void _allocator_release_slot(Allocator *a)
 {
-    int32_t region_idx = -1;
-    void* region = partition_allocator_get_free_region(partition_allocator, AT_FIXED_256, &region_idx);
-    if(region)
+    allocator_release_slot(a, a->c_slot);
+}
+
+void allocator_release_slot(Allocator *a, AllocatorContext* c)
+{
+    if(c)
     {
-        return allocator_set_area_slot(a, (uintptr_t)region, region_idx);
+        if(c->parent_idx & 0x1){
+            return allocator_release_arena_slot(a, c);
+        }
+        else{
+            return allocator_release_pool_slot(a, c);
+        }
     }
-    else
-    {
-        return allocator_slot_alloc_null;
-    }
-    
 }
 
 void * allocator_alloc_arena(Allocator* alloc, int32_t partition_idx, int32_t* region_idx, bool zero)
@@ -304,27 +212,43 @@ void * allocator_alloc_arena(Allocator* alloc, int32_t partition_idx, int32_t* r
 }
 
 
-internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t pc)
+AllocatorContext* allocator_malloc_pool_find_fit(Allocator* alloc,
+                                                const uint32_t pc)
 {
     // check if there are any pools available.
     Queue *queue = &alloc->pools[pc];
-    Heap* start = queue->head;
+    AllocatorContext* start = queue->head;
     
     if(start != NULL)
     {
+        if((start->offset + start->block_size) <= start->end)
+        {
+            return start;
+        }
+        else
+        {
+            allocator_release_slot(alloc, start);
+        }
+        AllocatorContext* next = start->next;
         if(pool_is_full((Pool*)start))
         {
-            list_remove(queue, start);
             pool_set_full((Pool*)start, alloc);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(!pool_is_empty((Pool*)start))
         {
-            list_remove(queue, start);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
+        else if(pool_is_empty((Pool*)start))
+        {
+            if(is_connected(start) || queue->head == start)
+            {
+                list_remove(queue, start);
+            }
+        }
+        start = next;
     }
-    return allocator_slot_alloc_null;
+    return NULL;
 }
 
 static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t arena_idx, int32_t min_free_blocks, uint8_t exp, bool zero, int32_t* midx, size_t* block_size)
@@ -332,7 +256,7 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
     Queue* aqueue = &alloc->arenas[arena_idx];
 
 
-    Heap* start = NULL;
+    AllocatorContext* start = NULL;
     *midx = 0;
     if(exp == 0)
     {
@@ -340,10 +264,10 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
         int32_t c = 0;
         while(start != NULL)
         {
-            Heap* next = start->next;
-            if(((Arena*)start)->allocations != UINT64_MAX)
+            AllocatorContext* next = start->next;
+            if(((Arena*)start)->in_use != UINT64_MAX)
             {
-                if((*midx = find_first_nzeros(((Arena*)start)->allocations, min_free_blocks, exp)) != -1)
+                if((*midx = find_first_nzeros(((Arena*)start)->in_use, min_free_blocks, exp)) != -1)
                 {
                     break;
                 }
@@ -364,11 +288,11 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
             *midx = 1<<exp;
             Arena* arena = (Arena*)start;
             arena->thread_id = alloc->thread_id;
-            arena->allocations = 1;
+            arena->in_use = 1;
             arena->partition_id = arena_idx;
             arena->idx = (region_idx << 1)| 0x1;
             
-            if(!heap_is_connected(start) && aqueue->head != start)
+            if(!is_connected(start) && aqueue->head != start)
             {
                 list_enqueue(aqueue, start);
             }
@@ -386,12 +310,15 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
     return ((uintptr_t)start + (*midx * *block_size));
 }
 
-static inline internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
+static inline AllocatorContext* allocator_malloc_leq_32k(Allocator* alloc,
+                                                        const size_t size,
+                                                        const size_t alignment,
+                                                        const bool zero)
 {
     int32_t row_map[] = {0,1,2,3,4,5,5,5,5,5};
     uint8_t pc = size_to_pool(size);
-    internal_alloc res = allocator_malloc_pool_find_fit(alloc, pc);
-    if(res == allocator_slot_alloc_null)
+    AllocatorContext* res = allocator_malloc_pool_find_fit(alloc, pc);
+    if(res == NULL)
     {
         int32_t row = pc/8;
         uint8_t arena_idx = row_map[row];
@@ -401,18 +328,23 @@ static inline internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const si
         uintptr_t start = allocator_get_arena_blocks(alloc, arena_idx, 1, 0, zero, &midx, &block_size);
         if(start != 0)
         {
+            Queue* aqueue = &alloc->pools[pc];
             Pool* new_pool = (Pool*)start;
             pool_init(new_pool, midx, pc, (uint32_t)block_size);
             res = allocator_set_pool_slot(alloc, new_pool);
+            if(!pool_is_connected(new_pool) && aqueue->head != new_pool)
+            {
+                list_enqueue(aqueue, new_pool);
+            }
         }
     }
     
     return res;
 }
 
-static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size, size_t alignment, const bool zero)
+static inline AllocatorContext* allocator_malloc_base(Allocator* alloc, size_t size, size_t alignment, const bool zero)
 {
-    internal_alloc res = allocator_slot_alloc_null;
+    AllocatorContext* res = NULL;
     
     // alignment needs to be a power of 2.
     if(!POWER_OF_TWO(alignment))
@@ -481,11 +413,12 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
             }
             else if(rsize < (1ULL << 33)) // 256m < n < 8g
             {
-                res = allocator_load_area_slot(alloc, rsize);  //
+                //res = allocator_load_area_slot(alloc, rsize);  //
+                // alloc from partition allocator
             }
             else
             {
-                res = allocator_slot_alloc_null;
+                res = NULL;
             }
         }
     }
@@ -496,17 +429,26 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
 static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, void *p)
 {
     
-    void* res = (void*)(uintptr_t)((a->c_slot.header & ~0x3) + a->c_slot.offset) - a->c_slot.req_size;
-    if(res == p)
+    uintptr_t slot_top = (uintptr_t)(a->c_slot);
+    if(a->c_slot)
     {
-        // we just returned the last memory allocated
-        // so we just offset our slot 
-        a->c_slot.offset -=a->c_slot.req_size;
-        return;
+        void* res = (void*)(slot_top + a->c_slot->offset - a->c_slot->block_size);
+        if(res == p)
+        {
+            // we just returned the last memory allocated
+            // so we just offset our slot
+            a->c_slot->offset -=a->c_slot->block_size;
+            return;
+        }
     }
+
     if(a->c_deferred.end == 0)
     {
-        allocator_release_slot(a);
+        if((uintptr_t)p >= slot_top && (uintptr_t)p <  (slot_top + a->c_slot->end))
+        {
+            _allocator_release_slot(a);
+        }
+        
         deferred_init(a, p);
     }
     else
@@ -527,9 +469,9 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
 
 
 
-static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as, size_t alignment, bool zero)
+static inline AllocatorContext* allocator_load_memory_slot(Allocator *a, size_t as, size_t alignment, bool zero)
 {
-    allocator_release_slot(a);
+    //allocator_release_slot(a);
     deferred_release(a, NULL);
     a->prev_size = (uint64_t)as;
     return allocator_malloc_base(a, ALIGN(as), alignment, zero);
@@ -539,17 +481,19 @@ static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as,
 
 static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
 {
+    
     // we make the assumption we are handing out memory from a slot
     // just pre-loading this address just in case. Is true for most cases.
+    Pool* p = (Pool*)(a->c_slot);
     if(a->prev_size != s)
     {
         if(s > a->prev_size)
         {
-            if(s <= a->c_slot.block_size)
+            if(s <= p->block_size)
             {
                 //
-                a->c_slot.offset += a->c_slot.req_size;
-                if(a->c_slot.offset <= a->c_slot.end)
+                a->c_slot->offset += a->c_slot->block_size;
+                if(a->c_slot->offset <= a->c_slot->end)
                 {
                     a->prev_size = s;
                     return res;
@@ -558,10 +502,13 @@ static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
         }
         else
         {
+            //
             // new size is smaller then the previous size.
             // what if the min size is smaller than the cache alignment supplies.
             // lets see if the size is small enough to justify creating a counter
             // alloc within the current slot
+            //
+            /*
             int64_t delta = (int64_t)(a->prev_size - s);
             if(delta < a->c_slot.alignment)
             {
@@ -574,7 +521,8 @@ static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
             }
             else
             {
-                if(POWER_OF_TWO(a->c_slot.block_size))
+                
+                //if(POWER_OF_TWO(a->c_slot.block_size))
                 {
                     if((a->c_slot.block_size/s) >= MIN_BLOCKS_PER_COUNTER_ALLOC)
                     {
@@ -587,69 +535,21 @@ static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
                     }
                 }
             }
-        
+             */
         }
     }
     
-    return allocator_slot_alloc_pool(a, s);
+
+    if(p->block_idx == size_to_pool(s))
+    {
+        return pool_aquire_block(p, a);
+    }
+    else
+    {
+        return NULL;
+    }
 }
 
-static void *allocator_malloc_slot_counter(Allocator *a, size_t s, void* res)
-{
-    // we make the assumption we are handing out memory from a slot
-    // just pre-loading this address just in case. Is true for most cases.
-    
-    //
-    uint32_t count = (a->c_slot.offset - a->c_slot.start)/a->c_slot.req_size;
-    a->c_slot.start = a->c_slot.offset;
-    a->c_slot.counter += count;
-    
-    if(a->prev_size != s)
-    {
-        a->c_slot.req_size = (int32_t)ALIGN(s);
-    
-        if(s > a->prev_size)
-        {
-            if(s <= a->c_slot.block_size)
-            {
-                //
-                a->c_slot.offset += a->c_slot.req_size;
-                if(a->c_slot.offset <= a->c_slot.end)
-                {
-                    a->prev_size = s;
-                    return res;
-                }
-            }
-        }
-        else
-        {
-            // there is no difference of size request
-            a->c_slot.offset += a->c_slot.req_size;
-            if(a->c_slot.offset <= a->c_slot.end)
-            {
-                a->prev_size = s;
-                return res;
-            }
-        }
-    }
-    
-    if(a->c_slot.pend != 0)
-    {
-        uintptr_t offset = (a->c_slot.header & ~0x3) + a->c_slot.block_size;
-        if(offset <= a->c_slot.pend)
-        {
-            int32_t* counter = (int32_t*)(a->c_slot.header & ~0x3);
-            *counter = a->c_slot.counter;
-            a->c_slot.header += a->c_slot.block_size;
-            a->c_slot.counter = 0;
-            a->c_slot.offset = sizeof(uintptr_t);
-            a->c_slot.start = sizeof(uintptr_t);
-            res = (void*)(uintptr_t)(offset + a->c_slot.offset);
-            return res;
-        }
-    }
-    return NULL;
-}
 
 static void *allocator_malloc_slot_arena(Allocator *a, size_t s, void* res)
 {
@@ -658,17 +558,16 @@ static void *allocator_malloc_slot_arena(Allocator *a, size_t s, void* res)
 
 static void *allocator_malloc_slot(Allocator *a, size_t s, void* res)
 {
-    slot_type st = a->c_slot.header & 0x3;
-    switch(st)
+    if(a->c_slot)
     {
-        case SLOT_POOL:
-            return allocator_malloc_slot_pool(a, s, res);
-        case SLOT_COUNTER:
-            return allocator_malloc_slot_counter(a, s, res);
-        case SLOT_ARENA:
+        if(a->c_slot->parent_idx & 0x1)
+        {
             return allocator_malloc_slot_arena(a, s, res);
-        default:
-            break;
+        }
+        else
+        {
+            return allocator_malloc_slot_pool(a, s, res);
+        }
     }
     return NULL;
 }
@@ -679,7 +578,7 @@ void *allocator_malloc(Allocator_param *prm)
     size_t align = prm->alignment;
     bool zero = prm->zero;
     Allocator* a = NULL;
-    
+    void* res = NULL;
     if(prm->thread_id == main_thread_id)
     {
         a = main_instance;
@@ -688,18 +587,24 @@ void *allocator_malloc(Allocator_param *prm)
     {
         a = get_instance(prm->thread_id);
     }
-    
-    void* res = (void*)(uintptr_t)((a->c_slot.header & ~0x3) + a->c_slot.offset);
-    //
-    if(a->prev_size == s)
+    if(a->c_slot)
     {
-        if(IS_ALIGNED(res, align))
+        res = (void*)((uintptr_t)a->c_slot + a->c_slot->offset);
+        //
+        if(a->prev_size == s)
         {
-            int32_t offset = a->c_slot.offset + a->c_slot.req_size;
-            if(offset <= a->c_slot.end)
+            if(IS_ALIGNED(res, align))
             {
-                a->c_slot.offset = offset;
-                return res;
+                int32_t offset = a->c_slot->offset + (int32_t)a->c_slot->block_size;
+                if(offset <= a->c_slot->end)
+                {
+                    a->c_slot->offset = offset;
+                    return res;
+                }
+                else
+                {
+                    _allocator_release_slot(a);
+                }
             }
         }
     }
@@ -711,16 +616,17 @@ void *allocator_malloc(Allocator_param *prm)
     }
     
     // get the internal allocation slot
-    internal_alloc ialloc = allocator_load_memory_slot(a, s, align, zero);
+    a->c_slot = allocator_load_memory_slot(a, s, align, zero);
+
     // if we were handed the null allocator
-    if(ialloc == allocator_slot_alloc_null)
+    if(a->c_slot == NULL)
     {
         // out of memory... 
         return NULL;
     }
     // commit our memory slot and return the address
     // the null allocator slot, just returns NULL.
-    return ialloc(a, s);
+    return _allocator_slot_alloc(a->c_slot);
 }
 void allocator_release_deferred(Allocator* a)
 {
@@ -742,7 +648,7 @@ void allocator_release_deferred(Allocator* a)
 
 bool allocator_release_local_areas(Allocator *a)
 {
-    allocator_release_slot(a);
+    _allocator_release_slot(a);
     deferred_release(a, NULL);
     bool result = false;
     

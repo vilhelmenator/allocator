@@ -30,11 +30,10 @@ typedef SSIZE_T ssize_t;
 
 #define ARENA_LEVELS 3
 #define POOL_BIN_COUNT 80
-#define ARENA_SBIN_COUNT 7 // 1,2,4,8,16,32
+#define ARENA_BIN_COUNT PARTITION_COUNT
+#define IMPLICIT_LIST_BIN_COUNT 4
 
-#define ARENA_BIN_COUNT (PARTITION_COUNT*ARENA_LEVELS*ARENA_SBIN_COUNT)
-#define MAX_AREAS 64
-#define MAX_THREADS 1024
+
 #define MIN_BLOCKS_PER_COUNTER_ALLOC 8
 
 #define MAX(x, y) (x ^ ((x ^ y) & -(x < y)))
@@ -166,7 +165,7 @@ typedef struct Queue_t
 } Queue;
 
 
-typedef struct Heap_t
+typedef struct
 {
     _Atomic(uintptr_t) thread_free_counter;
     Block* free;
@@ -174,15 +173,21 @@ typedef struct Heap_t
     void *prev;
     void *next;
     
-    // 32 byte body
     int32_t parent_idx;     // index in the parent container.
                             // Shifted up by one to keep the lowest bit zero.
                             // the lower bit is a type indicator.
                             // 1 for arena, 0 for pool.
     uint32_t local_idx;     // index in the local group.
-} Heap; // 64 bytes.
+    
+    // 64 bytes
+    // contiguos cache data
+    int32_t start;      // the offset where we start counting from
+    int32_t end;        // end of contiguous block
+    int32_t offset;     // current start of free memory
+    
+} AllocatorContext;
 
-static inline void init_heap(Heap*f)
+static inline void init_context(AllocatorContext*f)
 {
     f->free = NULL;
     f->thread_free_counter = 0;
@@ -190,11 +195,11 @@ static inline void init_heap(Heap*f)
     f->next = NULL;
     f->parent_idx = 0;
     f->local_idx = 0;
+    // contiguous
+    f->start = 0;      // the offset where we start counting from
+    f->end = 0;        // end of contiguous block
+    f->offset = 0;     // current start of free memory
 }
-
-uint32_t deferred_move_thread_free(Heap* d);
-void deferred_thread_enqueue_ptr(Heap *d, uintptr_t msg);
-void deferred_thread_enqueue_message(Heap *d, uintptr_t msg, uintptr_t header);
 
 // to infer between a pool and an arena.
 // the first bit after the heap header:
@@ -213,6 +218,11 @@ typedef struct Pool_t
     int32_t idx;        // index in the parent section. Shifted up by one to keep the lowest bit zero.
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
+    // 64
+    int32_t start;      // the offset where we start counting from
+    int32_t end;        // end of contiguous block
+    int32_t offset;     // current start of free memory
+    
     // 32 byte body
     int32_t num_used;
     int32_t num_committed;
@@ -228,6 +238,30 @@ typedef struct HeapBlock_t
 {
     uint8_t *data;
 } HeapBlock;
+
+// Boundary tag allocation structure
+typedef struct ImplicitList_t
+{
+    // 56 byte header
+    _Atomic(uintptr_t) thread_free_counter;
+    Block* deferred_free;
+    size_t block_size;
+    void *prev;
+    void *next;
+    
+    int32_t idx;            // index into the parent chunk
+    int32_t block_idx;      // index into the region of the arena
+
+    // 64 byte 
+    uint32_t total_memory; // how much do we have available in total
+    uint32_t used_memory;  // how much have we used
+    uint32_t min_block;    // what is the minum size block available;
+    uint32_t max_block;    // what is the maximum size block available;
+    uint32_t num_allocations;
+
+    Queue free_nodes;
+
+} ImplicitList;
 
 typedef struct QNode_t
 {
@@ -249,7 +283,13 @@ typedef struct Arena_t
     uint32_t partition_id;  // index of the partition
     
     // 64 byte cache line and arena body.
-    _Atomic(uint64_t)  allocations;
+    int32_t start;      // the offset where we start counting from
+    int32_t end;        // end of contiguous block
+    int32_t offset;     // current start of free memory
+    
+    
+    _Atomic(uint64_t)  in_use;
+    _Atomic(uint64_t)  retained_but_free;
     _Atomic(uint64_t)  ranges;
     _Atomic(uint64_t)  zero;
     
@@ -258,7 +298,7 @@ typedef struct Arena_t
 
 typedef struct Arena_alloc_t
 {
-    Heap* heap;
+    AllocatorContext* heap;
     uint32_t block_idx;
 } Arena_alloc;
 
@@ -268,8 +308,8 @@ typedef struct {
     _Atomic(uint64_t) committed;    // which parts have committed virtual mem
     _Atomic(uint64_t) ranges;       // the extends for each part.
     
-    _Atomic(uint64_t) pending_release;
-    _Atomic(uint64_t) zero;         // which parts have been initilized.
+    _Atomic(uint64_t) pending_release;  // which parts can be reclaimed or decommitted
+    _Atomic(uint64_t) retained_but_free; // which parts are sitting in cache and unused
 } PartitionMasks;
 
 typedef struct {
@@ -295,25 +335,6 @@ typedef enum slot_type_t
     SLOT_REGION = 4,
 } slot_type;
 
-typedef struct alloc_slot_t
-{
-    uintptr_t header;
-    
-    int32_t end;        // end of contiguous block
-    int32_t offset;     // current start of free memory
-    
-    int32_t start;      // the offset where we start counting from
-    int32_t block_size;
-
-    int32_t alignment;
-    int32_t counter;    // the number of addresses handed out to users
-    
-    int32_t req_size;   // current requested size
-    int32_t pend;       // parents contiguous block end
-    
-    uintptr_t pheader;  // parents contiguos header
-    
-} alloc_slot; // 48 byte header.
 
 typedef struct deferred_free_t
 {
@@ -325,7 +346,7 @@ typedef struct deferred_free_t
     size_t block_size;
 } deferred_free;
 
-static inline int32_t is_arena_type(Heap* h)
+static inline int32_t is_arena_type(AllocatorContext* h)
 {
     return h->parent_idx & 0x1;
 }
@@ -345,9 +366,10 @@ typedef struct Allocator_t
     // free pools of various sizes.
     Queue *pools;
     Queue* arenas;
+    Queue* implicit_lists;
     
     // per allocator lookup structures
-    alloc_slot c_slot;        // allocation cache structure.
+    AllocatorContext* c_slot;        // allocation cache structure.
     deferred_free c_deferred;  // release cache structure.
     
     uintptr_t thread_id;
@@ -371,7 +393,7 @@ static inline bool qnode_is_connected(QNode* n)
 {
     return (n->prev != 0) || (n->next != 0);
 }
-static inline bool heap_is_connected(Heap *p) { return p->prev != NULL || p->next != NULL; }
+static inline bool is_connected(AllocatorContext *p) { return p->prev != NULL || p->next != NULL; }
 
 static inline void _list_append(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {

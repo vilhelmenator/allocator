@@ -14,6 +14,6 @@ bool allocator_release_local_areas(Allocator *a);
 void allocator_free(Allocator *a, void *p);
 void allocator_free_th(Allocator *a, void *p);
 void free_extended_part(size_t pid, void *p);
-
+void allocator_release_slot(Allocator *a, AllocatorContext* c);
 void* test_allocator_malloc(Allocator* a, size_t s);
 void test_allocator_free(Allocator* a, void* s);
