@@ -170,15 +170,18 @@ static inline void allocator_release_pool_slot(Allocator *a)
             if(pool_is_full(p))
             {
                 pool_post_free(p, a);
-                
             }
         }
-        else
+        if(!pool_is_connected(p) && queue->head != p)
         {
-            if(!pool_is_connected(p) && queue->head != p)
-            {
-                list_enqueue(queue, p);
-            }
+            list_enqueue(queue, p);
+        }
+    }
+    else
+    {
+        if(pool_is_connected(p) || queue->head == p)
+        {
+            list_remove(queue, p);
         }
     }
 
@@ -310,18 +313,22 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
     Queue *queue = &alloc->pools[pc];
     Heap* start = queue->head;
     
-    if(start != NULL)
+    while(start != NULL)
     {
         if(pool_is_full((Pool*)start))
         {
-            list_remove(queue, start);
             pool_set_full((Pool*)start, alloc);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(!pool_is_empty((Pool*)start))
         {
-            list_remove(queue, start);
             return allocator_set_pool_slot(alloc, (Pool *)start);
+        }
+        else if(pool_is_empty((Pool*)start))
+        {
+            Heap* next = start->next;
+            list_remove(queue, start);
+            start = next;
         }
     }
     return allocator_slot_alloc_null;
@@ -558,12 +565,8 @@ static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
         }
         else
         {
-            // new size is smaller then the previous size.
-            // what if the min size is smaller than the cache alignment supplies.
-            // lets see if the size is small enough to justify creating a counter
-            // alloc within the current slot
-            int64_t delta = (int64_t)(a->prev_size - s);
-            if(delta < a->c_slot.alignment)
+            Pool* p = (Pool*)(a->c_slot.header & ~0x3);
+            if(p->block_idx == size_to_pool(s))
             {
                 a->c_slot.offset += a->c_slot.req_size;
                 if(a->c_slot.offset <= a->c_slot.end)
@@ -572,22 +575,6 @@ static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
                     return res;
                 }
             }
-            else
-            {
-                if(POWER_OF_TWO(a->c_slot.block_size))
-                {
-                    if((a->c_slot.block_size/s) >= MIN_BLOCKS_PER_COUNTER_ALLOC)
-                    {
-                        a->c_slot.offset += a->c_slot.req_size;
-                        allocator_set_counter_slot(a, res, a->c_slot.req_size, a->c_slot.header, a->c_slot.end);
-                        a->c_slot.req_size = (int32_t)ALIGN(s);
-                        a->c_slot.offset += a->c_slot.req_size;
-                        a->prev_size = s;
-                        return (void*)(uintptr_t)res + a->c_slot.start;
-                    }
-                }
-            }
-        
         }
     }
     
