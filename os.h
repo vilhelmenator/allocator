@@ -1,10 +1,4 @@
-//
-//  os.inl
-//  MemPoolTests
-//
-//  Created by Vilhelm Sævarsson on 23.6.2022.
-//  Copyright © 2022 Vilhelm Sævarsson. All rights reserved.
-//
+
 
 #ifndef OS_H
 #define OS_H

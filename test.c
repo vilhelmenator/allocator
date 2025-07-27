@@ -641,7 +641,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t == 2)
     {
-        MEASURE_TIME(allocator, cmalloc, {
+        //MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
                 for (uint64_t i = 0; i < num_items; i++) {
                     variables[i] = (char *)cmalloc(alloc_size);
@@ -649,7 +649,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
                 }
                 
             }
-        });
+        //});
     }
     else if(t == 1)
     {
@@ -682,7 +682,6 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
 }
 void test_size_iter(uint32_t alloc_size, size_t num_items, size_t num_loops, int t)
 {
-    
     START_TEST(allocator, {});
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t == 2)
@@ -992,6 +991,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 10; i++) {
         test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
+    
     printf("Test sparse sizes ([8,16,32,...1024]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);

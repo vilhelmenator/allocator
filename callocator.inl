@@ -249,7 +249,8 @@ typedef struct Arena_t
     uint32_t partition_id;  // index of the partition
     
     // 64 byte cache line and arena body.
-    _Atomic(uint64_t)  allocations;
+    _Atomic(uint64_t)  in_use;   // which have memory handed out to the app
+    _Atomic(uint64_t)  active;   // which are active in cache structs
     _Atomic(uint64_t)  ranges;
     _Atomic(uint64_t)  zero;
     
@@ -269,7 +270,7 @@ typedef struct {
     _Atomic(uint64_t) ranges;       // the extends for each part.
     
     _Atomic(uint64_t) pending_release;
-    _Atomic(uint64_t) zero;         // which parts have been initilized.
+    _Atomic(uint64_t) retained_but_free;
 } PartitionMasks;
 
 typedef struct {
@@ -309,9 +310,6 @@ typedef struct alloc_slot_t
     int32_t counter;    // the number of addresses handed out to users
     
     int32_t req_size;   // current requested size
-    int32_t pend;       // parents contiguous block end
-    
-    uintptr_t pheader;  // parents contiguos header
     
 } alloc_slot; // 48 byte header.
 

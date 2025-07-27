@@ -10,10 +10,11 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
     // Clear area_mask bits.
     uint64_t area_add_mask =
         (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
-    atomic_fetch_or_explicit(&a->allocations,
+    // we are using this memory
+    atomic_fetch_or_explicit(&a->active,
                               area_add_mask,
                               memory_order_release);
-
+    
     // Clear range_mask bits if needed.
     if (size_in_blocks > 1) {
         uint64_t range_add_mask = (1ULL << start_bit) | (1ULL << (start_bit + size_in_blocks - 1));
@@ -21,22 +22,54 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
                                   range_add_mask,
                                   memory_order_relaxed);
     }
-    
-    if(a->allocations == UINT64_MAX)
+    Queue *queue = &alloc->arenas[a->partition_id];
+    if(a->active == UINT64_MAX)
     {
         // if arena is full... we remove from allocator queue.
-        Queue *queue = &alloc->arenas[a->partition_id];
         if(arena_is_connected(a) || queue->head == a)
         {
             list_remove(queue, a);
         }
     }
+    else
+    {   
+        if(!arena_is_connected(a) && queue->head != a)
+        {
+            list_enqueue(queue, a);
+        }
+    }
 }
-void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks) {
+
+void arena_unuse_blocks(Allocator* alloc, Arena *a, int start_bit)
+{
+    uint64_t ranges = atomic_load(&a->ranges);
+    uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
+    uint64_t area_clear_mask =
+        (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
+    atomic_fetch_and_explicit(&a->in_use,
+                              ~area_clear_mask,
+                              memory_order_release);
+}
+
+void arena_use_blocks(Allocator* alloc, Arena *a, int start_bit)
+{
+    uint64_t ranges = atomic_load(&a->ranges);
+    uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
+    uint64_t area_clear_mask =
+        (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
+    atomic_fetch_or_explicit(&a->in_use,
+                              area_clear_mask,
+                              memory_order_release);
+}
+
+void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit) {
+    
+    uint64_t ranges = atomic_load(&a->ranges);
+    uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
     // Clear area_mask bits.
     uint64_t area_clear_mask =
         (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
-    atomic_fetch_and_explicit(&a->allocations,
+    atomic_fetch_and_explicit(&a->active,
                               ~area_clear_mask,
                               memory_order_release);
 
@@ -47,7 +80,7 @@ void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_bl
                                   ~range_clear_mask,
                                   memory_order_relaxed);
     }
-    if(a->allocations > 1)
+    if(a->in_use > 1)
     {
         Queue *queue = &alloc->arenas[a->partition_id];
         if(!arena_is_connected(a) && queue->head != a)
@@ -66,6 +99,43 @@ void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_bl
         //partition_allocator_free_blocks(partition_allocator, a, true);
     }
 }
+
+void purge_unused_pools(Allocator* alloc, Arena *a)
+{
+    uint64_t used = atomic_load(&a->in_use);
+    if(used == 0)
+    {
+        // for each bit that is set in the active mask.
+        // those are in cached queues. Only pools set the active flag
+        // in arenas.
+        uint64_t active = atomic_load(&a->active);
+        uint64_t area_clear_mask = 1;
+        atomic_fetch_and_explicit(&a->active,
+                                  area_clear_mask,
+                                  memory_order_release);
+        int32_t active_idx = get_next_mask_idx(active, 1);
+        while (active_idx != -1) {
+            
+            // get pool address.
+            int8_t pid = partition_id_from_addr((uintptr_t)a);
+            size_t area_size = region_size_from_partition_id(pid);
+            size_t block_size = area_size >> 6;
+            Pool* inactive_pool = (Pool*)((uintptr_t)a + (active_idx * block_size));
+            Queue* pqueue = &alloc->pools[inactive_pool->block_idx];
+            if(pool_is_connected(inactive_pool) || pqueue->head == inactive_pool)
+            {
+                list_remove(pqueue, inactive_pool);
+            }
+            active_idx = get_next_mask_idx(active, active_idx + 1);
+        }
+        Queue *queue = &alloc->arenas[a->partition_id];
+        if(!arena_is_connected(a) && queue->head != a)
+        {
+            list_enqueue(queue, a);
+        }
+    }
+}
+
 // compute bounds and initialize
 void deferred_init(Allocator* a, void*p)
 {
@@ -97,8 +167,7 @@ void deferred_init(Allocator* a, void*p)
             bool top_aligned = ((uintptr_t)p & (stable->sizes[0] - 1)) == 0;
             if(top_aligned)
             {
-                uint32_t range = get_range(idx, h->ranges);
-                arena_free_blocks(a, h, idx, range);
+                arena_free_blocks(a, h, idx);
                 // if an arena becomes empty
                 // we remove it from our lists of arenas...
                 // but we still keep one arena around.
@@ -133,12 +202,17 @@ void deferred_release(Allocator* a, void* p)
             
             if(!is_arena_type((Heap*)c->start))
             {
+                
                 Pool *pool = (Pool*)c->start;
+                Queue* pqueue = &a->pools[pool->block_idx];
                 pool->num_used -= c->num;
-                if(pool_is_full(pool))
+                if(pool_is_unused(pool))
                 {
-                    pool_post_free(pool, a);
-                    
+                    pool_post_unused(pool, a);
+                    if(!pool_is_connected(pool) && pqueue->head != pool)
+                    {
+                        list_enqueue(pqueue, pool);
+                    }
                 }
             }
         }

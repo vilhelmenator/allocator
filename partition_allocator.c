@@ -88,7 +88,7 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
                               memory_order_release);
     
     
-    //if(count_ones(block->pending_release) > 32)
+    /*if(count_ones(block->pending_release) > 32)
     {
         uint64_t free_mask = atomic_load(&block->pending_release);
         uint64_t new_mask = 0ULL;
@@ -110,7 +110,7 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
             }
         }
     
-    }
+    }*/
     return 0;
 }
 
