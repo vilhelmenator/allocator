@@ -1,43 +1,128 @@
-# Efficient Allocator for Geometry Tools
+# High-Performance General Purpose Allocator
 
-This project aims to develop an efficient memory allocator tailored for geometry tools. The memory is organized into partitions, with each partition reserved for a specific thread, making it ideal for thread-pools with a fixed number of threads.
+## Overview
+A two-tiered memory allocator designed for extreme performance, outperforming common allocators like `mi_malloc`. The system combines partition-based bulk memory management with thread-local caching for optimal allocation speed. It reduces OS level fragmentation by managing large virtual memory blocks by the backend, and effectively eliminates any fragmentation at the front-end with proper block management.
 
-## Memory Architecture
+## Architecture
 
-Each thread's memory area is divided into 8 partitions, and each partition is dedicated to specific size ranges. Further, each partition contains 64 arenas, and each arena is segmented into 64 segments. These segments can either house a pool of smaller allocations or allocate entire segments for parts.
+### 1. Backend: Partition Allocator
+Manages large memory regions through size-partitioned blocks.
+
+**Key Structures:**
+```c
+typedef struct {
+    _Atomic(uint64_t) reserved;     // Track reserved parts
+    _Atomic(uint64_t) committed;    // Track committed virtual memory
+    _Atomic(uint64_t) ranges;       // Memory extents
+    _Atomic(uint64_t) pending_release;
+} PartitionMasks;
+
+typedef struct {
+    PartitionMasks* blocks;         // Array of managed blocks
+    size_t num_blocks;              // Current block count
+    size_t blockSize;               // Fixed block size for partition
+} Partition;
+
+typedef struct {
+    Partition partitions[PARTITION_COUNT];  // 9 partitions total
+    size_t totalMemory;                    // Total managed memory
+} PartitionAllocator;
+```
+
+**Partition Characteristics:**
+- 9 partitions, each managing 1TB address space
+- Partition 0: 256MB regions (4MB sub-regions)
+- Partition 1: 512MB regions (8MB sub-regions)
+- ... doubling in size for each subsequent partition
+- Uses 64-bit masks to track 64 subdivisions per region
+
+### 2. Frontend: Thread-Local Allocator
+Handles actual allocations with thread-specific caching.
+
+**Key Structures:**
+```c
+typedef struct Allocator_t {
+    int32_t idx;                    // Allocator index
+    int64_t prev_size;              // Size tracking
+    
+    // Memory management queues
+    Queue *pools;                   // Small allocation pools
+    Queue *arenas;                  // Medium allocation arenas
+    Queue *implicit;                // Special-case allocations
+    
+    // Performance optimization
+    alloc_slot c_slot;              // Allocation cache
+    deferred_free c_deferred;       // Release cache
+    
+    uintptr_t thread_id;            // Owning thread
+} Allocator;
+```
 
 ## Allocation Strategy
 
-Memory allocation within each arena is driven by size and alignment requirements:
+### Size-Based Routing:
+1. **<32KB requests**: Handled by pool allocator
+   - Multiple size classes to minimize waste
+   - Optimized for alignment
 
-- Default pool sizes are allocated to arenas of corresponding sizes.
-- If a pool's block size is a power of two, it aligns to that specific size.
+2. **32KB-4MB requests**: 
+   - Power-of-2 sizes: Allocated from arenas
+   - Odd sizes: Boundary tag allocator
 
-### Size Classes and Allocation Details
+3. **4MB-256MB requests**:
+   - Power-of-2: Direct from partition allocator
+   - Odd sizes: Boundary tag allocator
 
-| Size Classes                                                     | Part Size | Arena Size |
-| ---------------------------------------------------------------- | --------- | ---------- |
-| 8, 16, 24, 32, 40, 48, 56, 64                                   | 64k       | 4MB        |
-| 72, 80, 88, 96, 104, 112, 120, 128                               | 128k      | 8MB        |
-| 144, 160, 176, 192, 208, 224, 240, 256                           | 256k      | 16MB       |
-| 288, 320, 352, 384, 416, 448, 480, 512                           | 512k      | 32MB       |
-| 576, 640, 704, 768, 832, 896, 960, 1024                          | 1MB       | 64MB       |
-| 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048                   | 2MB       | 128MB      |
-| 2304 --- 32,768                                                  | 4MB       | 256MB      |
-| Reserved for special allocations                                 | 8MB       | 512MB      |
+4. **>256MB requests**:
+   - Rounded to nearest power-of-2
+   - Allocated directly from partition allocator
 
-- Allocations larger than 32k are handled by assigning specific arena parts.
-- Allocations larger than 2MB are allocated in whole arenas.
-- For allocations exceeding 4GB, memory is obtained from higher address ranges.
-- When a thread exhausts its current partition, a new one is allocated.
-- Address ranges and alignments identify the thread partition and sub-partition associated with each memory address.
-- Parent containers are accessed by aligning addresses down to their size class.
-- Freed addresses are added to a deferred list for processing.
+5. **>8GB requests**: Forwarded to OS
 
-## Additional Features
+## Thread Handling
 
-- Pools compute relative offsets for addresses within free lists and remove entries with out-of-scope addresses.
-- Functionality for managing larger allocations is in development.
+- Each arena/pool marked with owner thread_id
+- Cross-thread frees handled via:
+  - Counters for general case
+  - Atomic lists for urgent reallocation
+- Thread termination:
+  - Orphaned arenas marked (thread_id = -1)
+  - Completely unused arenas released
+  - Others gradually adopted by allocating threads
+
+## Performance Optimizations
+
+1. **Slot Cache**:
+   - Frontend static struct avoids pointer chasing
+   - Uses simple offset arithmetic for contiguous blocks
+
+2. **State Tracking**:
+   - Pools/arenas marked as unused/in_use/consumed
+   - Cached lists for fast access
+
+3. **Deferred Freeing**:
+   - Batched release operations
+   - Memory returned to original owner when possible
+
+## Memory Management
+
+- Virtual memory committed on demand
+- Large regions subdivided via bitmask tracking
+- Boundary tag allocator for irregular sizes
+- Gradual reclamation of unused resources
+
+This design achieves high performance through:
+- Size-specific allocation paths
+- Thread-local caching
+- Minimal atomic operations in hot paths
+- Optimized memory layout for cache efficiency
+
+Parts of the allocator that are still in developedment.
+- Large allocations
+- Orphaned thread arenas
+- Purging cached structs back to OS.
+- More tests and better metrics to compare against other allocators
+---
 
 ## Build and run
 
@@ -126,8 +211,8 @@ Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: 800000
 [ TIME     ] mi_malloc (150 (milli sec))              [ TIME     ] cmalloc (78 (milli sec))
 
 Test sparse sizes ([8,16,32,...1024]) with free -> num items: 800000, num_iterations 10
-[ TIME     ] mi_malloc (131 (milli sec))              [ TIME     ] cmalloc (499 (milli sec))
+[ TIME     ] mi_malloc (131 (milli sec))              [ TIME     ] cmalloc (109 (milli sec))
 
 Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: 800000, num_iterations 10
-[ TIME     ] mi_malloc (131 (milli sec))              [ TIME     ] cmalloc (380 (milli sec))
+[ TIME     ] mi_malloc (131 (milli sec))              [ TIME     ] cmalloc (42 (milli sec))
 ```
