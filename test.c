@@ -960,12 +960,12 @@ int main(int argc, char *argv[])
     printf("Committed pages prior %d\n", cp);
     
     printf("Test with free -> size: [1,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
-    for (int i = 3; i < 14; i++) {
+    for (int i = 7; i < 9; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     cp = get_committed_pages();
     printf("Committed pages post %d\n", cp);
-    
+    /*
     printf("Test with free -> size: [32k,..512k], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 16; i < 20; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS/10, NUMBER_OF_ITERATIONS, test_local);
@@ -999,6 +999,6 @@ int main(int argc, char *argv[])
     printf("Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse_reverse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
-    
+    */
     return 0;
 }

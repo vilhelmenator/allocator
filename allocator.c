@@ -313,13 +313,11 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
         }
         if(pool_is_unused((Pool*)start))
         {
-            list_remove(queue, start);
             pool_set_unused((Pool*)start, alloc);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(!pool_is_consumed((Pool*)start))
         {
-            list_remove(queue, start);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(pool_is_consumed((Pool*)start))
@@ -339,25 +337,33 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
 
     Heap* start = NULL;
     *midx = 0;
-    if(exp == 0)
+    // !active && in_use... in fully consumed but not in cache.
+    // active && in_use... in cache and has memory handed out.
+    // active && !in_use... in cache but no memory handed out.
+    // !active && !in_use... completely free to use.
+    
+    // try to find chunks that are not used.
+    // if the empty areas are exhausted..
+    // try to find unused areas.
+    start = aqueue->head;
+    while(start != NULL)
     {
-        start = aqueue->head;
-        int32_t c = 0;
-        while(start != NULL)
+        Arena* arena = (Arena*)start;
+        Heap* next = start->next;
+    
+        uint64_t in_use = atomic_load(&arena->in_use);
+        if(in_use != UINT64_MAX)
         {
-            Heap* next = start->next;
-            if(((Arena*)start)->active != UINT64_MAX)
+            if((*midx = find_first_nzeros(in_use, min_free_blocks, exp)) != -1)
             {
-                if((*midx = find_first_nzeros(((Arena*)start)->active, min_free_blocks, exp)) != -1)
-                {
-                    break;
-                }
+                // in this case...
+                break;
             }
-            
-            start = next;
-            c++;
         }
+        
+        start = next;
     }
+
 
     
     if(start == NULL)
@@ -371,7 +377,7 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
             arena->thread_id = alloc->thread_id;
             arena->partition_id = arena_idx;
             arena->idx = (region_idx << 1)| 0x1;
-            arena->active = 1;
+            arena->in_use = 1;
             
             if(!arena_is_connected(arena) && aqueue->head != arena)
             {
@@ -387,13 +393,33 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
     int8_t pid = partition_id_from_addr((uintptr_t)start);
     size_t area_size = region_size_from_partition_id(pid);
     *block_size = area_size >> 6;
-    arena_allocate_blocks(alloc, (Arena*)start, *midx, min_free_blocks);
-    return ((uintptr_t)start + (*midx * *block_size));
+    
+    Arena* arena = (Arena*)start;
+    uint64_t active = atomic_load(&arena->active);
+    uintptr_t new_chunk = ((uintptr_t)start + (*midx * *block_size));
+    if((active & (1 <<  *midx)) != 0)
+    {
+        // if the memory is active, that means that it is found in a queue
+        // at this level we only store active states for pools.
+        
+        Pool* new_pool = (Pool*)new_chunk;
+        Queue *pqueue = &alloc->pools[new_pool->block_idx];
+        if(pool_is_connected(new_pool) || pqueue->head == new_pool)
+        {
+            list_remove(pqueue, new_pool);
+        }
+    }
+    else
+    {
+        arena_allocate_blocks(alloc, (Arena*)start, *midx, min_free_blocks);
+    }
+    
+    return new_chunk;
 }
 
 static inline internal_alloc allocator_malloc_leq_32k(Allocator* alloc, const size_t size, const size_t alignment, const bool zero)
 {
-    int32_t row_map[] = {2,1,2,3,4,5,5,5,5,5};
+    int32_t row_map[] = {0,1,2,3,4,5,5,5,5,5};
     uint8_t pc = size_to_pool(size);
     internal_alloc res = allocator_malloc_pool_find_fit(alloc, pc);
     if(res == allocator_slot_alloc_null)

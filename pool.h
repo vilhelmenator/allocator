@@ -52,7 +52,6 @@ static inline void pool_post_unused(Pool *p, Allocator* a)
     //
     // free/active
     //
-    Queue *queue = &a->pools[p->block_idx];
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
     size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));

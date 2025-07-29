@@ -251,10 +251,7 @@ void *cmalloc_at(size_t size, uintptr_t vm_addr)
 bool callocator_release(void)
 {
     Allocator *alloc = get_thread_instance();
-    if (alloc->idx >= 0) {
-        return allocator_release_local_areas(alloc);
-    }
-    return false;
+    return allocator_release_local_areas(alloc);
 }
 
 void *crealloc(void *p, size_t s)

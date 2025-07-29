@@ -65,7 +65,7 @@ typedef SSIZE_T ssize_t;
  
 /*
 
-Partition (64GB - 128GB)
+Partition (1TB)
 │
 ├── Region/Zone (256MB/512MB/...)
 │   │
@@ -270,7 +270,6 @@ typedef struct {
     _Atomic(uint64_t) ranges;       // the extends for each part.
     
     _Atomic(uint64_t) pending_release;
-    _Atomic(uint64_t) retained_but_free;
 } PartitionMasks;
 
 typedef struct {
@@ -337,8 +336,8 @@ static inline void deferred_add(deferred_free*c, void* p)
 
 typedef struct Allocator_t
 {
-    int32_t idx;
-    int64_t prev_size;
+    _Atomic(uintptr_t) thread_id;
+    int64_t prev_size;  // fast path for the same sizes.
     
     // free pools of various sizes.
     Queue *pools;
@@ -347,8 +346,6 @@ typedef struct Allocator_t
     // per allocator lookup structures
     alloc_slot c_slot;        // allocation cache structure.
     deferred_free c_deferred;  // release cache structure.
-    
-    uintptr_t thread_id;
 } Allocator;
 
 typedef struct Allocator_param_t
