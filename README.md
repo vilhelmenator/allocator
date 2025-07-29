@@ -42,7 +42,7 @@ Handles actual allocations with thread-specific caching.
 **Key Structures:**
 ```c
 typedef struct Allocator_t {
-    int32_t idx;                    // Allocator index
+    _Atomic(uintptr_t) thread_id;   // Allocator thread id
     int64_t prev_size;              // Size tracking
     
     // Memory management queues
@@ -53,8 +53,6 @@ typedef struct Allocator_t {
     // Performance optimization
     alloc_slot c_slot;              // Allocation cache
     deferred_free c_deferred;       // Release cache
-    
-    uintptr_t thread_id;            // Owning thread
 } Allocator;
 ```
 
