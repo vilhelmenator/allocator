@@ -79,14 +79,14 @@ typedef struct Allocator_t {
 
 ## Thread Handling
 
-- Each arena/pool marked with owner thread_id
+- Each arena marked with owner thread_id
 - Cross-thread frees handled via:
   - Counters for general case
   - Atomic lists for urgent reallocation
 - Thread termination:
   - Orphaned arenas marked (thread_id = -1)
   - Completely unused arenas released
-  - Others gradually adopted by allocating threads
+  - Others gradually adopted by allocating threads when freed
 
 ## Performance Optimizations
 
