@@ -23,10 +23,37 @@ cache_align Allocator *main_instance;
 
 __thread Allocator *thread_instance = NULL;
 static tls_t _thread_key = (tls_t)(-1);
+static void allocator_thread_detach(Allocator* alloc)
+{
+    for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
+        Queue* queue = &alloc->arenas[i];
+        Arena* start = queue->head;
+        while (start) {
+            Arena* next = start->next;
+            
+            // 1. Remove from thread-local queue (no lock needed)
+            list_remove(queue, start);
+            
+            // 2. ATOMICALLY: Mark as orphaned FIRST
+            atomic_store_explicit(&start->thread_id, -1, memory_order_release);
+            
+            // 3. Recheck in_use AFTER orphaning (prevents race)
+            if (atomic_load_explicit(&start->in_use, memory_order_acquire) == 0) {
+                // Safe to reclaim (no outstanding frees)
+                //partition_reclaim_arena(thread->partition, arena);
+            }
+            // Else: Arena will be adopted by thread calling free()
+            
+            start = next;
+        }
+    }
+
+}
 static void thread_done(void *a)
 {
     if (a != NULL) {
         Allocator *alloc = (Allocator *)a;
+        allocator_thread_detach(alloc);
         free_memory(alloc, os_page_size);
         decr_thread_count();
     }

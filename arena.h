@@ -1,10 +1,3 @@
-//
-//  arena.inl
-//  MemPoolTests
-//
-//  Created by Vilhelm Sævarsson on 24.7.2022.
-//  Copyright © 2022 Vilhelm Sævarsson. All rights reserved.
-//
 
 #ifndef ARENA_H
 #define ARENA_H
@@ -13,7 +6,10 @@
 #include <stdatomic.h>
 
 #define ARENA_BASE_SIZE_EXPONENT 22
-
+#define ARENA_SIZE(x) (1 << (ARENA_BASE_SIZE_EXPONENT + x))
+#define ARENA_SIZE_EXPONENT(x) (ARENA_BASE_SIZE_EXPONENT + x)
+#define ARENA_CHUNK_SIZE_EXPONENT(x) ((ARENA_BASE_SIZE_EXPONENT + x) - 6)
+#define ARENA_CHUNK_SIZE(x) (1 << ((ARENA_BASE_SIZE_EXPONENT + x) - 6))
 static const uint32_t arena_level_offset = ARENA_BASE_SIZE_EXPONENT;
 
 typedef struct arena_size_table_t
@@ -25,22 +21,7 @@ typedef struct arena_empty_mask_table_t
 {
     uint64_t sizes[3];
 } arena_empty_mask_table;
-static const arena_size_table arena_tables[PARTITION_COUNT] = {
-    {{16, 22}, {1 << 16, 1 << 22}},  {{17, 23}, {1 << 17, 1 << 23}},
-    {{18, 24}, {1 << 18, 1 << 24}},  {{19, 25}, {1 << 19, 1 << 25}},
-    {{20, 26}, {1 << 20, 1 << 26}},  {{21, 27}, {1 << 21, 1 << 27}},
-    {{22, 28}, {1 << 22, 1 << 28}},  {{23, 29}, {1 << 23, 1 << 29}}, {{24, 30}, {1 << 24, 1 << 30}}};
 
-
-static inline const arena_size_table *arena_get_size_table_by_idx(uint8_t aidx)
-{
-    return &arena_tables[aidx];
-}
-
-static inline const arena_size_table *arena_get_size_table(Arena* a)
-{
-    return arena_get_size_table_by_idx(a->partition_id);
-}
 
 uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
 uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k);

@@ -26,6 +26,7 @@ typedef SSIZE_T ssize_t;
 #define BASE_OS_ALLOC_ADDRESS (12ULL * 1024 * 1024 * 1024 * 1024) // 12TB
 #define PARTITION_SIZE_EXP (40) // 1TB
 #define PARTITION_SIZE (1ULL << PARTITION_SIZE_EXP)
+#define PARTITION_SECTION_SIZE(x) (256 * 1024 * 1024 * (x + 1))
 #define BASE_REGION_SIZE (1ULL << 22ULL)
 
 #define ARENA_LEVELS 3
@@ -166,7 +167,7 @@ typedef struct Queue_t
 } Queue;
 
 
-typedef struct Heap_t
+typedef struct
 {
     _Atomic(uintptr_t) thread_free_counter;
     Block* free;
@@ -180,21 +181,15 @@ typedef struct Heap_t
                             // the lower bit is a type indicator.
                             // 1 for arena, 0 for pool.
     uint32_t local_idx;     // index in the local group.
-} Heap; // 64 bytes.
+} alloc_base; // 64 bytes.
 
-static inline void init_heap(Heap*f)
+static inline void init_base(alloc_base*f)
 {
     f->free = NULL;
     f->thread_free_counter = 0;
     f->prev = NULL;
     f->next = NULL;
-    f->parent_idx = 0;
-    f->local_idx = 0;
 }
-
-uint32_t deferred_move_thread_free(Heap* d);
-void deferred_thread_enqueue_ptr(Heap *d, uintptr_t msg);
-void deferred_thread_enqueue_message(Heap *d, uintptr_t msg, uintptr_t header);
 
 // to infer between a pool and an arena.
 // the first bit after the heap header:
@@ -254,15 +249,32 @@ typedef struct Arena_t
     _Atomic(uint64_t)  ranges;
     _Atomic(uint64_t)  zero;
     
-    uintptr_t thread_id;
+    _Atomic(uintptr_t) thread_id;
 } Arena; // 128 bytes
 
-typedef struct Arena_alloc_t
+// Boundary tag allocation structure
+typedef struct ImplicitList_t
 {
-    Heap* heap;
-    uint32_t block_idx;
-} Arena_alloc;
+    // 56 byte header
+    _Atomic(uintptr_t) thread_free_counter;
+    Block* deferred_free;
+    size_t block_size;
+    void *prev;
+    void *next;
+    
+    int32_t idx;            // index into the parent chunk
+    int32_t block_idx;      // index into the region of the arena
 
+    // 64 byte 
+    uint32_t total_memory; // how much do we have available in total
+    uint32_t used_memory;  // how much have we used
+    uint32_t min_block;    // what is the minum size block available;
+    uint32_t max_block;    // what is the maximum size block available;
+    uint32_t num_allocations;
+
+    Queue free_nodes;
+
+} ImplicitList;
 
 typedef struct {
     _Atomic(uint64_t) reserved;     // which parts have been reserved.
@@ -286,31 +298,50 @@ typedef struct {
 struct mutex_t;
 
 
-typedef enum slot_type_t
+typedef enum
 {
     SLOT_NONE = 0,
     SLOT_POOL = 1,
     SLOT_ARENA = 2,
-    SLOT_COUNTER = 3,
-    SLOT_REGION = 4,
+    SLOT_REGION = 3,
+    SLOT_IMPLICIT = 4,
+    SLOT_OS = 5,
 } slot_type;
 
-typedef struct alloc_slot_t
+// front-end contiguous cache slot
+typedef struct
 {
-    uintptr_t header;
+    uintptr_t header;   // start address of the struct holding the memory
     
     int32_t end;        // end of contiguous block
     int32_t offset;     // current start of free memory
     
     int32_t start;      // the offset where we start counting from
-    int32_t block_size;
+    int32_t block_size; // the size of each block handed out.
 
-    int32_t alignment;
+    int32_t alignment;  // the aligment requested
     int32_t counter;    // the number of addresses handed out to users
     
     int32_t req_size;   // current requested size
+    int32_t is_zero;    //
+    slot_type type;     // the structure handing out the contigous blocks
+} alloc_slot_front;
+
+// back-end cache slot
+typedef struct
+{
+    uintptr_t header;           // start address of the struct holding the memory
+    uint8_t index;              // the current index of allocation.
     
-} alloc_slot; // 48 byte header.
+    uint8_t partition_index;    // the partion we are working with.
+    uint8_t exp;                // the power exponent for alignment.
+    uint8_t num_blocks;         // how many blocks were requested.
+    
+    size_t block_size;          // the size of service slot
+    size_t min_size;            // the request bounds for this struct.
+    size_t max_size;            //
+} alloc_slot_back;
+
 
 typedef struct deferred_free_t
 {
@@ -322,7 +353,7 @@ typedef struct deferred_free_t
     size_t block_size;
 } deferred_free;
 
-static inline int32_t is_arena_type(Heap* h)
+static inline int32_t is_arena_type(alloc_base* h)
 {
     return h->parent_idx & 0x1;
 }
@@ -336,15 +367,17 @@ static inline void deferred_add(deferred_free*c, void* p)
 
 typedef struct Allocator_t
 {
-    _Atomic(uintptr_t) thread_id;
+    uintptr_t thread_id;
     int64_t prev_size;  // fast path for the same sizes.
     
     // free pools of various sizes.
     Queue *pools;
-    Queue* arenas;
+    Queue *arenas;
+    Queue *implicit;
     
     // per allocator lookup structures
-    alloc_slot c_slot;        // allocation cache structure.
+    alloc_slot_front c_slot;   // contiguous cache struct.
+    alloc_slot_back  c_back;   // service cache struct.
     deferred_free c_deferred;  // release cache structure.
 } Allocator;
 
@@ -359,14 +392,13 @@ typedef struct Allocator_param_t
 void deferred_init(Allocator* a, void*p);
 void deferred_release(Allocator* a, void* p);
 Allocator *get_instance(uintptr_t tid);
-void *alloc_memory_aligned(void *base, uintptr_t end, size_t size, size_t alignment);
 
 // list utilities
 static inline bool qnode_is_connected(QNode* n)
 {
     return (n->prev != 0) || (n->next != 0);
 }
-static inline bool heap_is_connected(Heap *p) { return p->prev != NULL || p->next != NULL; }
+static inline bool base_is_connected(alloc_base *p) { return p->prev != NULL || p->next != NULL; }
 
 static inline void _list_append(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
@@ -488,10 +520,4 @@ static inline uint32_t num_consecutive_zeros(uint64_t test)
     return max_gap;
 }
 
-static uint64_t count_ones(uint64_t x) {
-    x = (x & 0x5555555555555555) + ((x >> 1) & 0x5555555555555555);
-    x = (x & 0x3333333333333333) + ((x >> 2) & 0x3333333333333333);
-    x = (x & 0x0F0F0F0F0F0F0F0F) + ((x >> 4) & 0x0F0F0F0F0F0F0F0F);
-    return (x * 0x0101010101010101) >> 56;
-}
 #endif /* callocator_inl */

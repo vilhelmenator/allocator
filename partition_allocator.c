@@ -9,7 +9,7 @@ cache_align PartitionAllocator *partition_allocator = NULL;
 
 // Returns a pointer to the initialized allocator.
 PartitionAllocator* partition_allocator__create(void) {
-    // Step 1: Calculate total size required.
+    // Calculate total size required.
     size_t total_size = sizeof(PartitionAllocator);
     const size_t blockSizes[PARTITION_COUNT] = {
         256 * 1024 * 1024,              // 256MB
@@ -41,16 +41,16 @@ PartitionAllocator* partition_allocator__create(void) {
         total_size += partition_meta_sizes[i];
     }
 
-    // Step 2: Allocate the entire block.
+    // Allocate the entire block.
     uintptr_t address = (uintptr_t)BASE_ADDRESS >> 1;
     void* memory = alloc_memory((void*)address, total_size, true);
     memset(memory, 0, total_size);
 
-    // Step 3: Set up the allocator.
+    // Set up the allocator.
     PartitionAllocator* allocator = (PartitionAllocator*)memory;
     allocator->totalMemory = PARTITION_COUNT * PARTITION_SIZE;
 
-    // Step 4: Initialize partitions.
+    //  Initialize partitions.
     uintptr_t current = (uintptr_t)memory + sizeof(PartitionAllocator);
     for (int i = 0; i < PARTITION_COUNT; i++) {
         current = ALIGN_CACHE(current);
@@ -77,7 +77,7 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
     PartitionMasks* block = &partition->blocks[loc.block];
     uint32_t range = get_range(loc.region, block->ranges);
     
-    // 1. Update allocation masks
+    // Update allocation masks
     uint64_t area_clear_mask = (range == 64)
         ? ~0ULL
         : ((1ULL << range) - 1) << loc.region;
@@ -88,13 +88,15 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
                               memory_order_release);
     
     
-    /*if(count_ones(block->pending_release) > 32)
+    if(should_decommit)
     {
         uint64_t free_mask = atomic_load(&block->pending_release);
         uint64_t new_mask = 0ULL;
         uint64_t region_size = partition->blockSize/64;
         uintptr_t base_addr = (uintptr_t)(BASE_ADDRESS + loc.partition*PARTITION_SIZE +
-                                  (loc.block * partition->blockSize));
+                                          (loc.block * partition->blockSize));
+        uint64_t ranges = atomic_load(&block->ranges);
+        
         if (atomic_compare_exchange_strong(&block->pending_release, &free_mask, new_mask)) {
             int32_t region_idx = get_next_mask_idx(free_mask, 0);
             // find free section.
@@ -102,15 +104,24 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
             while (region_idx != -1) {
                 
                 uintptr_t block_addr = base_addr + (region_idx * (region_size));
-                
+                uint32_t size_in_blocks = get_range((uint32_t)region_idx, ranges);
+                uint64_t area_clear_mask =
+                (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << region_idx;
                 // reserve our block.
-                decommit_memory((void*)block_addr, region_size);
-                atomic_fetch_and(&block->committed, ~(1ULL << region_idx));
+                decommit_memory((void*)block_addr, region_size*size_in_blocks);
+                atomic_fetch_and(&block->committed, ~area_clear_mask);
+                
+                // Clear range_mask bits if needed.
+                if (size_in_blocks > 1) {
+                    uint64_t range_clear_mask = (1ULL << region_idx) | (1ULL << (region_idx + size_in_blocks - 1));
+                    atomic_fetch_and_explicit(&block->ranges,
+                                              ~range_clear_mask,
+                                              memory_order_relaxed);
+                }
                 region_idx = get_next_mask_idx(free_mask, region_idx + 1);
             }
         }
-    
-    }*/
+    }
     return 0;
 }
 
@@ -118,10 +129,11 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
 // Thread-safe allocation from a partition.
 void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                                                   int32_t partition_idx,
+                                                  int32_t num_regions,
                                                   int32_t* region_idx,
                                                   bool commit) {
     Partition* partition = &allocator->partitions[partition_idx];
-    // Step 1: Find and reserve a free block (atomic CAS loop).
+    // Find and reserve a free block (atomic CAS loop).
     for (int i = 0; i < partition->num_blocks; i++) {
         PartitionMasks* block = &partition->blocks[i];
         uint64_t free_mask = atomic_load(&block->reserved);
@@ -149,41 +161,58 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
         }
         else
         {
-            //if(count_ones(block->pending_release) > 16)
+            
+            free_mask = atomic_load(&block->pending_release);
+            uint64_t new_mask = 0ULL;
+            if(free_mask != 0)
             {
-                free_mask = atomic_load(&block->pending_release);
-                uint64_t new_mask = 0ULL;
-                if(free_mask != 0)
-                {
-                    if (atomic_compare_exchange_strong(&block->pending_release, &free_mask, new_mask)) {
-                        int32_t region_idx = get_next_mask_idx(free_mask, 0);
-                        while (region_idx != -1) {
-                            
-                            uintptr_t block_addr = base_addr + (region_idx * (region_size));
-                            decommit_memory((void*)block_addr, region_size);
-                            atomic_fetch_and(&block->committed, ~(1ULL << region_idx));
-                            region_idx = get_next_mask_idx(free_mask, region_idx + 1);
+                if (atomic_compare_exchange_strong(&block->pending_release, &free_mask, new_mask)) {
+                    uint64_t ranges = atomic_load(&block->ranges);
+                    int32_t region_idx = get_next_mask_idx(free_mask, 0);
+                    while (region_idx != -1) {
+                        
+                        uintptr_t block_addr = base_addr + (region_idx * (region_size));
+                        uint32_t size_in_blocks = get_range((uint32_t)region_idx, ranges);
+                        uint64_t area_clear_mask =
+                        (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << region_idx;
+                        decommit_memory((void*)block_addr, region_size*size_in_blocks);
+                        atomic_fetch_and(&block->committed, ~area_clear_mask);
+                        if (size_in_blocks > 1) {
+                            uint64_t range_clear_mask = (1ULL << region_idx) | (1ULL << (region_idx + size_in_blocks - 1));
+                            atomic_fetch_and_explicit(&block->ranges,
+                                                      ~range_clear_mask,
+                                                      memory_order_relaxed);
                         }
+                        region_idx = get_next_mask_idx(free_mask, region_idx + 1);
                     }
                 }
             }
+        
         }
         free_mask = atomic_load(&block->committed);
         // Find first zero bit (free block).
-        int bit = find_first_nzeros(free_mask, 1, 0);
+        int bit = find_first_nzeros(free_mask, num_regions, 0);
         if (bit < 0) continue;  // No free blocks in this chunk.
 
+        
         // Attempt to reserve the bit.
         uint64_t new_mask = free_mask | (1ULL << bit);
         if (atomic_compare_exchange_strong(&block->committed, &free_mask, new_mask)) {
-            // Step 2: Calculate the block's address.
+            // Calculate the block's address.
             uintptr_t block_addr = base_addr + (bit * (region_size));
 
-            // Step 3: Commit memory (if requested).
+            // Commit memory (if requested).
             if (!commit_memory((void*)block_addr, region_size)) {
                 // Failed to commit; revert the bitmask.
                 atomic_fetch_and(&block->committed, ~(1ULL << bit));
                 return NULL;
+            }
+            // Set range_mask bits if needed.
+            if (num_regions > 1) {
+                uint64_t range_add_mask = (1ULL << bit) | (1ULL << (bit + num_regions - 1));
+                atomic_fetch_or_explicit(&block->ranges,
+                                          range_add_mask,
+                                          memory_order_relaxed);
             }
             // update commit mask.
             *region_idx = bit;
@@ -273,9 +302,9 @@ int32_t get_partition_location(PartitionAllocator* allocator, void* addr, Partit
     return 0;
 }
 
-void* partition_allocator_get_free_region(PartitionAllocator* allocator, int32_t partition_idx, int32_t* region_idx )
+void* partition_allocator_get_free_region(PartitionAllocator* allocator, int32_t partition_idx, int32_t num_regions, int32_t* region_idx )
 {
-    return partition_allocator_allocate_from_partition(allocator, partition_idx, region_idx, false);
+    return partition_allocator_allocate_from_partition(allocator, partition_idx, num_regions, region_idx, false);
 }
 
 

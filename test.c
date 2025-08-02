@@ -39,18 +39,18 @@
     }
 #elif defined(__APPLE__)
     #include <mach/mach.h>
-#include <stdio.h>
+    #include <stdio.h>
 
-int get_committed_pages() {
-    struct task_basic_info t_info;
-    mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
-    
-    if (task_info(mach_task_self(), TASK_BASIC_INFO,
-                 (task_info_t)&t_info, &t_info_count) == KERN_SUCCESS) {
-        return t_info.resident_size / getpagesize();
+    int get_committed_pages(void) {
+        struct task_basic_info t_info;
+        mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
+        
+        if (task_info(mach_task_self(), TASK_BASIC_INFO,
+                     (task_info_t)&t_info, &t_info_count) == KERN_SUCCESS) {
+            return (int)(t_info.resident_size / getpagesize());
+        }
+        return 0;
     }
-    return 0;
-}
 #else
     #error "Platform not supported"
 #endif
@@ -518,7 +518,7 @@ bool fillAChunk(void)
 {
     bool state = true;
     const int num_pools = 63;
-    const int num_allocs = 8183;
+    const int num_allocs = 8182;
     
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * num_pools * sizeof(uint64_t **));
     for (int s = 0; s < num_pools; s++) {
@@ -586,6 +586,7 @@ void run_tests(void)
 
     START_TEST(Allocator, {});
     
+    
     TEST(Allocator, pools_small, { EXPECT(test_pools_small()); });
     TEST(Allocator, medium_pools, { EXPECT(test_medium_pools()); });
     TEST(Allocator, large_pools, { EXPECT(test_large_pools()); });
@@ -641,7 +642,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
     char **variables = (char **)malloc(num_items * sizeof(char *));
     if(t == 2)
     {
-        //MEASURE_TIME(allocator, cmalloc, {
+        MEASURE_TIME(allocator, cmalloc, {
             for (uint64_t j = 0; j < num_loops; j++) {
                 for (uint64_t i = 0; i < num_items; i++) {
                     variables[i] = (char *)cmalloc(alloc_size);
@@ -649,7 +650,7 @@ void test_size_iter_immediate(uint32_t alloc_size, size_t num_items, size_t num_
                 }
                 
             }
-        //});
+        });
     }
     else if(t == 1)
     {
@@ -953,19 +954,19 @@ int main(int argc, char *argv[])
     //
     //minor_test();
     //return 0;
-    //run_tests();
-    
+    run_tests();
+    return 0;
     
     int cp = get_committed_pages();
     printf("Committed pages prior %d\n", cp);
     
     printf("Test with free -> size: [1,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
-    for (int i = 7; i < 9; i++) {
+    for (int i = 3; i < 14; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     cp = get_committed_pages();
     printf("Committed pages post %d\n", cp);
-    /*
+    
     printf("Test with free -> size: [32k,..512k], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 16; i < 20; i++) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS/10, NUMBER_OF_ITERATIONS, test_local);
@@ -999,6 +1000,6 @@ int main(int argc, char *argv[])
     printf("Test sparse sizes ([8,16,32,...1024]) with free reversed -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse_reverse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
-    */
+    
     return 0;
 }

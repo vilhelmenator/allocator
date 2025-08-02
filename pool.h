@@ -77,7 +77,7 @@ static inline void pool_set_unused(Pool *p, Allocator* a)
     // the last piece was returned so make the first item the start of the free
     p->free = NULL;//(Block *)base_addr;
     p->num_committed = 0;
-    //init_heap((Heap *)p);
+    init_base((alloc_base *)p);
 }
 static inline void pool_move_deferred(Pool *p)
 {

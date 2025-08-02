@@ -15,13 +15,14 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
                               area_add_mask,
                               memory_order_release);
     
-    // Clear range_mask bits if needed.
+    // Set range_mask bits if needed.
     if (size_in_blocks > 1) {
         uint64_t range_add_mask = (1ULL << start_bit) | (1ULL << (start_bit + size_in_blocks - 1));
         atomic_fetch_or_explicit(&a->ranges,
                                   range_add_mask,
                                   memory_order_relaxed);
     }
+    
     Queue *queue = &alloc->arenas[a->partition_id];
     if(a->active == UINT64_MAX)
     {
@@ -29,6 +30,7 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
         if(arena_is_connected(a) || queue->head == a)
         {
             list_remove(queue, a);
+            list_append(queue, a);
         }
     }
     else
@@ -69,7 +71,7 @@ void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit) {
     // Clear area_mask bits.
     uint64_t area_clear_mask =
         (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
-    atomic_fetch_and_explicit(&a->active,
+    atomic_fetch_and_explicit(&a->in_use,
                               ~area_clear_mask,
                               memory_order_release);
 
@@ -113,6 +115,7 @@ void purge_unused_pools(Allocator* alloc, Arena *a)
         atomic_fetch_and_explicit(&a->active,
                                   area_clear_mask,
                                   memory_order_release);
+        
         int32_t active_idx = get_next_mask_idx(active, 1);
         while (active_idx != -1) {
             
@@ -128,6 +131,7 @@ void purge_unused_pools(Allocator* alloc, Arena *a)
             }
             active_idx = get_next_mask_idx(active, active_idx + 1);
         }
+        
         Queue *queue = &alloc->arenas[a->partition_id];
         if(!arena_is_connected(a) && queue->head != a)
         {
@@ -144,18 +148,18 @@ void deferred_init(Allocator* a, void*p)
         
         deferred_free*c = &a->c_deferred;
         size_t area_size = region_size_from_partition_id(pid);
-        Heap *d = NULL;
+        alloc_base *d = NULL;
         
-        const arena_size_table *stable = arena_get_size_table_by_idx(pid);
+        uint32_t c_exp = ARENA_CHUNK_SIZE_EXPONENT(pid);
+        uint32_t c_size = ARENA_CHUNK_SIZE(pid);
         Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
         c->owned = h->thread_id == a->thread_id;
-        int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, stable->exponents[0]);
+        int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
         if(idx == 0)
         {
             // This would be a whole region that is allocated
             // since an arena would have its first area reserved for
             // masks.
-            
             partition_allocator_free_blocks(partition_allocator, p, true);
             // we can decommit the memory in this case.
             a->c_slot.header = 0;
@@ -164,7 +168,7 @@ void deferred_init(Allocator* a, void*p)
         else
         {
 
-            bool top_aligned = ((uintptr_t)p & (stable->sizes[0] - 1)) == 0;
+            bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
             if(top_aligned)
             {
                 arena_free_blocks(a, h, idx);
@@ -176,9 +180,9 @@ void deferred_init(Allocator* a, void*p)
             }
             else
             {
-                c->start = ((uintptr_t)h + idx*stable->sizes[0]);
-                c->end = c->start + stable->sizes[0];
-                d = (Heap*)c->start;
+                c->start = ((uintptr_t)h + idx*c_size);
+                c->end = c->start + c_size;
+                d = (alloc_base*)c->start;
             }
         }
         ((Block*)p)->next = d->free;
@@ -197,10 +201,10 @@ void deferred_release(Allocator* a, void* p)
     {
         if(c->owned)
         {
-            Heap *d = (Heap*)c->start;
+            alloc_base *d = (alloc_base*)c->start;
             d->free = c->items.next;
             
-            if(!is_arena_type((Heap*)c->start))
+            if(!is_arena_type((alloc_base*)c->start))
             {
                 
                 Pool *pool = (Pool*)c->start;
@@ -218,7 +222,7 @@ void deferred_release(Allocator* a, void* p)
         }
         else
         {
-            Heap *d = (Heap*)c->start;
+            alloc_base *d = (alloc_base*)c->start;
             atomic_fetch_add_explicit(&d->thread_free_counter,c->num,memory_order_relaxed);
         }
         if(p)
