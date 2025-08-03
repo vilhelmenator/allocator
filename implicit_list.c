@@ -212,7 +212,8 @@ void implicitList_reset(ImplicitList *h)
 
     h->max_block = h->total_memory;
     h->used_memory = 0;
-    init_base((alloc_base *)h);
+    h->deferred_free = NULL;
+    h->thread_free_counter = 0;
 }
 
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
@@ -253,7 +254,6 @@ void implicitList_extend(ImplicitList *h)
 
 void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
 {
-    init_base((alloc_base *)h);
     void *blocks = (uint8_t *)h + sizeof(ImplicitList);
     const uintptr_t section_end = ((uintptr_t)h + (psize - 1)) & ~(psize - 1);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
@@ -268,5 +268,7 @@ void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
     h->num_allocations = 0;
     h->next = NULL;
     h->prev = NULL;
+    h->deferred_free = NULL;
+    h->thread_free_counter = 0;
     implicitList_extend(h);
 }

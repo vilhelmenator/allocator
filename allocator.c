@@ -64,7 +64,7 @@ void* allocator_slot_alloc_pool(Allocator*a,  const size_t as)
 
 void* allocator_slot_alloc_implicit(Allocator*a,  const size_t as)
 {
-    return implicitList_get_block((ImplicitList*)(a->c_slot.header), as);
+    return implicitList_get_block((ImplicitList*)(a->c_slot.header), (int32_t)as);
 }
 
 static inline void* _allocator_slot_alloc(alloc_slot_front*a)
@@ -307,10 +307,14 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
         }
         if(pool_is_unused((Pool*)start))
         {
+            //list_remove(queue, start);
+            pool_clear((Pool*)start);
+            //pool_post_unused((Pool*)start, alloc);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(!pool_is_consumed((Pool*)start))
         {
+            //list_remove(queue, start);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(pool_is_consumed((Pool*)start))
@@ -328,16 +332,13 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
                                                    bool zero, int32_t* midx)
 {
     Queue* aqueue = &alloc->arenas[arena_idx];
-    alloc_base* start = NULL;
+    alloc_base* start = aqueue->head;
     *midx = 0;
     
     // !active && in_use... in fully consumed but not in cache.
     // active && in_use... in cache and has memory handed out.
     // active && !in_use... in cache but no memory handed out.
     // !active && !in_use... completely free to use.
-    
-    
-    
     
     while(start != NULL)
     {
@@ -470,12 +471,16 @@ static inline void allocator_malloc_leq_4m_init(Allocator* alloc, const size_t s
 }
 static inline void allocator_malloc_leq_256m_init(Allocator* alloc, const size_t _size, const size_t alignment, const bool zero)
 {
-    size_t size = ALIGN_UP_2(_size, os_page_size);
-    bool power2 = POWER_OF_TWO(size);
     
+    size_t size = _size;
+    bool power2 = POWER_OF_TWO(size);
+    if(!power2)
+    {
+        size = ALIGN_UP_2(size, os_page_size);
+    }
     uint32_t result_power = 1;
     alloc->c_back.num_blocks = 1;
-    alloc->c_back.partition_index = ((63 - __builtin_clzll(size)) - 16);
+    alloc->c_back.partition_index = ((63 - __builtin_clzll(size)) - 22);
     
     if(!power2)
     {
@@ -498,10 +503,15 @@ static inline void allocator_malloc_leq_256m_init(Allocator* alloc, const size_t
         size_t delta = (alignment >> as_exp);
         alloc->c_back.exp = delta == 0? 0 : __builtin_ctzll(delta);
         alloc->c_slot.type = SLOT_REGION;
+        alloc->c_back.min_size = _size;
+        alloc->c_back.max_size = size;
     }
     else
     {
-        alloc->c_back.partition_index = 6 + ((size - 1) >> 24);
+        size_t idx =((size - 1) >> 24);
+        alloc->c_back.min_size = (1 << (22+idx*2));
+        alloc->c_back.max_size = (1 << (24+idx*2));
+        alloc->c_back.partition_index = idx + 6;
         alloc->c_slot.type = SLOT_IMPLICIT;
     }
 }
@@ -587,16 +597,15 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc)
     }
     else if(alloc->c_slot.type == SLOT_REGION)
     {
-        return allocator_slot_alloc_null;
+        int32_t region_idx = 0;
+        uintptr_t start = (uintptr_t)allocator_alloc_region(alloc,
+                                                            alloc->c_back.partition_index,
+                                                            1,
+                                                            &region_idx,
+                                                            alloc->c_slot.is_zero);
+        return allocator_set_region_slot(alloc, start);
     }
     
-    return allocator_slot_alloc_null;
-}
-
-static inline internal_alloc allocator_malloc_leq_256m(Allocator* alloc, const size_t _size, const size_t alignment, const bool zero)
-{
-
-
     return allocator_slot_alloc_null;
 }
 
@@ -620,6 +629,9 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
             }
         }
     }
+    
+    memset(&alloc->c_back, 0, sizeof(alloc_slot_back));
+    
     // else we need to reconfigure.
     if(size < alignment)
     {
@@ -731,7 +743,6 @@ static void *allocator_malloc_slot_pool(Allocator *a, size_t s, void *res)
             }
         }
     }
-    
     return allocator_slot_alloc_pool(a, s);
 }
 
@@ -771,7 +782,7 @@ void *allocator_malloc(Allocator_param *prm)
         a = get_instance(prm->thread_id);
     }
     
-    if(a->c_slot.header)
+    if(a->c_slot.header && (a->c_slot.type < SLOT_REGION))
     {
         void* res = (void*)(uintptr_t)((a->c_slot.header) + a->c_slot.offset);
         //

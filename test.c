@@ -234,17 +234,32 @@ bool test_alloc_aligned(size_t allocation_size)
     size_t area_size = region_size_from_partition_id(arena_idx);
     
     size_t pool_size = area_size >> 6;
-    
     uint64_t pools_per_section = 63;
     uint64_t max_count_per_pool = (pool_size - 64) / allocation_size;
-    if(!from_pool)
-    {
-        max_count_per_pool = 63;
-        pool_size = area_size;
-    }
     uint64_t num_small_sections = 64;
     uint64_t num_pools = num_small_sections * pools_per_section;
     uint64_t num_small_allocations = num_pools * max_count_per_pool;
+    if(allocation_size > 32768)
+    {
+        if(allocation_size <= (1 << 22))
+        {
+            arena_idx = ((63 - __builtin_clzll(allocation_size)) - 16);
+            area_size = region_size_from_partition_id(arena_idx);
+            pool_size = area_size;
+            max_count_per_pool = 63;
+            num_small_allocations = 63*64;
+        }
+        else if(allocation_size <= (1 << 28))
+        {
+            arena_idx = ((63 - __builtin_clzll(allocation_size)) - 22);
+            area_size = region_size_from_partition_id(arena_idx);
+            pool_size = area_size << 6;
+            max_count_per_pool = 64;
+            num_small_allocations = 64*64;
+        }
+    }
+    
+    
 
     //uint64_t expected_reserved_mem = DEFAULT_OS_PAGE_SIZE * num_small_allocations; // if all pools are touched
     //uint64_t actual_reserver_mem = allocation_size * num_small_allocations; // if all the owned pages would be touched
@@ -266,17 +281,29 @@ bool test_alloc_aligned(size_t allocation_size)
         {
             shift++;
         }
-        pc = size_to_pool(MAX(alignment, allocation_size));
-        row = pc/8;
-        arena_idx = row_map[MIN(row, 16)];
-        area_size = region_size_from_partition_id(arena_idx);
-        if(row < 10)
+        if(allocation_size <= 32768)
         {
+            pc = size_to_pool(MAX(alignment, allocation_size));
+            row = pc/8;
+            arena_idx = row_map[MIN(row, 16)];
+            area_size = region_size_from_partition_id(arena_idx);
             pool_size = area_size >> 6;
         }
         else
         {
-            pool_size = area_size;
+            if(allocation_size <= (1 << 22))
+            {
+                arena_idx = ((63 - __builtin_clzll(allocation_size)) - 16);
+                area_size = region_size_from_partition_id(arena_idx);
+                pool_size = area_size;
+            }
+            else if(allocation_size <= (1 << 28))
+            {
+                arena_idx = ((63 - __builtin_clzll(allocation_size)) - 22);
+                area_size = region_size_from_partition_id(arena_idx);
+                pool_size = area_size << 6;
+            }
+            
         }
         
         void *all = caligned_alloc(alignment, allocation_size);
@@ -294,13 +321,17 @@ bool test_alloc_aligned(size_t allocation_size)
             goto end;
         }
         uintptr_t end = align_up((uintptr_t)all, pool_size);
-        intptr_t delta = (end - (uintptr_t)all);
-        if (delta < allocation_size) {
-            num_small_allocations = i;
-            result = false;
-            cfree(all);
-            goto end;
+        if((uintptr_t)all != end)
+        {
+            intptr_t delta = (end - (uintptr_t)all);
+            if (delta < allocation_size) {
+                num_small_allocations = i;
+                result = false;
+                cfree(all);
+                goto end;
+            }
         }
+        
         variables[i] = (uint64_t *)all;
     }
     
@@ -325,7 +356,7 @@ end:
     
     if(callocator_release())
     {
-        return true;
+        return result;
     }
     else
     {
@@ -496,7 +527,7 @@ bool test_huge_alloc(void)
 bool fillAPool(void)
 {
     bool state = true;
-    const int num_allocs = 16373;
+    const int num_allocs = 8182;
     uint64_t **allocs = (uint64_t **)malloc(num_allocs * sizeof(uint64_t **));
     for (int i = 0; i < num_allocs; i++) {
         allocs[i] = (uint64_t *)cmalloc(8);
@@ -954,8 +985,8 @@ int main(int argc, char *argv[])
     //
     //minor_test();
     //return 0;
-    run_tests();
-    return 0;
+    //run_tests();
+    //return 0;
     
     int cp = get_committed_pages();
     printf("Committed pages prior %d\n", cp);

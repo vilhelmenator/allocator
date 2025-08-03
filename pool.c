@@ -2,13 +2,13 @@
 
 void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize)
 {
-    init_base((alloc_base *)p);
     p->idx = pidx << 1;
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
     p->num_committed = 0;
     p->alignment = (uint32_t)(1ULL << __builtin_ctzll(p->block_size));
-    
+    p->thread_free_counter = 0;
+    p->deferred_free = NULL;
     p->num_used = 0;
     p->next = NULL;
     p->prev = NULL;

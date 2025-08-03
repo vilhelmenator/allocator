@@ -185,8 +185,8 @@ void deferred_init(Allocator* a, void*p)
                 d = (alloc_base*)c->start;
             }
         }
-        ((Block*)p)->next = d->free;
-        d->free = NULL;
+        ((Block*)p)->next = d->deferred_free;
+        d->deferred_free = NULL;
         c->items.next = p;
         c->num = 1;
         c->block_size = d->block_size;
@@ -202,7 +202,7 @@ void deferred_release(Allocator* a, void* p)
         if(c->owned)
         {
             alloc_base *d = (alloc_base*)c->start;
-            d->free = c->items.next;
+            d->deferred_free = c->items.next;
             
             if(!is_arena_type((alloc_base*)c->start))
             {
@@ -212,7 +212,7 @@ void deferred_release(Allocator* a, void* p)
                 pool->num_used -= c->num;
                 if(pool_is_unused(pool))
                 {
-                    pool_post_unused(pool, a);
+                    pool_set_unused(pool, a);
                     if(!pool_is_connected(pool) && pqueue->head != pool)
                     {
                         list_enqueue(pqueue, pool);

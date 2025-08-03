@@ -170,7 +170,7 @@ typedef struct Queue_t
 typedef struct
 {
     _Atomic(uintptr_t) thread_free_counter;
-    Block* free;
+    Block* deferred_free;
     size_t block_size;
     void *prev;
     void *next;
@@ -185,7 +185,7 @@ typedef struct
 
 static inline void init_base(alloc_base*f)
 {
-    f->free = NULL;
+    f->deferred_free = NULL;
     f->thread_free_counter = 0;
     f->prev = NULL;
     f->next = NULL;

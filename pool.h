@@ -71,14 +71,25 @@ static inline void pool_post_used(Pool *p, Allocator* a)
 
     arena_use_blocks(a, arena, pidx);
 }
+
 static inline void pool_set_unused(Pool *p, Allocator* a)
 {
     pool_post_unused(p, a);
     // the last piece was returned so make the first item the start of the free
-    p->free = NULL;//(Block *)base_addr;
-    p->num_committed = 0;
-    init_base((alloc_base *)p);
+    p->num_committed = 0; // so we hand out contigous blocks again
+    p->free = NULL;
+    p->thread_free_counter = 0;
+    p->deferred_free = NULL;
 }
+
+static inline void pool_clear(Pool *p)
+{
+    p->num_committed = 0; // so we hand out contigous blocks again
+    p->free = NULL;
+    p->thread_free_counter = 0;
+    p->deferred_free = NULL;
+}
+
 static inline void pool_move_deferred(Pool *p)
 {
     // for every item in the deferred list.
