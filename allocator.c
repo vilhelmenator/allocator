@@ -79,7 +79,7 @@ void* allocator_slot_region_alloc(Allocator*a,  const size_t as)
     return (void *)((uintptr_t)(a->c_slot.header));
 }
 
-internal_alloc allocator_set_implicit_slot(Allocator *a, uintptr_t p, uint32_t as_exp)
+internal_alloc allocator_set_implicit_slot(Allocator *a, uintptr_t p, uint32_t min_size, uint32_t align)
 {
     if (p == 0UL)
     {
@@ -87,12 +87,12 @@ internal_alloc allocator_set_implicit_slot(Allocator *a, uintptr_t p, uint32_t a
     }
     a->c_slot.header = (uintptr_t)p;
     a->c_slot.type = SLOT_IMPLICIT;
-    a->c_slot.block_size = 1 << as_exp;
-    a->c_slot.alignment = a->c_slot.block_size;
+    a->c_slot.block_size = min_size;
+    a->c_slot.alignment = align;
     a->c_slot.req_size = a->c_slot.block_size;
     a->c_slot.offset = 0;
     a->c_slot.start = 0;
-    a->c_slot.end = PARTITION_SECTION_SIZE(a->c_back.partition_index);
+    a->c_slot.end = 0;
     a->c_slot.is_zero = a->c_slot.is_zero;
     a->c_slot.counter = 0;
 
@@ -546,7 +546,7 @@ static inline void allocator_malloc_leq_256m_init(Allocator* alloc, const size_t
 }
 
 
-static inline internal_alloc allocator_malloc_back(Allocator* alloc)
+static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t align)
 {
     if(alloc->c_slot.type == SLOT_POOL)
     {
@@ -607,26 +607,50 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc)
     {
         const uint32_t as_exp = ARENA_SIZE_EXPONENT(alloc->c_back.partition_index);
         int32_t region_idx = 0;
-        uintptr_t start = (uintptr_t)allocator_alloc_region(alloc,
-                                                            alloc->c_back.partition_index,
-                                                            1,
-                                                            &region_idx,
-                                                            alloc->c_slot.is_zero,
-                                                            true);
-        alloc->c_back.header = ALIGN_DOWN_2(start, PARTITION_SECTION_SIZE(alloc->c_back.partition_index));
-        alloc->c_back.index = region_idx;
-        ImplicitList* new_bt = (ImplicitList*)start;
-        implicitList_init(new_bt, region_idx, 1 << as_exp);
-        new_bt->thread_id = alloc->thread_id;
-        new_bt->partition_id = alloc->c_back.partition_index;
-        new_bt->idx = (region_idx << 4)| SLOT_IMPLICIT;
-        Queue *aqueue = &alloc->implicit[alloc->c_back.partition_index];
-        if(!base_is_connected((alloc_base*)new_bt) && aqueue->head != new_bt)
+        
+        Queue* aqueue = &alloc->implicit[alloc->c_back.partition_index];
+        alloc_base* start = aqueue->head;
+        
+        while(start != NULL)
         {
-            list_enqueue(aqueue, new_bt);
+            ImplicitList* bt = (ImplicitList*)start;
+            alloc_base* next = start->next;
+        
+            if(implicitList_has_room(bt, alloc->c_back.min_size))
+            {
+                break;
+            }
+            else
+            {
+                // remove fron our cached lists.
+            }
+            
+            start = next;
+        }
+        if(start == NULL)
+        {
+            uintptr_t region = (uintptr_t)allocator_alloc_region(alloc,
+                                                                alloc->c_back.partition_index,
+                                                                1,
+                                                                &region_idx,
+                                                                alloc->c_slot.is_zero,
+                                                                true);
+            alloc->c_back.header = ALIGN_DOWN_2(region, PARTITION_SECTION_SIZE(alloc->c_back.partition_index));
+            alloc->c_back.index = region_idx;
+            ImplicitList* new_bt = (ImplicitList*)region;
+            implicitList_init(new_bt, region_idx, 1 << as_exp);
+            new_bt->thread_id = alloc->thread_id;
+            new_bt->partition_id = alloc->c_back.partition_index;
+            new_bt->idx = (region_idx << 4)| SLOT_IMPLICIT;
+            start = (void*)new_bt;
+        }
+        
+        if(!base_is_connected((alloc_base*)start) && aqueue->head != start)
+        {
+            list_enqueue(aqueue, start);
         }
         // boundary tag allocator
-        return allocator_set_implicit_slot(alloc, (uintptr_t)new_bt, as_exp);
+        return allocator_set_implicit_slot(alloc, (uintptr_t)start, (uint32_t)alloc->c_back.min_size, (uint32_t)align);
 
     }
     else if(alloc->c_slot.type == SLOT_REGION)
@@ -653,7 +677,7 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
         {
             if(alignment == alloc->c_slot.alignment)
             {
-                return allocator_malloc_back(alloc);
+                return allocator_malloc_back(alloc, alignment);
             }
         }
     }
@@ -678,7 +702,7 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
         alloc->c_slot.type = SLOT_OS;
     }
 
-    return allocator_malloc_back(alloc);
+    return allocator_malloc_back(alloc, alignment);
 }
 
 

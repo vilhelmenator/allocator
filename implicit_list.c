@@ -365,7 +365,7 @@ void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
     const uintptr_t section_end = ((uintptr_t)blocks + (psize - 1)) & ~(psize - 1);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
 
-    const size_t block_memory = psize - sizeof(ImplicitList);// - sizeof(Section);
+    const size_t block_memory = psize - sizeof(ImplicitList);
     const size_t header_footer_offset = sizeof(uintptr_t) * 2;
     h->idx = pidx;
     h->used_memory = 0;
