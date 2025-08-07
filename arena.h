@@ -6,10 +6,10 @@
 #include <stdatomic.h>
 
 #define ARENA_BASE_SIZE_EXPONENT 22
-#define ARENA_SIZE(x) (1 << (ARENA_BASE_SIZE_EXPONENT + x))
+#define ARENA_SIZE(x) (1ULL << (ARENA_BASE_SIZE_EXPONENT + x))
 #define ARENA_SIZE_EXPONENT(x) (ARENA_BASE_SIZE_EXPONENT + x)
 #define ARENA_CHUNK_SIZE_EXPONENT(x) ((ARENA_BASE_SIZE_EXPONENT + x) - 6)
-#define ARENA_CHUNK_SIZE(x) (1 << ((ARENA_BASE_SIZE_EXPONENT + x) - 6))
+#define ARENA_CHUNK_SIZE(x) (1ULL << ((ARENA_BASE_SIZE_EXPONENT + x) - 6))
 static const uint32_t arena_level_offset = ARENA_BASE_SIZE_EXPONENT;
 
 typedef struct arena_size_table_t

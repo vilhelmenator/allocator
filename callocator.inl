@@ -58,12 +58,10 @@ typedef SSIZE_T ssize_t;
 #define PREV_POWER_OF_TWO(x) (1ULL << (63 - __builtin_clzll(x)))
 #define IS_ALIGNED(x,y)(((uintptr_t)x & ((uintptr_t)y - 1)) == 0)
 
-//
-
-
-
 #define clz(x) (x == 0? 32:__builtin_clz(x))
- 
+#define clzll(x) (x == 0? 64:__builtin_clzll(x))
+#define bitlength(x) (32 - clz(x))
+#define bitlengthll(x) (64 - clzll(x))
 /*
 
 Partition (1TB)
@@ -155,6 +153,30 @@ static inline int32_t partition_id_from_addr(uintptr_t p) {
 static inline uint64_t area_size_from_addr(uintptr_t p) { return region_size_from_partition_id(partition_id_from_addr(p)); }
 
 
+typedef struct {
+    _Atomic(uint64_t) reserved;     // which parts have been reserved.
+    _Atomic(uint64_t) committed;    // which parts have committed virtual mem
+    _Atomic(uint64_t) ranges;       // the extends for each part.
+    
+    // When committed regions are used as arenas or implicit lists,
+    // they are tagged as active.
+    // When they are not tagged as active, they have been handed out
+    // as a whole to the user application.
+    _Atomic(uint64_t)  active;
+    
+    _Atomic(uint64_t) pending_release;
+} PartitionMasks;
+
+typedef struct {
+    PartitionMasks* blocks; // Array of allocated blocks
+    size_t num_blocks;
+    size_t blockSize;          // Fixed block size for this partition
+} Partition;
+
+typedef struct {
+    Partition partitions[PARTITION_COUNT];
+    size_t totalMemory;        // Total memory managed by the allocator
+} PartitionAllocator;
 typedef struct Block_t
 {
     struct Block_t* next;
@@ -233,7 +255,7 @@ typedef struct QNode_t
 typedef struct Arena_t
 {
     // 64 byte base heap header
-    _Atomic(uintptr_t) thread_free_counter;
+    _Atomic(uintptr_t) thread_id;
     Block* deferred_free;
     size_t block_size;
     
@@ -249,23 +271,23 @@ typedef struct Arena_t
     _Atomic(uint64_t)  ranges;
     _Atomic(uint64_t)  zero;
     
-    _Atomic(uintptr_t) thread_id;
 } Arena; // 128 bytes
 
 // Boundary tag allocation structure
 typedef struct ImplicitList_t
 {
     // 56 byte header
-    _Atomic(uintptr_t) thread_free_counter;
+    _Atomic(uintptr_t) thread_id;
     Block* deferred_free;
     size_t block_size;
     void *prev;
     void *next;
     
     int32_t idx;            // index into the parent chunk
-    int32_t block_idx;      // index into the region of the arena
+    uint32_t partition_id;  // index of the partition
 
-    // 64 byte 
+    // 64 byte
+    _Atomic(Block*) thread_free;
     uint32_t total_memory; // how much do we have available in total
     uint32_t used_memory;  // how much have we used
     uint32_t min_block;    // what is the minum size block available;
@@ -276,24 +298,6 @@ typedef struct ImplicitList_t
 
 } ImplicitList;
 
-typedef struct {
-    _Atomic(uint64_t) reserved;     // which parts have been reserved.
-    _Atomic(uint64_t) committed;    // which parts have committed virtual mem
-    _Atomic(uint64_t) ranges;       // the extends for each part.
-    
-    _Atomic(uint64_t) pending_release;
-} PartitionMasks;
-
-typedef struct {
-    PartitionMasks* blocks; // Array of allocated blocks
-    size_t num_blocks;
-    size_t blockSize;          // Fixed block size for this partition
-} Partition;
-
-typedef struct {
-    Partition partitions[PARTITION_COUNT];
-    size_t totalMemory;        // Total memory managed by the allocator
-} PartitionAllocator;
 
 struct mutex_t;
 
@@ -303,8 +307,8 @@ typedef enum
     SLOT_NONE = 0,
     SLOT_POOL = 1,
     SLOT_ARENA = 2,
-    SLOT_REGION = 3,
-    SLOT_IMPLICIT = 4,
+    SLOT_IMPLICIT = 3,
+    SLOT_REGION = 4,
     SLOT_OS = 5,
 } slot_type;
 
@@ -346,6 +350,7 @@ typedef struct
 typedef struct deferred_free_t
 {
     Block items;
+    uintptr_t tail;
     uint32_t num;
     uint32_t owned;
     uintptr_t start;
@@ -353,9 +358,9 @@ typedef struct deferred_free_t
     size_t block_size;
 } deferred_free;
 
-static inline int32_t is_arena_type(alloc_base* h)
+static inline slot_type get_base_type(alloc_base* h)
 {
-    return h->parent_idx & 0x1;
+    return (h->parent_idx & 0xf);
 }
 
 static inline void deferred_add(deferred_free*c, void* p)

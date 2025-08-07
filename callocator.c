@@ -23,6 +23,9 @@ cache_align Allocator *main_instance;
 
 __thread Allocator *thread_instance = NULL;
 static tls_t _thread_key = (tls_t)(-1);
+#define MAIN_ALLOCATOR_SIZE (sizeof(Allocator) + sizeof(Queue) * (POOL_BIN_COUNT + PARTITION_COUNT + ARENA_BIN_COUNT))
+static uint8_t main_allocator_buffer[MAIN_ALLOCATOR_SIZE] __attribute__((aligned(64)));
+
 static void allocator_thread_detach(Allocator* alloc)
 {
     for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
@@ -61,8 +64,9 @@ static void thread_done(void *a)
 
 static Allocator *init_thread_instance(uintptr_t tid)
 {
-    Allocator *new_alloc = allocator_aquire();
-    new_alloc->thread_id = tid;
+    uintptr_t thr_mem = (uintptr_t)alloc_memory((void*)BASE_OS_ALLOC_ADDRESS, os_page_size, true);
+    Allocator *new_alloc = allocator_aquire(tid, thr_mem);
+    
     thread_instance = new_alloc;
     tls_set(_thread_key, new_alloc);
     incr_thread_count();
@@ -154,8 +158,8 @@ static int allocator_init(void)
     tls_create(&_thread_key, &thread_done);
     
     partition_allocator = partition_allocator__create();
-    Allocator *new_alloc = allocator_aquire();
-    new_alloc->thread_id = main_thread_id;
+    Allocator *new_alloc = allocator_aquire(main_thread_id, (uintptr_t)main_allocator_buffer);
+    
     main_instance = new_alloc;
     thread_instance = main_instance;
     return 0;
@@ -208,7 +212,32 @@ extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, siz
     {
         return NULL;
     }
-    Allocator_param params = {get_thread_id(), MAX(size, alignment), alignment, false};
+    
+    // alignment needs to be a power of 2.
+    if(!POWER_OF_TWO(alignment))
+    {
+        return NULL;
+    }
+    
+    if(alignment > os_page_size)
+    {
+        // we don't care for large alignment asks.
+        return NULL;
+    }
+    
+    // you are doing something wrong, but we will give you a pass
+    if(size < alignment)
+    {
+        size = alignment;
+    }
+    else
+    {
+        // the size needs to be a multiple of the alignment.
+        size_t rem = size % alignment;
+        size += rem;
+    }
+    
+    Allocator_param params = {get_thread_id(), size, alignment, false};
     return allocator_malloc(&params);
 }
 

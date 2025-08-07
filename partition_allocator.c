@@ -5,10 +5,15 @@
 #include "arena.h"
 
 cache_align PartitionAllocator *partition_allocator = NULL;
-
+#define PARTITION_ALLOCATOR_STATIC_SIZE (1024 * 1024) // 1MB
+static uint8_t partition_allocator_static_buffer[PARTITION_ALLOCATOR_STATIC_SIZE] __attribute__((aligned(64)));
 
 // Returns a pointer to the initialized allocator.
 PartitionAllocator* partition_allocator__create(void) {
+    if(partition_allocator != NULL)
+    {
+        return partition_allocator;
+    }
     // Calculate total size required.
     size_t total_size = sizeof(PartitionAllocator);
     const size_t blockSizes[PARTITION_COUNT] = {
@@ -42,8 +47,7 @@ PartitionAllocator* partition_allocator__create(void) {
     }
 
     // Allocate the entire block.
-    uintptr_t address = (uintptr_t)BASE_ADDRESS >> 1;
-    void* memory = alloc_memory((void*)address, total_size, true);
+    void* memory = partition_allocator_static_buffer;
     memset(memory, 0, total_size);
 
     // Set up the allocator.
@@ -131,7 +135,7 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                                                   int32_t partition_idx,
                                                   int32_t num_regions,
                                                   int32_t* region_idx,
-                                                  bool commit) {
+                                                  bool active) {
     Partition* partition = &allocator->partitions[partition_idx];
     // Find and reserve a free block (atomic CAS loop).
     for (int i = 0; i < partition->num_blocks; i++) {
@@ -150,7 +154,7 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                     uintptr_t block_addr = base_addr + (ii * (region_size));
                     
                     // reserve our block.
-                    void* result = alloc_memory((void*)block_addr, region_size, commit);
+                    void* result = alloc_memory((void*)block_addr, region_size, false);
                     if (result != (void*)block_addr) {
                         // revert our reservation.
                         atomic_fetch_and(&block->reserved, ~(1ULL << ii));
@@ -207,6 +211,13 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                 atomic_fetch_and(&block->committed, ~(1ULL << bit));
                 return NULL;
             }
+            if(active)
+            {
+                atomic_fetch_or_explicit(&block->active,
+                                         free_mask,
+                                         memory_order_relaxed);
+            }
+            
             // Set range_mask bits if needed.
             if (num_regions > 1) {
                 uint64_t range_add_mask = (1ULL << bit) | (1ULL << (bit + num_regions - 1));
@@ -302,9 +313,13 @@ int32_t get_partition_location(PartitionAllocator* allocator, void* addr, Partit
     return 0;
 }
 
-void* partition_allocator_get_free_region(PartitionAllocator* allocator, int32_t partition_idx, int32_t num_regions, int32_t* region_idx )
+void* partition_allocator_get_free_region(PartitionAllocator* allocator,
+                                          int32_t partition_idx,
+                                          int32_t num_regions,
+                                          int32_t* region_idx,
+                                          bool active )
 {
-    return partition_allocator_allocate_from_partition(allocator, partition_idx, num_regions, region_idx, false);
+    return partition_allocator_allocate_from_partition(allocator, partition_idx, num_regions, region_idx, active);
 }
 
 

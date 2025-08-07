@@ -1,9 +1,14 @@
 
 
 #include "implicit_list.h"
+#include <stdatomic.h>
+
+#define MIN_BLOCK_SIZE (DSIZE + HEADER_FOOTER_OVERHEAD)
+
 
 static inline void implicitList_block_set_header(HeapBlock *hb, const uint32_t s, const uint32_t v, const uint32_t pa)
 {
+    // Set the header with size, allocated bit, and previous allocated bit
     *(uint32_t *)((uint8_t *)&hb->data - WSIZE) = (s | v | pa << 1);
 }
 
@@ -42,7 +47,7 @@ void implicitList_place(ImplicitList *h, void *bp, const uint32_t asize, const i
 {
     HeapBlock *hb = (HeapBlock *)bp;
     const uint32_t prev_alloc = (header & 0x3) >> 1;
-    if ((csize - asize) >= (DSIZE + HEADER_FOOTER_OVERHEAD)) {
+    if ((csize - asize) >= (MIN_BLOCK_SIZE)) {
         implicitList_block_set_header(hb, asize, 1, prev_alloc);
         hb = implicitList_block_next(hb);
         implicitList_block_set_header(hb, csize - asize, 0, 1);
@@ -53,28 +58,102 @@ void implicitList_place(ImplicitList *h, void *bp, const uint32_t asize, const i
     }
 }
 
+void* implicitList_place_aligned(ImplicitList *h, void *bp,  uint32_t asize, const int32_t header, const int32_t bsize, const int32_t alignment)
+{
+    uintptr_t raw_addr = (uintptr_t)bp;
+    uintptr_t user_addr = (raw_addr + sizeof(void*) + alignment - 1) & ~(alignment - 1);
+    uintptr_t prefix_size = user_addr - raw_addr;
+    const uint32_t prev_alloc = (header & 0x3) >> 1;
+
+    // Split prefix if needed
+    if (prefix_size > 0 && prefix_size < MIN_BLOCK_SIZE) {
+        user_addr = raw_addr + ((MIN_BLOCK_SIZE + alignment - 1) & ~(alignment - 1));
+        prefix_size = user_addr - raw_addr;
+        if ((prefix_size + asize + HEADER_FOOTER_OVERHEAD) >= bsize) {
+            // Not enough space for aligned block, fail allocation
+            return NULL;
+        }
+        else {
+            // the prefix size should have enough space for a valid block
+            implicitList_block_set_header((HeapBlock *)raw_addr, prefix_size, 0, prev_alloc);
+            implicitList_block_set_footer((HeapBlock *)raw_addr, prefix_size, 0);
+            list_enqueue(&h->free_nodes, (QNode *)raw_addr);
+        }
+    }
+
+    list_remove(&h->free_nodes, (QNode*)bp);
+    
+    // Set up the aligned block
+    HeapBlock *aligned_hb = (HeapBlock *)user_addr;
+    implicitList_block_set_header(aligned_hb, asize, 1, prefix_size > 0 ? 0 : prev_alloc); 
+    implicitList_block_set_footer(aligned_hb, asize, 1);
+
+    uintptr_t suffix_size = bsize - prefix_size - asize;
+    // Ensure suffix is at least MIN_BLOCK_SIZE
+    if (suffix_size > 0 && suffix_size < MIN_BLOCK_SIZE) {
+        // Add the small suffix to the aligned block
+        asize += suffix_size;
+        suffix_size = 0;
+    }
+    else 
+    {
+        HeapBlock *suffix_hb = (HeapBlock *)(user_addr + asize);
+        implicitList_block_set_header(suffix_hb, suffix_size, 0, 1);
+        implicitList_block_set_footer(suffix_hb, suffix_size, 0);
+        list_enqueue(&h->free_nodes, (QNode *)suffix_hb);
+    }
+
+    return (void *)user_addr;
+}
+// Moves all thread_free blocks to deferred_free (call from owning thread)
+void implicit_list_claim_thread_frees(ImplicitList* list) {
+    // Atomically extract the entire thread_free list
+    Block* head = atomic_exchange_explicit(
+        &list->thread_free,
+        NULL,
+        memory_order_acquire  // Ensures we see all prior releases
+    );
+    
+    // Prepend to deferred_free (no atomic needed - owner thread only)
+    if (head) {
+        Block* tail = head;
+        while (tail->next) {
+            tail = tail->next;
+        }
+        tail->next = list->deferred_free;
+        list->deferred_free = head;
+    }
+}
+
 void implicitList_move_deferred(ImplicitList *h)
 {
     // for every item in the deferred list.
-    QNode *current = (QNode *)h->free_nodes.head;
-    if (current != NULL) {
-        return;
-    }
+    Block *current = h->free_nodes.head;
+    // move thread free items to the deferred list.
+    implicit_list_claim_thread_frees(h);
+    // move deferred to our free list.
     h->free_nodes.head = h->deferred_free;
     Block* c = h->deferred_free;
     Block* tail = NULL;
     while(c != NULL)
     {
         tail = c;
+        //
+        HeapBlock *hb = (HeapBlock *)c;
+        int header = implicitList_block_get_header(hb);
+        h->used_memory -= header & ~0x7;
         c = c->next;
         h->num_allocations--;
     }
-    
+    tail->next = current;
     h->free_nodes.tail = tail;
     h->deferred_free = NULL;
+    if (h->num_allocations == 0) {
+        implicitList_freeAll(h);
+    }
 }
 
-void *implicitList_find_fit(ImplicitList *h, const uint32_t asize)
+void *implicitList_find_fit(ImplicitList *h, const uint32_t asize, const uint32_t align)
 {
     // find the first fit.
     QNode *current = (QNode *)h->free_nodes.head;
@@ -88,9 +167,22 @@ void *implicitList_find_fit(ImplicitList *h, const uint32_t asize)
         int header = implicitList_block_get_header(hb);
         uint32_t bsize = header & ~0x7;
         if (asize <= bsize) {
-            list_remove(&h->free_nodes, current);
-            implicitList_place(h, current, asize, header, bsize);
-            return current;
+            
+            if(align != sizeof(void*))
+            {
+                // Align the size to the next multiple of align
+                void* res = implicitList_place_aligned(h, current, asize, header, bsize, align);
+                if(res != NULL)
+                {
+                    return res;
+                }
+            }   
+            else
+            {
+                list_remove(&h->free_nodes, current);
+                implicitList_place(h, current, asize, header, bsize);
+                return current;
+            }
         }
         current = (QNode *)current->next;
     }
@@ -102,8 +194,17 @@ void implicitList_freeAll(ImplicitList *h)
     implicitList_reset(h);
 }
 
-void *implicitList_get_block(ImplicitList *h, uint32_t s)
+
+void *implicitList_get_block(ImplicitList *h, uint32_t s, uint32_t align)
 {
+    if(align != sizeof(void*))
+    {
+        // Align the size to the next multiple of align
+        s = s + align - 1 + sizeof(void*);
+    }
+    if (!implicitList_has_room(h, s)) {
+        return NULL;
+    }
     if (h->num_allocations++ == 0) {
         // on first allocation we write our footer at the end.
         // we delay this just so that we do not touch the pages till needed
@@ -114,9 +215,16 @@ void *implicitList_get_block(ImplicitList *h, uint32_t s)
 
     }
     s = implicitList_get_good_size(s);
-    void *ptr = implicitList_find_fit(h, s);
-    h->used_memory += s;
-    h->max_block -= s;
+    void *ptr = implicitList_find_fit(h, s, align);
+    if(ptr != NULL)
+    {
+        h->used_memory += s;
+        h->max_block -= s;
+    }
+    else
+    {
+        h->num_allocations--;
+    }
     return ptr;
 }
 
@@ -213,7 +321,6 @@ void implicitList_reset(ImplicitList *h)
     h->max_block = h->total_memory;
     h->used_memory = 0;
     h->deferred_free = NULL;
-    h->thread_free_counter = 0;
 }
 
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
@@ -255,7 +362,7 @@ void implicitList_extend(ImplicitList *h)
 void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
 {
     void *blocks = (uint8_t *)h + sizeof(ImplicitList);
-    const uintptr_t section_end = ((uintptr_t)h + (psize - 1)) & ~(psize - 1);
+    const uintptr_t section_end = ((uintptr_t)blocks + (psize - 1)) & ~(psize - 1);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
 
     const size_t block_memory = psize - sizeof(ImplicitList);// - sizeof(Section);
@@ -269,6 +376,41 @@ void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
     h->next = NULL;
     h->prev = NULL;
     h->deferred_free = NULL;
-    h->thread_free_counter = 0;
     implicitList_extend(h);
 }
+
+// Adds a block to the thread_free list from another thread
+void implicit_list_thread_free(ImplicitList* list, Block* block) {
+    // Set block's next pointer
+    block->next = atomic_load_explicit(&list->thread_free, memory_order_relaxed);
+    
+    // loop to atomically prepend the block
+    while (!atomic_compare_exchange_weak_explicit(
+        &list->thread_free,
+        &block->next,  // Expected current head
+        block,         // New head
+        memory_order_release,  // Success ordering
+        memory_order_relaxed   // Failure ordering
+    )) {
+        //update block->next and retry
+        block->next = atomic_load_explicit(&list->thread_free, memory_order_relaxed);
+    }
+}
+
+void implicit_list_thread_free_batch(ImplicitList* list, Block* head, Block* tail) {
+    // Link the batch to current head
+    tail->next = atomic_load_explicit(&list->thread_free, memory_order_relaxed);
+    
+    // CAS loop to atomically prepend the batch
+    while (!atomic_compare_exchange_weak_explicit(
+        &list->thread_free,
+        &tail->next,  // Expected current head
+        head,         // New head (start of batch)
+        memory_order_release,
+        memory_order_relaxed
+    )) {
+        // Update tail->next if CAS fails
+        tail->next = atomic_load_explicit(&list->thread_free, memory_order_relaxed);
+    }
+}
+

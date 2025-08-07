@@ -70,12 +70,8 @@ typedef struct Allocator_t {
 3. **4MB-256MB requests**:
    - Power-of-2: Direct from partition allocator
    - Odd sizes: Boundary tag allocator
-
-4. **>256MB requests**:
-   - Rounded to nearest power-of-2
-   - Allocated directly from partition allocator
-
-5. **>8GB requests**: Forwarded to OS
+   
+4. **>256MB requests**: Forwarded to OS
 
 ## Thread Handling
 

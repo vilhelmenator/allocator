@@ -272,7 +272,7 @@ bool test_alloc_aligned(size_t allocation_size)
     for (uint32_t i = 0; i < num_small_allocations; i++) {
         
         uint32_t alignment = 8<<(shift%24);
-        if(alignment > allocation_size)
+        if(alignment > os_page_size)
         {
             alignment = 8;
             shift = 0;
@@ -418,6 +418,20 @@ end:
     }
     free(variables);
     return state;
+}
+
+bool test_odd_sizes(void)
+{
+    uint32_t num_alloc = 127;
+    uint64_t **variables = (uint64_t **)malloc(num_alloc * sizeof(uint64_t));
+    for (uint32_t i = 0; i < num_alloc; i++) {
+        variables[i] = (uint64_t *)cmalloc((1<<15) + 1);
+    }
+    for (uint32_t i = 0; i < num_alloc; i++) {
+        cfree(variables[i]);
+    }
+    free(variables);
+    return callocator_release();
 }
 
 bool test_areas(void)
@@ -617,6 +631,7 @@ void run_tests(void)
 
     START_TEST(Allocator, {});
     
+    //TEST(Allocator, odd_sizes, { EXPECT(test_odd_sizes()); });
     
     TEST(Allocator, pools_small, { EXPECT(test_pools_small()); });
     TEST(Allocator, medium_pools, { EXPECT(test_medium_pools()); });
@@ -979,14 +994,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    // partition
-    //  area->thread_idx
-    // instead of partitions being [0,7]
-    //
-    //minor_test();
-    //return 0;
-    //run_tests();
-    //return 0;
     
     int cp = get_committed_pages();
     printf("Committed pages prior %d\n", cp);

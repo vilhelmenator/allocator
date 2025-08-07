@@ -4,7 +4,38 @@
 #include "partition_allocator.h"
 #include <stdatomic.h>
 #include "arena.h"
+#include "implicit_list.h"
 
+/*
+    When freeing memory, it is important that we can infer where the memory
+ comes from. What subordinate structure and what partition.
+ 
+ The address will tell us what partition it is residing in.
+ The alignment will tell us what structure is holding it.
+ 
+ A partition is split into sections.
+ Partition 0 -> Aligned at 1TB. Address Range:[2TB - 3TB]
+    - section: Aligned/Size at 256mb.
+        - region: Aligned/Size at 4mb
+ Partition 1 -> Aligned at 1TB. Address Range:[3TB - 4TB]
+    - section: Aligned/Size at 512mb
+        - region: Aligned/Size at 8mb
+ ..
+ Partition 8 -> Aligned at 1TB. Address Range:[10TB - 11TB]
+    - section: Aligned/Size at 64gb
+        - region: Aligned/Size at 1gb
+ 
+ Implicit Lists are allocated as regions.
+    - header matches region alignment.
+ 
+ Arenas allocated as regions.
+    - header matches region alignment.
+        - any chunk handed out 1/64th the size and alignment.
+ 
+ Pools are allocated as chunks from Arenas.
+    - header matches chunk alignment.
+ 
+ */
 extern PartitionAllocator *partition_allocator;
 void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks) {
     // Clear area_mask bits.
@@ -151,24 +182,55 @@ void deferred_init(Allocator* a, void*p)
         alloc_base *d = NULL;
         
         uint32_t c_exp = ARENA_CHUNK_SIZE_EXPONENT(pid);
-        uint32_t c_size = ARENA_CHUNK_SIZE(pid);
+        uint64_t c_size = ARENA_CHUNK_SIZE(pid);
+        uint64_t a_size = c_size * 64;
         Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
         c->owned = h->thread_id == a->thread_id;
         int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
+        slot_type st = get_base_type((alloc_base*)h);
+        bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
         if(idx == 0)
         {
-            // This would be a whole region that is allocated
-            // since an arena would have its first area reserved for
-            // masks.
-            partition_allocator_free_blocks(partition_allocator, p, true);
-            // we can decommit the memory in this case.
-            a->c_slot.header = 0;
-            return;
+            // If this partition is not active, that would mean we can safely
+            // free it from the partition allocator.
+            // but only if it aligned to the very top.
+            
+            if(top_aligned)
+            {
+                // This would be a whole region that is allocated
+                partition_allocator_free_blocks(partition_allocator, p, true);
+                // we can decommit the memory in this case.
+                a->c_slot.header = 0;
+                return;
+            }
+            else
+            {
+                // this could be a pool or an implicit list.
+                switch (st) {
+                    case SLOT_POOL:
+                    {
+                        c->start = (uintptr_t)h;
+                        c->end = c->start + c_size;
+                        d = (alloc_base*)c->start;
+                        break;
+                    }
+                    case SLOT_IMPLICIT:
+                    {
+                        // the implicit list will always be contained
+                        // within a sub-region of a partition.
+                        c->start = (uintptr_t)h;
+                        c->end = c->start + a_size;
+                        d = (alloc_base*)c->start;
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
         }
         else
         {
 
-            bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
             if(top_aligned)
             {
                 arena_free_blocks(a, h, idx);
@@ -185,9 +247,14 @@ void deferred_init(Allocator* a, void*p)
                 d = (alloc_base*)c->start;
             }
         }
-        ((Block*)p)->next = d->deferred_free;
-        d->deferred_free = NULL;
+        if(c->owned)
+        {
+            ((Block*)p)->next = d->deferred_free;
+            d->deferred_free = NULL;
+        }
+        
         c->items.next = p;
+        c->tail = (uintptr_t)p;
         c->num = 1;
         c->block_size = d->block_size;
     }
@@ -203,8 +270,8 @@ void deferred_release(Allocator* a, void* p)
         {
             alloc_base *d = (alloc_base*)c->start;
             d->deferred_free = c->items.next;
-            
-            if(!is_arena_type((alloc_base*)c->start))
+            slot_type st = get_base_type((alloc_base*)c->start);
+            if(st == SLOT_POOL)
             {
                 
                 Pool *pool = (Pool*)c->start;
@@ -219,11 +286,23 @@ void deferred_release(Allocator* a, void* p)
                     }
                 }
             }
+            else if(st ==  SLOT_IMPLICIT)
+            {
+                implicitList_move_deferred((ImplicitList*)c->start);
+            }
         }
         else
         {
-            alloc_base *d = (alloc_base*)c->start;
-            atomic_fetch_add_explicit(&d->thread_free_counter,c->num,memory_order_relaxed);
+            slot_type st = get_base_type((alloc_base*)c->start);
+            if(st == SLOT_POOL)
+            {
+                alloc_base *d = (alloc_base*)c->start;
+                atomic_fetch_add_explicit(&d->thread_free_counter,c->num,memory_order_relaxed);
+            }
+            else if(st ==  SLOT_IMPLICIT)
+            {
+                implicit_list_thread_free_batch((ImplicitList*)c->start, c->items.next, (Block*)c->tail);
+            }
         }
         if(p)
         {
@@ -231,6 +310,8 @@ void deferred_release(Allocator* a, void* p)
         }
         else
         {
+            c->items.next = 0;
+            c->tail = 0;
             c->start = UINT64_MAX;
             c->end = 0;
             c->num = 0;

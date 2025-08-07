@@ -2,7 +2,7 @@
 
 void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize)
 {
-    p->idx = pidx << 1;
+    p->idx = pidx << 4 | SLOT_POOL;
     p->block_idx = block_idx;
     p->block_size = pool_sizes[block_idx];
     p->num_committed = 0;

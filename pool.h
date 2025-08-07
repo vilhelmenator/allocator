@@ -55,7 +55,7 @@ static inline void pool_post_unused(Pool *p, Allocator* a)
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
     size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
-    int32_t pidx = p->idx >> 1;
+    int32_t pidx = p->idx >> 4;
 
     // label the area as in not in use
     arena_unuse_blocks(a, arena, pidx);
@@ -67,7 +67,7 @@ static inline void pool_post_used(Pool *p, Allocator* a)
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
     size_t asize = region_size_from_partition_id(pid);
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
-    uint32_t pidx = p->idx >> 1;
+    uint32_t pidx = p->idx >> 4;
 
     arena_use_blocks(a, arena, pidx);
 }
