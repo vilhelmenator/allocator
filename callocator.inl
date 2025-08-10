@@ -1,4 +1,3 @@
-
 #ifndef callocator_inl
 #define callocator_inl
 #include "callocator.h"
@@ -24,6 +23,8 @@ typedef SSIZE_T ssize_t;
 #define PARTITION_COUNT 9
 #define BASE_ADDRESS (2ULL * 1024 * 1024 * 1024 * 1024) // 2TB
 #define BASE_OS_ALLOC_ADDRESS (12ULL * 1024 * 1024 * 1024 * 1024) // 12TB
+#define OS_ALLOC_END (BASE_OS_ALLOC_ADDRESS + BASE_ADDRESS) // 14TB
+
 #define PARTITION_SIZE_EXP (40) // 1TB
 #define PARTITION_SIZE (1ULL << PARTITION_SIZE_EXP)
 #define PARTITION_SECTION_SIZE(x) (256 * 1024 * 1024 * (x + 1))
@@ -164,6 +165,10 @@ typedef struct {
     // as a whole to the user application.
     _Atomic(uint64_t)  active;
     
+    // When threads die, they mark their claimed regions as abandoned.
+    _Atomic(uint64_t)  abandoned;
+    
+    // these regions have been released and are pending reuse/decommit
     _Atomic(uint64_t) pending_release;
 } PartitionMasks;
 
@@ -191,7 +196,7 @@ typedef struct Queue_t
 
 typedef struct
 {
-    _Atomic(uintptr_t) thread_free_counter;
+    _Atomic(intptr_t) thread_free_counter;
     Block* deferred_free;
     size_t block_size;
     void *prev;
@@ -220,7 +225,7 @@ static inline void init_base(alloc_base*f)
 typedef struct Pool_t
 {
     // 56 byte header
-    _Atomic(uintptr_t) thread_free_counter;
+    _Atomic(intptr_t) thread_free_counter;
     Block* deferred_free;
     size_t block_size;
     void *prev;
@@ -255,7 +260,7 @@ typedef struct QNode_t
 typedef struct Arena_t
 {
     // 64 byte base heap header
-    _Atomic(uintptr_t) thread_id;
+    _Atomic(intptr_t) thread_id;
     Block* deferred_free;
     size_t block_size;
     
@@ -277,7 +282,7 @@ typedef struct Arena_t
 typedef struct ImplicitList_t
 {
     // 56 byte header
-    _Atomic(uintptr_t) thread_id;
+    _Atomic(intptr_t) thread_id;
     Block* deferred_free;
     size_t block_size;
     void *prev;
@@ -398,12 +403,78 @@ void deferred_init(Allocator* a, void*p);
 void deferred_release(Allocator* a, void* p);
 Allocator *get_instance(uintptr_t tid);
 
-// list utilities
-static inline bool qnode_is_connected(QNode* n)
-{
-    return (n->prev != 0) || (n->next != 0);
-}
+
 static inline bool base_is_connected(alloc_base *p) { return p->prev != NULL || p->next != NULL; }
+static inline bool _is_connected_to_list(void *queue, void *node, size_t head_offset, size_t prev_offset, size_t next_offset)
+{
+    Queue *th = (Queue *)((uint8_t *)queue + head_offset);
+    QNode *tp = (QNode *)((uint8_t *)node + prev_offset);
+    Queue *tn = (Queue *)((uint8_t *)node + next_offset);
+    return (tp != 0) || (tn != 0) || (th->head == node);
+}
+static inline bool _is_not_connected_to_list(void *queue, void *node, size_t head_offset, size_t prev_offset, size_t next_offset)
+{
+    Queue *th = (Queue *)((uint8_t *)queue + head_offset);
+    QNode *tp = (QNode *)((uint8_t *)node + prev_offset);
+    Queue *tn = (Queue *)((uint8_t *)node + next_offset);
+    return (tp == 0) && (tn == 0) && (th->head != node);
+}
+#define is_connected_to_list(q, n) _is_connected_to_list(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev), offsetof(__typeof__(*n), next))
+#define is_not_connected_to_list(q, n) _is_not_connected_to_list(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev), offsetof(__typeof__(*n), next))
+
+static inline void _list_move_to_front(void *queue, void *node, size_t head_offset, size_t tail_offset, size_t prev_offset, size_t next_offset)
+{
+    // Get pointers to queue, node, and their fields
+    Queue *q = (Queue *)((uint8_t *)queue + head_offset);
+    void **q_head = (void **)((uint8_t *)queue + head_offset);
+    void **q_tail = (void **)((uint8_t *)queue + tail_offset);
+    void **n_prev = (void **)((uint8_t *)node + prev_offset);
+    void **n_next = (void **)((uint8_t *)node + next_offset);
+
+    if (*q_head == node) return; // Already at front
+
+    // Unlink node
+    if (*n_prev) *((void **)((uint8_t *)(*n_prev) + next_offset)) = *n_next;
+    if (*n_next) *((void **)((uint8_t *)(*n_next) + prev_offset)) = *n_prev;
+    if (*q_tail == node) *q_tail = *n_prev;
+
+    // Insert at front
+    *n_prev = NULL;
+    *n_next = *q_head;
+    if (*q_head) *((void **)((uint8_t *)(*q_head) + prev_offset)) = node;
+    *q_head = node;
+    if (!*q_tail) *q_tail = node;
+}
+
+static inline void _list_move_to_back(void *queue, void *node, size_t head_offset, size_t tail_offset, size_t prev_offset, size_t next_offset)
+{
+    Queue *q = (Queue *)((uint8_t *)queue + head_offset);
+    void **q_head = (void **)((uint8_t *)queue + head_offset);
+    void **q_tail = (void **)((uint8_t *)queue + tail_offset);
+    void **n_prev = (void **)((uint8_t *)node + prev_offset);
+    void **n_next = (void **)((uint8_t *)node + next_offset);
+
+    if (*q_tail == node) return; // Already at back
+
+    // Unlink node
+    if (*n_prev) *((void **)((uint8_t *)(*n_prev) + next_offset)) = *n_next;
+    if (*n_next) *((void **)((uint8_t *)(*n_next) + prev_offset)) = *n_prev;
+    if (*q_head == node) *q_head = *n_next;
+
+    // Insert at back
+    *n_next = NULL;
+    *n_prev = *q_tail;
+    if (*q_tail) *((void **)((uint8_t *)(*q_tail) + next_offset)) = node;
+    *q_tail = node;
+    if (!*q_head) *q_head = node;
+}
+
+// Macros for convenience
+#define list_move_to_front(q, n) \
+    _list_move_to_front(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*q), tail), offsetof(__typeof__(*n), prev), offsetof(__typeof__(*n), next))
+
+#define list_move_to_back(q, n) \
+    _list_move_to_back(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*q), tail), offsetof(__typeof__(*n), prev), offsetof(__typeof__(*n), next))
 
 static inline void _list_append(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
@@ -437,7 +508,6 @@ void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offse
 #define list_append(q, n) _list_append(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
-
 
 static inline int32_t find_first_nzeros(uint64_t x, int64_t n, uint32_t step_exp) {
     if (n <= 0 || n > 64) return -1;

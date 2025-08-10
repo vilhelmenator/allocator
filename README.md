@@ -14,6 +14,8 @@ typedef struct {
     _Atomic(uint64_t) reserved;     // Track reserved parts
     _Atomic(uint64_t) committed;    // Track committed virtual memory
     _Atomic(uint64_t) ranges;       // Memory extents
+    _Atomic(uint64_t) active;       // which regions live in local caches
+    _Atomic(uint64_t) abandoned;    // which regions have been abandoned by dead threads
     _Atomic(uint64_t) pending_release;
 } PartitionMasks;
 
@@ -73,14 +75,17 @@ typedef struct Allocator_t {
    
 4. **>256MB requests**: Forwarded to OS
 
+
 ## Thread Handling
 
 - Each arena marked with owner thread_id
 - Cross-thread frees handled via:
   - Counters for general case
   - Atomic lists for urgent reallocation
+  - Atomic masks for the arenas
 - Thread termination:
-  - Orphaned arenas marked (thread_id = -1)
+  - Orphaned arenas/implicit_lists marked (thread_id = -1)
+  - Marked as abandoned in the partition allocator
   - Completely unused arenas released
   - Others gradually adopted by allocating threads when freed
 

@@ -3,6 +3,8 @@
 #include "allocator.h"
 #include "os.h"
 #include "partition_allocator.h"
+#include "implicit_list.h"
+#include <stdatomic.h>
 
 extern PartitionAllocator *partition_allocator;
 static _Atomic(size_t) num_threads = (1);
@@ -28,29 +30,68 @@ static uint8_t main_allocator_buffer[MAIN_ALLOCATOR_SIZE] __attribute__((aligned
 
 static void allocator_thread_detach(Allocator* alloc)
 {
+    // disconnect all the pools.
+    for (int i = 0; i < POOL_BIN_COUNT; i++) {
+        Queue* queue = &alloc->pools[i];
+        Pool* start = queue->head;
+        while (start) {
+            Pool* next = start->next;
+            start->next = NULL;
+            start->prev = NULL;
+            start = next;
+        }
+    }
+    // free the arenas.
     for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
         Queue* queue = &alloc->arenas[i];
         Arena* start = queue->head;
         while (start) {
             Arena* next = start->next;
             
-            // 1. Remove from thread-local queue (no lock needed)
+            // Remove from thread-local queue (no lock needed)
             list_remove(queue, start);
             
-            // 2. ATOMICALLY: Mark as orphaned FIRST
-            atomic_store_explicit(&start->thread_id, -1, memory_order_release);
-            
-            // 3. Recheck in_use AFTER orphaning (prevents race)
+            // if the arena is empty, we remove it from memory
             if (atomic_load_explicit(&start->in_use, memory_order_acquire) == 0) {
                 // Safe to reclaim (no outstanding frees)
-                //partition_reclaim_arena(thread->partition, arena);
+                partition_allocator_free_blocks(partition_allocator, start, true);
             }
-            // Else: Arena will be adopted by thread calling free()
+            else {
+                // else we mark it as abandoned.
+                partition_allocator_abandon_blocks(partition_allocator, start);
+                atomic_store_explicit(&start->thread_id, -1, memory_order_release);
+            }
+
+            start = next;
+        }
+    }
+    
+    // free the implicits
+    for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
+        Queue* queue = &alloc->implicit[i];
+        ImplicitList* start = queue->head;
+        while (start) {
+            ImplicitList* next = start->next;
+            
+            // Remove from thread-local queue (no lock needed)
+            list_remove(queue, start);
+            
+            implicitList_move_deferred(start);
+            
+            if(start->num_allocations == 0)
+            {
+                // Safe to reclaim (no outstanding frees)
+                partition_allocator_free_blocks(partition_allocator, start, true);
+            }
+            else {
+                // else we mark it as abandoned.
+                partition_allocator_abandon_blocks(partition_allocator, start);
+                atomic_store_explicit(&start->thread_id, -1, memory_order_release); 
+            }
             
             start = next;
         }
     }
-
 }
 static void thread_done(void *a)
 {
@@ -251,7 +292,7 @@ extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
     Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), true};
     return allocator_malloc(&params);
 }
-extern inline void cfree(void *p)
+extern inline void __attribute__((free)) cfree(void *p)
 {
     if(p == NULL)
     {
@@ -313,8 +354,6 @@ bool callocator_release(void)
 void *crealloc(void *p, size_t s)
 {
     size_t csize = 0;
-    // if was in a pool. move it to a heap where it is cheaper to resize.
-    // heap can grow.
     size_t min_size = MIN(csize, s);
     void *new_ptr = cmalloc(s);
     memcpy(new_ptr, p, min_size);
@@ -325,33 +364,60 @@ void *crealloc(void *p, size_t s)
 
 // Allocating memory from the OS that will not conflict with any memory region
 // of the allocator.
-static uintptr_t os_alloc_hint = BASE_OS_ALLOC_ADDRESS;
+static _Atomic(uintptr_t) os_alloc_hint = BASE_OS_ALLOC_ADDRESS;
 void *cmalloc_os(size_t size)
 {
     // align size to page size
-    size += CACHE_LINE;
+    size += os_page_size;
     size = (size + (os_page_size - 1)) & ~(os_page_size - 1);
     
-    // look the counter while fetching our os memory.
-    void *ptr = alloc_memory((void *)os_alloc_hint, size, true);
-    if((uintptr_t)ptr == os_alloc_hint)
+    // we will allocate memory from the OS, so we can use the hint.
+    uintptr_t alloc_hint = atomic_load_explicit(&os_alloc_hint, memory_order_relaxed);
+    if (alloc_hint == 0) {
+        alloc_hint = BASE_OS_ALLOC_ADDRESS;
+    }
+    void *ptr = alloc_memory((void *)alloc_hint, size, true);
+    if((uintptr_t)ptr != NULL)
     {
-        os_alloc_hint = (uintptr_t)ptr + size;
+        // we were able to allocate the memory, .. yay!
+        // update the hint.
+        alloc_hint = (uintptr_t)ptr + size;
+        if (alloc_hint >= (uintptr_t)127 << 40) {
+            // something has been running for a very long time!
+            alloc_hint = BASE_OS_ALLOC_ADDRESS;
+        }
+        
+        atomic_store_explicit(&os_alloc_hint, alloc_hint, memory_order_relaxed);
     }
     else
     {
-        os_alloc_hint = (uintptr_t)ptr;
-    }
-    
-    if (os_alloc_hint >= (uintptr_t)127 << 40) {
-        // something has been running for a very long time!
-        os_alloc_hint = 0;
+        return NULL;
     }
 
     // write the allocation header
     uint64_t *_ptr = (uint64_t *)ptr;
-    *_ptr = (uint64_t)(uintptr_t)ptr + CACHE_LINE;
+    *_ptr = (uint64_t)(uintptr_t)ptr + os_page_size;
     *(++_ptr) = size;
 
-    return (void *)((uintptr_t)ptr + CACHE_LINE);
+    return (void *)((uintptr_t)ptr + os_page_size);
+}
+
+void cfree_os(void* ptr)
+{
+    // we need to free the memory that was allocated by the OS.
+    if (ptr == NULL) {
+        return;
+    }
+    if (ptr < (void *)BASE_OS_ALLOC_ADDRESS || ptr >= (void *)OS_ALLOC_END) {
+        // this is not a valid OS allocated memory.
+        return;
+    }
+    // we need to free the memory.
+    uint64_t *header = (uint64_t *)((uintptr_t)ptr - os_page_size);
+    size_t size = *(header + 1);
+    if (size < os_page_size) {
+        // invalid size, we cannot free this memory.
+        return;
+    }
+    free_memory((void *)header, size);
 }

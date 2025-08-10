@@ -67,14 +67,46 @@ PartitionAllocator* partition_allocator__create(void) {
     return allocator;
 }
 
-int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
+/*
+    Abandon blocks in a partition.  
+
+    This will mark the blocks as abandoned
+    and will allow the allocator to reclaim them later.
+*/
+bool partition_allocator_abandon_blocks(PartitionAllocator* palloc,
+                                     void* addr) {
+    PartitionLoc loc;
+    if(get_partition_location(palloc, addr, &loc) == -1)
+    {
+        // error... this address is outside of our ranges.
+        return false;
+    }
+    // Return the corresponding
+    Partition* partition = &palloc->partitions[loc.partition];
+    PartitionMasks* block = &partition->blocks[loc.block];
+    uint32_t range = get_range(loc.region, block->ranges);
+    
+    // Update allocation masks
+    uint64_t area_clear_mask = (range == 64)
+        ? ~0ULL
+        : ((1ULL << range) - 1) << loc.region;
+    
+    
+    atomic_fetch_or_explicit(&block->abandoned,
+                              area_clear_mask,
+                              memory_order_release);
+    
+    
+    return true;
+}
+bool partition_allocator_free_blocks(PartitionAllocator* palloc,
                                      void* addr,
                                      bool should_decommit) {
     PartitionLoc loc;
     if(get_partition_location(palloc, addr, &loc) == -1)
     {
         // error... this address is outside of our ranges.
-        return -1;
+        return false;
     }
     // Return the corresponding
     Partition* partition = &palloc->partitions[loc.partition];
@@ -126,10 +158,37 @@ int32_t partition_allocator_free_blocks(PartitionAllocator* palloc,
             }
         }
     }
-    return 0;
+    return true;
 }
 
-
+bool partition_allocator_claim_abandoned(PartitionAllocator* palloc,
+                                                  void* addr
+                                                  ) {
+    // Validate indices
+    if(palloc == NULL)
+    {
+        return false; // Invalid allocator
+    }   
+    PartitionLoc loc;
+    if(get_partition_location(palloc, addr, &loc) == -1)
+    {
+        // error... this address is outside of our ranges.
+        return false;
+    }
+    Partition* partition = &palloc->partitions[loc.partition];
+    PartitionMasks* block = &partition->blocks[loc.block];
+    
+    // Update allocation masks
+    uint64_t abandoned_mask = atomic_load(&block->abandoned);
+    uint64_t region_mask = (1ULL << loc.region);
+    if ((abandoned_mask & region_mask) != 0) {
+        if(atomic_fetch_and_explicit(&block->abandoned, ~region_mask, memory_order_acquire))
+        {
+            return true; // Successfully claimed the abandoned region
+        }
+    }
+    return false; // Region was not abandoned or already claimed
+}
 // Thread-safe allocation from a partition.
 void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                                                   int32_t partition_idx,

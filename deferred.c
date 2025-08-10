@@ -58,15 +58,14 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
     if(a->active == UINT64_MAX)
     {
         // if arena is full... we remove from allocator queue.
-        if(arena_is_connected(a) || queue->head == a)
+        if(is_connected_to_list(queue, a))
         {
-            list_remove(queue, a);
-            list_append(queue, a);
+            list_move_to_back(queue, a);
         }
     }
     else
     {   
-        if(!arena_is_connected(a) && queue->head != a)
+        if(is_not_connected_to_list(queue, a))
         {
             list_enqueue(queue, a);
         }
@@ -133,44 +132,6 @@ void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit) {
     }
 }
 
-void purge_unused_pools(Allocator* alloc, Arena *a)
-{
-    uint64_t used = atomic_load(&a->in_use);
-    if(used == 0)
-    {
-        // for each bit that is set in the active mask.
-        // those are in cached queues. Only pools set the active flag
-        // in arenas.
-        uint64_t active = atomic_load(&a->active);
-        uint64_t area_clear_mask = 1;
-        atomic_fetch_and_explicit(&a->active,
-                                  area_clear_mask,
-                                  memory_order_release);
-        
-        int32_t active_idx = get_next_mask_idx(active, 1);
-        while (active_idx != -1) {
-            
-            // get pool address.
-            int8_t pid = partition_id_from_addr((uintptr_t)a);
-            size_t area_size = region_size_from_partition_id(pid);
-            size_t block_size = area_size >> 6;
-            Pool* inactive_pool = (Pool*)((uintptr_t)a + (active_idx * block_size));
-            Queue* pqueue = &alloc->pools[inactive_pool->block_idx];
-            if(pool_is_connected(inactive_pool) || pqueue->head == inactive_pool)
-            {
-                list_remove(pqueue, inactive_pool);
-            }
-            active_idx = get_next_mask_idx(active, active_idx + 1);
-        }
-        
-        Queue *queue = &alloc->arenas[a->partition_id];
-        if(!arena_is_connected(a) && queue->head != a)
-        {
-            list_enqueue(queue, a);
-        }
-    }
-}
-
 // compute bounds and initialize
 void deferred_init(Allocator* a, void*p)
 {
@@ -178,14 +139,28 @@ void deferred_init(Allocator* a, void*p)
     if (pid >= 0 && pid < PARTITION_COUNT) {
         
         deferred_free*c = &a->c_deferred;
+        // compute the size of the region.
         size_t area_size = region_size_from_partition_id(pid);
         alloc_base *d = NULL;
-        
+        // If the address is not aligned to the region size, we cannot use it.
         uint32_t c_exp = ARENA_CHUNK_SIZE_EXPONENT(pid);
         uint64_t c_size = ARENA_CHUNK_SIZE(pid);
+        // c_size is the size of the chunk in bytes.
         uint64_t a_size = c_size * 64;
+        // If the address is not aligned to the chunk size, we cannot use it.
         Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
-        c->owned = h->thread_id == a->thread_id;
+        uint64_t thread_id = atomic_load(&h->thread_id);
+        // claim the arena if it is not claimed by a thread.
+        if(thread_id == -1)
+        {   
+            if(partition_allocator_claim_abandoned(partition_allocator, h))
+            {
+                // we can use this arena/implicit list.
+                atomic_store_explicit(&h->thread_id, a->thread_id, memory_order_release);
+                thread_id = a->thread_id;
+            }
+        }
+        c->owned = thread_id == a->thread_id;
         int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
         slot_type st = get_base_type((alloc_base*)h);
         bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
@@ -194,7 +169,6 @@ void deferred_init(Allocator* a, void*p)
             // If this partition is not active, that would mean we can safely
             // free it from the partition allocator.
             // but only if it aligned to the very top.
-            
             if(top_aligned)
             {
                 // This would be a whole region that is allocated
@@ -279,10 +253,17 @@ void deferred_release(Allocator* a, void* p)
                 pool->num_used -= c->num;
                 if(pool_is_unused(pool))
                 {
+                    // if the pool is unused, we can reset it.
                     pool_set_unused(pool, a);
-                    if(!pool_is_connected(pool) && pqueue->head != pool)
-                    {
+                    if(is_not_connected_to_list(pqueue,pool))
+                    {   
+                        // if the pool is not connected to the list, we add it to the list.
                         list_enqueue(pqueue, pool);
+                    }
+                    else
+                    {
+                        // we move pools that have memory to the front.
+                        list_move_to_front(pqueue, pool);
                     }
                 }
             }
@@ -293,23 +274,29 @@ void deferred_release(Allocator* a, void* p)
         }
         else
         {
+            // we don't own the deferred free list.
             slot_type st = get_base_type((alloc_base*)c->start);
             if(st == SLOT_POOL)
             {
+                // we are releasing to a pool.
                 alloc_base *d = (alloc_base*)c->start;
-                atomic_fetch_add_explicit(&d->thread_free_counter,c->num,memory_order_relaxed);
+                // just increment the thread free counter.
+                atomic_fetch_add_explicit(&d->thread_free_counter, c->num, memory_order_relaxed);
             }
             else if(st ==  SLOT_IMPLICIT)
             {
+                // we are releasing to an implicit list as a batch.
                 implicit_list_thread_free_batch((ImplicitList*)c->start, c->items.next, (Block*)c->tail);
             }
         }
+        // reset the deferred free list.
         if(p)
-        {
+        {   
             deferred_init(a, p);
         }
         else
         {
+            c->owned = false;
             c->items.next = 0;
             c->tail = 0;
             c->start = UINT64_MAX;

@@ -75,8 +75,8 @@ void* implicitList_place_aligned(ImplicitList *h, void *bp,  uint32_t asize, con
         }
         else {
             // the prefix size should have enough space for a valid block
-            implicitList_block_set_header((HeapBlock *)raw_addr, prefix_size, 0, prev_alloc);
-            implicitList_block_set_footer((HeapBlock *)raw_addr, prefix_size, 0);
+            implicitList_block_set_header((HeapBlock *)raw_addr, (uint32_t)prefix_size, 0, prev_alloc);
+            implicitList_block_set_footer((HeapBlock *)raw_addr, (uint32_t)prefix_size, 0);
             list_enqueue(&h->free_nodes, (QNode *)raw_addr);
         }
     }
@@ -98,8 +98,8 @@ void* implicitList_place_aligned(ImplicitList *h, void *bp,  uint32_t asize, con
     else 
     {
         HeapBlock *suffix_hb = (HeapBlock *)(user_addr + asize);
-        implicitList_block_set_header(suffix_hb, suffix_size, 0, 1);
-        implicitList_block_set_footer(suffix_hb, suffix_size, 0);
+        implicitList_block_set_header(suffix_hb, (uint32_t)suffix_size, 0, 1);
+        implicitList_block_set_footer(suffix_hb, (uint32_t)suffix_size, 0);
         list_enqueue(&h->free_nodes, (QNode *)suffix_hb);
     }
 

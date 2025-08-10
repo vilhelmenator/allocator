@@ -79,6 +79,10 @@ void* allocator_slot_region_alloc(Allocator*a,  const size_t as)
     return (void *)((uintptr_t)(a->c_slot.header));
 }
 
+void* allocator_slot_os_alloc(Allocator*a,  const size_t as)
+{
+    return (void *)((uintptr_t)(a->c_slot.header));
+}
 internal_alloc allocator_set_implicit_slot(Allocator *a, uintptr_t p, uint32_t min_size, uint32_t align)
 {
     if (p == 0UL)
@@ -115,6 +119,24 @@ internal_alloc allocator_set_region_slot(Allocator *a, uintptr_t p)
     a->c_slot.req_size = 0;
 
     return allocator_slot_region_alloc;
+}
+
+internal_alloc allocator_set_os_slot(Allocator *a, uintptr_t p, size_t size)
+{
+    if(p == 0UL)
+    {
+        return allocator_slot_alloc_null;
+    }
+    a->c_slot.header = (uintptr_t)p;
+    a->c_slot.type = SLOT_OS;
+    a->c_slot.offset = 0;
+    a->c_slot.end = size;
+    
+    a->c_slot.block_size = 0;
+    a->c_slot.alignment = os_page_size;
+    a->c_slot.req_size = 0;
+
+    return allocator_slot_os_alloc;
 }
 
 internal_alloc allocator_set_pool_slot(Allocator *a, Pool *p)
@@ -207,9 +229,9 @@ static inline void allocator_release_pool_slot(Allocator *a)
     {
         if(pool_is_consumed(p))
         {
-            if(pool_is_connected(p) || queue->head == p)
+            if(is_connected_to_list(queue, p))
             {
-                list_remove(queue, p);
+                list_move_to_back(queue, p);
             }
         }
         
@@ -251,10 +273,9 @@ static inline void allocator_release_arena_slot(Allocator *a)
         // if the first item in the list is empty, you can assume that all
         // the items in the list are empty.
         Queue *queue = &a->arenas[p->partition_id];
-        if(arena_is_connected(p) || queue->head == p)
+        if(is_connected_to_list(queue, p))
         {
-            list_remove(queue,p);
-            list_append(queue,p);
+            list_move_to_back(queue,p);
         }
     }
     a->c_slot.offset = 0;
@@ -312,29 +333,18 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
     
     while(start != NULL)
     {
-        if(((Pool*)start)->block_idx != pc)
-        {
-            alloc_base* next = start->next;
-            list_remove(queue, start);
-            start = next;
-            continue;
-        }
         if(pool_is_unused((Pool*)start))
         {
-            //list_remove(queue, start);
             pool_clear((Pool*)start);
-            //pool_post_unused((Pool*)start, alloc);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(!pool_is_consumed((Pool*)start))
         {
-            //list_remove(queue, start);
             return allocator_set_pool_slot(alloc, (Pool *)start);
         }
         else if(pool_is_consumed((Pool*)start))
         {
             alloc_base* next = start->next;
-            list_remove(queue, start);
             start = next;
         }
     }
@@ -409,7 +419,7 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
         // at this level we only store active states for pools.
         Pool* new_pool = (Pool*)new_chunk;
         Queue *pqueue = &alloc->pools[new_pool->block_idx];
-        if(pool_is_connected(new_pool) || pqueue->head == new_pool)
+        if(is_connected_to_list(pqueue, new_pool))
         {
             list_remove(pqueue, new_pool);
         }
@@ -620,10 +630,7 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
             {
                 break;
             }
-            else
-            {
-                // remove fron our cached lists.
-            }
+            
             
             start = next;
         }
@@ -664,7 +671,18 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
                                                             false);
         return allocator_set_region_slot(alloc, start);
     }
-    
+    else if(alloc->c_slot.type == SLOT_OS)
+    {
+        // we need to allocate a new OS page.
+        size_t size = alloc->c_back.max_size;
+        if(size < os_page_size)
+        {
+            size = os_page_size;
+        }
+        
+        // we allocate a new OS page.
+        return allocator_set_os_slot(alloc, cmalloc_os(size), size);
+    }
     return allocator_slot_alloc_null;
 }
 
@@ -875,7 +893,12 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
     {
         return;
     }
-    
+    if(p > BASE_OS_ALLOC_ADDRESS && p < (void*)OS_ALLOC_END)
+    {
+        // this is a memory that was allocated by the OS.
+        // we need to free it.
+        return cfree_os(p);
+    }
     // Lets compare the last memory handed out, to the freed memory
     void* res = (void*)(uintptr_t)(((a->c_slot.header) + a->c_slot.offset) - a->c_slot.req_size);
     if(res == p)
