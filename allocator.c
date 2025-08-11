@@ -681,7 +681,7 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
         }
         
         // we allocate a new OS page.
-        return allocator_set_os_slot(alloc, cmalloc_os(size), size);
+        return allocator_set_os_slot(alloc, (uintptr_t)cmalloc_os(size), size);
     }
     return allocator_slot_alloc_null;
 }
@@ -1008,3 +1008,87 @@ void allocator_free_th(Allocator *a, void *p)
     allocator_free(a, p);
 }
 
+size_t allocator_get_size(Allocator *a, void *p)
+{
+    if (p == NULL) {
+        return 0;
+    }
+    if(p > BASE_OS_ALLOC_ADDRESS && p < (void*)OS_ALLOC_END)
+    {
+        // this is a memory that was allocated by the OS.
+        // the size is stored in the header.
+        uint64_t *header = (uint64_t *)((uintptr_t)p - os_page_size);
+        return *(header + 1);
+    }
+    int32_t pid = partition_id_from_addr((uintptr_t)p);
+    if (pid >= 0 && pid < PARTITION_COUNT) {
+        
+        // compute the size of the region.
+        size_t area_size = region_size_from_partition_id(pid);
+        alloc_base *d = NULL;
+        // If the address is not aligned to the region size, we cannot use it.
+        uint32_t c_exp = ARENA_CHUNK_SIZE_EXPONENT(pid);
+        uint64_t c_size = ARENA_CHUNK_SIZE(pid);
+        // c_size is the size of the chunk in bytes.
+        uint64_t a_size = c_size * 64;
+        // If the address is not aligned to the chunk size, we cannot use it.
+        Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
+        uint64_t thread_id = atomic_load(&h->thread_id);
+        
+        int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
+        slot_type st = get_base_type((alloc_base*)h);
+        bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
+        if(idx == 0)
+        {
+            if(top_aligned)
+            {
+                // the address is aligned to the chunk size.
+                return a_size;
+            }
+            else
+            {
+                // this could be a pool or an implicit list.
+                switch (st) {
+                    case SLOT_ARENA:
+                        // Pools are stored in arenas.
+                        // the first pool slot is offset by the arena header.
+                        Pool* p = (Pool*)h + sizeof(Arena);
+                        return p->block_size;
+                    case SLOT_IMPLICIT:
+                        ImplicitList* il = (ImplicitList*)h;
+                        return implicitList_get_block_size(il, p);
+                    default:
+                        return 0;   
+                }
+            }
+        }
+        else
+        {
+            switch (st) {
+                case SLOT_ARENA:
+                    {
+                        // we are in an arena.
+                        if(top_aligned)
+                        {
+                            // the address is aligned to the chunk size.
+                            return a_size;
+                        }
+                        else // we are in a pool
+                        {
+                            Pool* p = (Pool*)h;
+                            return p->block_size;
+                        }
+                    }
+                    break;
+                case SLOT_IMPLICIT:
+                    {
+                        ImplicitList* il = (ImplicitList*)h;
+                        return implicitList_get_block_size(il, p);
+                    }
+                    break;
+                default:
+                    return 0;
+            }
+        }
+    }
+}

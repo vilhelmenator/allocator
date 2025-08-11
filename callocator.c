@@ -206,36 +206,33 @@ static int allocator_init(void)
     return 0;
 }
 
-// just like mi_malloc.
-// This needs to get started as soon as the process starts up.
-// same tricks applied.
 #if defined(__cplusplus)
-struct thread_init
-{
-    thread_init() { allocator_init(); }
-    ~thread_init() { allocator_destroy(); }
-};
-static thread_init init;
-#elif defined(WINDOWS)
-// set section property.
-typedef int cb(void);
-#if defined(_M_X64) || defined(_M_ARM64)
-__pragma(comment(linker, "/include:" "autostart"))
-__pragma(comment(linker, "/include:" "autoexit"))
-#pragma section(".CRT$XIU", long, read)
+namespace {
+    class ThreadInitializer {
+    public:
+        ThreadInitializer() { allocator_init(); }
+        ~ThreadInitializer() { allocator_destroy(); }
+    };
+    ThreadInitializer init;
+}
 #else
-__pragma(comment(linker, "/include:"
-                         "autostart"))
-#endif
-#pragma data_seg(".CRT$XIU")
-cb *autostart[] = {&allocator_init};
-cb *autoexit[] = {&allocator_destroy};
-#pragma data_seg() 
-
-#elif defined(__GNUC__) || defined(__clang__)
-static void __attribute__((constructor)) library_init(void) { allocator_init(); }
-static void __attribute__((destructor)) library_destroy(void) { allocator_destroy(); }
-#endif
+    // For C, we use constructor and destructor attributes to ensure the allocator is initialized and destroyed
+    #include <stddef.h>
+    #include <stdint.h>
+    #include <stdbool.h>    
+    #if defined(__GNUC__) || defined(__clang__)
+        __attribute__((constructor)) static void library_init(void) { allocator_init(); }
+        __attribute__((destructor)) static void library_destroy(void) { allocator_destroy(); }
+    #elif defined(_WIN32)
+        /* Windows-specific initialization */
+        #pragma section(".CRT$XIU", read)
+        __declspec(allocate(".CRT$XIU")) void (*autostart)(void) = allocator_init;
+        #pragma section(".CRT$XPU", read)
+        __declspec(allocate(".CRT$XPU")) void (*autoexit)(void) = allocator_destroy;
+    #else
+        #error "Platform not supported for automatic initialization"
+    #endif
+#endif // __cplusplus
 
 extern inline void __attribute__((malloc)) *cmalloc(size_t size) {
     
@@ -353,12 +350,47 @@ bool callocator_release(void)
 
 void *crealloc(void *p, size_t s)
 {
-    size_t csize = 0;
-    size_t min_size = MIN(csize, s);
+    // realloc is a bit tricky, we need to allocate a new memory
+    // and copy the old memory into the new memory.
+    if (p == NULL) {
+        return cmalloc(s);
+    }
+    if (s == 0) {
+        cfree(p);
+        return NULL;
+    }   
+    // we need query the size of the old memory.
+    Allocator *alloc = get_thread_instance();
+    size_t old_size = allocator_get_size(alloc, p);
+    if (old_size == 0) {
+        // we don't know the size of the old memory, so we cannot realloc.
+        return NULL;
+    }
+    if (s <= old_size) {
+        // we can just return the old memory, since it is large enough.
+        return p;
+    }
     void *new_ptr = cmalloc(s);
-    memcpy(new_ptr, p, min_size);
+    if (new_ptr == NULL) {
+        // we were not able to allocate the new memory.
+        return NULL;
+    }
+    // if our memory was in the OS slot, we might be able to remap it.
+    if (p > BASE_OS_ALLOC_ADDRESS && p < (void*)OS_ALLOC_END)
+    {       
+        // lets try to remap the memory.
+        if (remap_memory(p, new_ptr, s)) {
+            // we were able to remap the memory, so we can just return the new address.
+            // but we need to update the header.
+            uint64_t *header = (uint64_t *)((uintptr_t)p - os_page_size);
+            *(++header) = s;
+            return p;
+        }
+    }
+    // we were not able to remap the memory
+    memcpy(new_ptr, p, old_size);
     cfree(p);
-
+    
     return new_ptr;
 }
 

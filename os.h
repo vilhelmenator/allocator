@@ -109,35 +109,6 @@ static int thrd_detach(thrd_t *thread, int *res)
     return thrd_error;
 }
 
-static int mutex_init(mutex_t *mutex)
-{
-    InitializeCriticalSection(mutex);
-    return 0;
-}
-
-static int mutex_lock(mutex_t *mutex)
-{
-    EnterCriticalSection(mutex);
-    return 0;
-}
-
-static int mutex_trylock(mutex_t *mutex)
-{
-    return !TryEnterCriticalSection(mutex);
-}
-
-static int mutex_unlock(mutex_t *mutex)
-{
-    LeaveCriticalSection(mutex);
-    return 0;
-}
-
-static int mutex_destroy(mutex_t *mutex)
-{
-    DeleteCriticalSection(mutex);
-    return 0;
-}
-
 static int tls_create(tls_t *key, tls_dtor_t dtor)
 {
     if (!key)
@@ -202,31 +173,6 @@ static inline int thrd_sleep(const struct timespec *ts_in)
         return -2;
     }
     return 0;
-}
-
-static inline int mutex_init(mutex_t *mutex)
-{
-    return pthread_mutex_init(mutex, NULL);
-}
-
-static inline int mutex_lock(mutex_t *mutex)
-{
-    return pthread_mutex_lock(mutex);
-}
-
-static inline int mutex_trylock(mutex_t *mutex)
-{
-    return pthread_mutex_trylock(mutex);
-}
-
-static inline int mutex_unlock(mutex_t *mutex)
-{
-    return pthread_mutex_unlock(mutex);
-}
-
-static inline int mutex_destroy(mutex_t *mutex)
-{
-    return pthread_mutex_destroy(mutex);
 }
 
 static int tls_create(tls_t *key, tls_dtor_t dtor)
@@ -336,46 +282,96 @@ static inline bool protect_memory(void *addr, size_t size, bool protect)
 #endif
 }
 
-static inline bool remap_memory(void *old_addr, void *new_addr, size_t size)
-{
-#if defined(WINDOWS)
-    /*
-    int32_t numberOfPages = size/os_page_size;
-    int32_t numberOfPagesInitial = numberOfPages;
-    if(AllocateUserPhysicalPages( GetCurrentProcess(),
-                                         &numberOfPages,
-                                         aPFNs ))
-    {
-        if(numberOfPagesInitial == numberOfPages)
-        {
-            if(MapUserPhysicalPages(new_addr, )
-        }
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
 
-    }*/
-
-    return false;
+#if defined(_WIN32)
+#include <windows.h>
+#include <memoryapi.h>
 #elif defined(__linux__)
-    if (mremap(old_addr, size, MREMAP_FIXED | MREMAP_MAYMOVE, new_addr) != MAP_FAILED) {
-        // I think linux unmaps the old address.
-        return true;
-    }
+#include <sys/mman.h>
 #elif defined(__APPLE__)
-
-    vm_prot_t curProtection, maxProtection;
-    if (vm_remap(mach_task_self(), (vm_address_t *)new_addr, size,
-                 0, // mask
-                 0, // anywhere
-                 mach_task_self(), (vm_address_t)old_addr,
-                 0, // copy
-                 &curProtection, &maxProtection, VM_INHERIT_COPY) != KERN_NO_SPACE) {
-        // do we need to unmap the old address
-        return munmap(old_addr, size) == 0;
-    }
-#else
-    //
+#include <mach/mach.h>
+#include <sys/mman.h>
 #endif
+
+static inline bool remap_memory(void *old_addr, void *new_addr, size_t size) {
+#if defined(_WIN32)
+    // --- Windows Implementation ---
+    // Try to reserve the new address first
+    void *reserved = VirtualAlloc2(
+        GetCurrentProcess(),
+        new_addr,
+        size,
+        MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+        PAGE_NOACCESS,
+        NULL,
+        0
+    );
+    if (reserved != new_addr) {
+        if (reserved) VirtualFree(reserved, 0, MEM_RELEASE);
+        return false;
+    }
+
+    // Map the old memory to the new location
+    void *result = VirtualAlloc2(
+        GetCurrentProcess(),
+        new_addr,
+        size,
+        MEM_COMMIT | MEM_REPLACE_PLACEHOLDER,
+        PAGE_READWRITE,
+        old_addr,
+        0
+    );
+
+    if (result != new_addr) {
+        VirtualFree(new_addr, 0, MEM_RELEASE);
+        return false;
+    }
+
+    // Free the old memory
+    VirtualFree(old_addr, 0, MEM_RELEASE);
+    return true;
+
+#elif defined(__linux__)
+    // --- Linux Implementation (mremap) ---
+    void *result = mremap(old_addr, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, new_addr);
+    if (result == MAP_FAILED) {
+        return false;
+    }
+    return true;
+
+#elif defined(__APPLE__)
+    // --- macOS Implementation (vm_remap) ---
+    vm_prot_t cur_prot, max_prot;
+    kern_return_t ret = vm_remap(
+        mach_task_self(),
+        (vm_address_t *)&new_addr,
+        size,
+        0,  // mask
+        VM_FLAGS_FIXED,  // force new_addr
+        mach_task_self(),
+        (vm_address_t)old_addr,
+        FALSE,  // copy (not needed since we unmap old)
+        &cur_prot,
+        &max_prot,
+        VM_INHERIT_DEFAULT
+    );
+
+    if (ret != KERN_SUCCESS) {
+        return false;
+    }
+
+    // Unmap the old memory
+    munmap(old_addr, size);
+    return true;
+
+#else
     return false;
+#endif
 }
+
 static inline size_t get_stack_limit(void)
 {
     struct rlimit limit;
@@ -383,6 +379,7 @@ static inline size_t get_stack_limit(void)
     getrlimit (RLIMIT_STACK, &limit);
     return limit.rlim_max;
 }
+
 static inline size_t get_os_page_size(void)
 {
 #ifdef WINDOWS
@@ -395,27 +392,25 @@ static inline size_t get_os_page_size(void)
 }
 
 extern __thread Allocator *thread_instance;
-static inline uintptr_t get_thread_id(void)
-{
-#if defined(WINDOWS)
-    return (uintptr_t)NtCurrentTeb();
-#elif defined(__GNUC__)
-    void *res;
-#if defined(__APPLE__)
-#if defined(__x86_64__)
-    const size_t ofs = 0;
-    __asm__("movq %%gs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
-#elif defined(__aarch64__)
-    __asm__ volatile ("mrs %0,tpidrro_el0" : "=r" (res));
-#endif
-#elif defined(__x86_64__)
-    const size_t ofs = 0;
-    __asm__("movq %%fs:%1, %0" : "=r"(res) : "m"(*((void **)ofs)) :);
-#endif
-    return (uintptr_t)res;
+
+static inline uintptr_t get_thread_id(void) {
+#if defined(_WIN32)
+    return (uintptr_t)NtCurrentTeb();  // Windows
+#elif defined(__linux__) && defined(__x86_64__)
+    uintptr_t res;
+    __asm__("movq %%fs:0, %0" : "=r" (res));  // Linux x86-64 (FS)
+    return res;
+#elif defined(__APPLE__) && defined(__aarch64__)
+    uintptr_t res;
+    __asm__ volatile ("mrs %0, tpidrro_el0" : "=r" (res));  // macOS ARM64
+    return res;
+#elif defined(__APPLE__) && defined(__x86_64__)
+    uintptr_t res;
+    __asm__("movq %%gs:0, %0" : "=r" (res));  // macOS x86-64 (GS)
+    return res;
 #else
+    // Fallback: Use thread-local variable address as a unique identifier
     return (uintptr_t)&thread_instance;
 #endif
 }
-
 #endif

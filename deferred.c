@@ -181,9 +181,11 @@ void deferred_init(Allocator* a, void*p)
             {
                 // this could be a pool or an implicit list.
                 switch (st) {
-                    case SLOT_POOL:
+                    case SLOT_ARENA:
                     {
-                        c->start = (uintptr_t)h;
+                        // The arena is stored at the start of the region.
+                        // the first pool slot is offset by the arena header.
+                        c->start = (uintptr_t)h + sizeof(Arena);
                         c->end = c->start + c_size;
                         d = (alloc_base*)c->start;
                         break;
@@ -204,22 +206,37 @@ void deferred_init(Allocator* a, void*p)
         }
         else
         {
-
-            if(top_aligned)
-            {
-                arena_free_blocks(a, h, idx);
-                // if an arena becomes empty
-                // we remove it from our lists of arenas...
-                // but we still keep one arena around.
-                a->c_slot.header = 0;
-                return;
-            }
-            else
-            {
-                c->start = ((uintptr_t)h + idx*c_size);
-                c->end = c->start + c_size;
-                d = (alloc_base*)c->start;
-            }
+            switch (st) {
+                case SLOT_ARENA:
+                    {
+                        // we are in an arena.
+                        if(top_aligned)
+                        {
+                            arena_free_blocks(a, h, idx);
+                            // if an arena becomes empty
+                            // we remove it from our lists of arenas...
+                            // but we still keep one arena around.
+                            a->c_slot.header = 0;
+                            return;
+                        }
+                        else // we are in a pool
+                        {
+                            c->start = ((uintptr_t)h + idx*c_size);
+                            c->end = c->start + c_size;
+                            d = (alloc_base*)c->start;
+                        }
+                    }
+                    break;
+                case SLOT_IMPLICIT:
+                    {
+                        c->start = (uintptr_t)h;
+                        c->end = c->start + a_size;
+                        d = (alloc_base*)c->start;
+                    }
+                    break;
+                default:
+                    break;
+                }
         }
         if(c->owned)
         {
