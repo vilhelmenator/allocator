@@ -69,7 +69,7 @@ void* implicitList_place_aligned(ImplicitList *h, void *bp,  uint32_t asize, con
     if (prefix_size > 0 && prefix_size < MIN_BLOCK_SIZE) {
         user_addr = raw_addr + ((MIN_BLOCK_SIZE + alignment - 1) & ~(alignment - 1));
         prefix_size = user_addr - raw_addr;
-        if ((prefix_size + asize + HEADER_FOOTER_OVERHEAD) >= bsize) {
+        if ((prefix_size + asize + HEADER_FOOTER_OVERHEAD) >= (uintptr_t)bsize) {
             // Not enough space for aligned block, fail allocation
             return NULL;
         }
@@ -239,7 +239,7 @@ bool resize_block(ImplicitList *h, void *bp, int32_t size)
     }
     //
     const size_t next_size = next_header & ~0x7;
-    if ((bsize + next_size) >= size) {
+    if ((bsize + next_size) >= (size_t)size) {
         // merge the two blocks
         const uint32_t prev_alloc = (header & 0x3) >> 1;
         size += next_size;
@@ -392,6 +392,7 @@ void implicit_list_thread_free(ImplicitList* list, Block* block) {
 }
 
 void implicit_list_thread_free_batch(ImplicitList* list, Block* head, Block* tail, uint32_t num) {
+    UNUSED(num);
     // Link the batch to current head
     tail->next = atomic_load_explicit(&list->thread_free, memory_order_relaxed);
     

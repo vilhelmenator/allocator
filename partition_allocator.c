@@ -197,7 +197,7 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                                                   bool active) {
     Partition* partition = &allocator->partitions[partition_idx];
     // Find and reserve a free block (atomic CAS loop).
-    for (int i = 0; i < partition->num_blocks; i++) {
+    for (size_t i = 0; i < partition->num_blocks; i++) {
         PartitionMasks* block = &partition->blocks[i];
         uint64_t free_mask = atomic_load(&block->reserved);
         uint64_t region_size = partition->blockSize/64;

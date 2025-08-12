@@ -41,7 +41,7 @@
 #include <stdatomic.h>
 #endif
 
-typedef int (*thrd_start_t)(void *);
+typedef void* (*thrd_start_t)(void *);
 typedef void (*tls_dtor_t)(void *);
 enum { thrd_success, thrd_nomem, thrd_timedout, thrd_busy, thrd_error };
 
@@ -136,7 +136,6 @@ static int tls_set(tls_t key, void *val)
 
 typedef pthread_t thrd_t;
 typedef pthread_key_t tls_t;
-typedef int (*thrd_start_t)(void *);
 typedef pthread_mutex_t mutex_t;
 
 #define thrd_current() pthread_self()
@@ -149,7 +148,6 @@ static inline int thrd_create(thrd_t *thr, thrd_start_t func, void *arg)
 {
     if (!thr)
         return thrd_error;
-    // 
     if (pthread_create(thr, NULL, (void *(*)(void *))func, arg) != 0) {
         return thrd_error;
     }

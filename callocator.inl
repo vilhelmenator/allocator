@@ -13,7 +13,7 @@ typedef SSIZE_T ssize_t;
 #else
 #define cache_align __attribute__((aligned(CACHE_LINE)))
 #endif
-
+#define UNUSED(x) (void)(x)
 #define SZ_KB 1024ULL
 #define SZ_MB (SZ_KB * SZ_KB)
 #define SZ_GB (SZ_MB * SZ_KB)

@@ -7,4 +7,4 @@ void *allocator_malloc(Allocator_param *prm);
 bool allocator_release_local_areas(Allocator *a);
 void allocator_free(Allocator *a, void *p);
 void allocator_free_th(Allocator *a, void *p);
-size_t allocator_get_size(Allocator *a, void *p);
+size_t allocator_get_size(void *p);

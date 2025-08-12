@@ -52,8 +52,8 @@ static inline Arena* arena_get_header(uintptr_t addr)
 static inline bool arena_is_connected(const Arena *s) { return s->prev != NULL || s->next != NULL; }
 void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_in_blocks);
 void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit);
-void arena_unuse_blocks(Allocator* alloc, Arena *a, int start_bit);
-void arena_use_blocks(Allocator* alloc, Arena *a, int start_bit);
-void arena_set_dirty_blocks(Allocator* alloc, Arena *a, int start_bit);
+void arena_unuse_blocks(Arena *a, int start_bit);
+void arena_use_blocks(Arena *a, int start_bit);
+void arena_set_dirty_blocks(Arena *a, int start_bit);
 void arena_clear_dirty(Arena *a);
 #endif // ARENA_H

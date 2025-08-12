@@ -120,7 +120,7 @@ static inline uintptr_t align_up(uintptr_t sz, size_t alignment)
 
 bool test_alloc(size_t allocation_size, bool test_align)
 {
-
+    UNUSED(test_align);
     bool result = true;
     bool from_pool = false;
     if(allocation_size <= (1 << 15))
@@ -172,7 +172,7 @@ bool test_alloc(size_t allocation_size, bool test_align)
         variables[i] = (uint64_t *)all;
         uintptr_t end = align_up((uintptr_t)variables[i], pool_size);
         intptr_t delta = (end - (uintptr_t)variables[i]);
-        if (delta < allocation_size) {
+        if (delta < (intptr_t)allocation_size) {
             result = false;
             goto end;
         }
@@ -324,7 +324,7 @@ bool test_alloc_aligned(size_t allocation_size)
         if((uintptr_t)all != end)
         {
             intptr_t delta = (end - (uintptr_t)all);
-            if (delta < allocation_size) {
+            if (delta < (intptr_t)allocation_size) {
                 num_small_allocations = i;
                 result = false;
                 cfree(all);

@@ -360,8 +360,7 @@ void *crealloc(void *p, size_t s)
         return NULL;
     }   
     // we need query the size of the old memory.
-    Allocator *alloc = get_thread_instance();
-    size_t old_size = allocator_get_size(alloc, p);
+    size_t old_size = allocator_get_size(p);
     if (old_size == 0) {
         // we don't know the size of the old memory, so we cannot realloc.
         return NULL;

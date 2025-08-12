@@ -72,7 +72,7 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
     }
 }
 
-void arena_unuse_blocks(Allocator* alloc, Arena *a, int start_bit)
+void arena_unuse_blocks(Arena *a, int start_bit)
 {
     uint64_t ranges = atomic_load(&a->ranges);
     uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
@@ -83,7 +83,7 @@ void arena_unuse_blocks(Allocator* alloc, Arena *a, int start_bit)
                               memory_order_release);
 }
 
-void arena_use_blocks(Allocator* alloc, Arena *a, int start_bit)
+void arena_use_blocks(Arena *a, int start_bit)
 {
     uint64_t ranges = atomic_load(&a->ranges);
     uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
@@ -94,7 +94,7 @@ void arena_use_blocks(Allocator* alloc, Arena *a, int start_bit)
                               memory_order_release);
 }
 
-void arena_set_dirty_blocks(Allocator* alloc, Arena *a, int start_bit)
+void arena_set_dirty_blocks(Arena *a, int start_bit)
 {
     uint64_t ranges = atomic_load(&a->ranges);
     uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
@@ -180,7 +180,7 @@ void deferred_init(Allocator* a, void*p)
         uint64_t a_size = c_size * 64;
         // If the address is not aligned to the chunk size, we cannot use it.
         Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
-        uint64_t thread_id = atomic_load(&h->thread_id);
+        int64_t thread_id = atomic_load(&h->thread_id);
         // claim the arena if it is not claimed by a thread.
         if(thread_id == -1)
         {   
@@ -191,7 +191,7 @@ void deferred_init(Allocator* a, void*p)
                 thread_id = a->thread_id;
             }
         }
-        c->owned = thread_id == a->thread_id;
+        c->owned = (uintptr_t)thread_id == a->thread_id;
         int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
         slot_type st = get_base_type((alloc_base*)h);
         bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
@@ -217,10 +217,9 @@ void deferred_init(Allocator* a, void*p)
                         // The arena is stored at the start of the region.
                         // the first pool slot is offset by the arena header.
                         // mark the arena as dirty
-                        arena_set_dirty_blocks(a, h, idx);
+                        arena_set_dirty_blocks(h, idx);
                         c->start = ALIGN_CACHE((uintptr_t)h + sizeof(Arena));
                         c->end = c->start + c_size;
-                        d = (alloc_base*)c->start;
                         break;
                     }
                     case SLOT_IMPLICIT:
@@ -229,7 +228,6 @@ void deferred_init(Allocator* a, void*p)
                         // within a sub-region of a partition.
                         c->start = (uintptr_t)h;
                         c->end = c->start + a_size;
-                        d = (alloc_base*)c->start;
                         break;
                     }
                     default:
@@ -255,10 +253,9 @@ void deferred_init(Allocator* a, void*p)
                         else // we are in a pool
                         {
                             // mark the arena as dirty
-                            arena_set_dirty_blocks(a, h, idx);
+                            arena_set_dirty_blocks(h, idx);
                             c->start = ((uintptr_t)h + idx*c_size);
                             c->end = c->start + c_size;
-                            d = (alloc_base*)c->start;
                         }
                     }
                     break;
@@ -266,13 +263,14 @@ void deferred_init(Allocator* a, void*p)
                     {
                         c->start = (uintptr_t)h;
                         c->end = c->start + a_size;
-                        d = (alloc_base*)c->start;
+                        
                     }
                     break;
                 default:
                     break;
                 }
         }
+        d = (alloc_base*)c->start;
         if(c->owned)
         {
             ((Block*)p)->next = d->deferred_free;
@@ -306,7 +304,7 @@ void deferred_release(Allocator* a, void* p)
                 if(pool_is_unused(pool))
                 {
                     // if the pool is unused, we can reset it.
-                    pool_set_unused(pool, a);
+                    pool_set_unused(pool);
                     if(is_not_connected_to_list(pqueue,pool))
                     {   
                         // if the pool is not connected to the list, we add it to the list.

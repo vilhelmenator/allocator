@@ -45,7 +45,7 @@ static inline uint8_t size_to_pool(const size_t as)
 
 static inline bool pool_is_connected(Pool *p) { return p->prev != NULL || p->next != NULL; }
 static inline bool pool_is_unused(const Pool *p) {
-    uint64_t thread_free_count = atomic_load(&p->thread_free_counter);
+    int32_t thread_free_count = (int32_t)atomic_load(&p->thread_free_counter);
     return p->num_used == thread_free_count;
 }
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
@@ -54,7 +54,7 @@ static inline uint8_t* pool_base_address(Pool *p)
     return (uint8_t*)(ALIGN_UP_2((uintptr_t)p + sizeof(Pool), p->alignment));
 }
 
-static inline void pool_post_unused(Pool *p, Allocator* a)
+static inline void pool_post_unused(Pool *p)
 {
     //
     // free/active
@@ -65,10 +65,10 @@ static inline void pool_post_unused(Pool *p, Allocator* a)
     int32_t pidx = p->idx >> 4;
 
     // label the area as in not in use
-    arena_unuse_blocks(a, arena, pidx);
+    arena_unuse_blocks(arena, pidx);
 }
 
-static inline void pool_post_used(Pool *p, Allocator* a)
+static inline void pool_post_used(Pool *p)
 {
     // used/active
     uint8_t pid = partition_id_from_addr((uintptr_t)p);
@@ -76,7 +76,7 @@ static inline void pool_post_used(Pool *p, Allocator* a)
     Arena *arena = (Arena *)((uintptr_t)p & ~(asize - 1));
     uint32_t pidx = p->idx >> 4;
 
-    arena_use_blocks(a, arena, pidx);
+    arena_use_blocks(arena, pidx);
 }
 
 static inline void pool_clear(Pool *p)
@@ -87,9 +87,9 @@ static inline void pool_clear(Pool *p)
     p->deferred_free = NULL;
 }
 
-static inline void pool_set_unused(Pool *p, Allocator* a)
+static inline void pool_set_unused(Pool *p)
 {
-    pool_post_unused(p, a);
+    pool_post_unused(p);
     // the last piece was returned so make the first item the start of the free
     pool_clear(p);
 }
@@ -134,11 +134,11 @@ static inline bool pool_is_consumed(Pool *p)
     return true;
 }
 
-static inline void pool_free_block(Pool *p, void *block, Allocator* a)
+static inline void pool_free_block(Pool *p, void *block)
 {
     --p->num_used;
     if (pool_is_unused(p)) {
-        pool_set_unused(p, a);
+        pool_set_unused(p);
         return;
     }
 
@@ -146,11 +146,11 @@ static inline void pool_free_block(Pool *p, void *block, Allocator* a)
     p->free = (Block *)block;
 }
 
-static inline void *pool_get_free_block(Pool *p, Allocator* a)
+static inline void *pool_get_free_block(Pool *p)
 {
     uint8_t *base_addr = pool_base_address(p);
     if (p->num_used++ == 0) {
-        pool_post_used(p, a);
+        pool_post_used(p);
         p->free = NULL;
         return base_addr;
     }
@@ -169,10 +169,10 @@ static inline void *pool_get_free_block(Pool *p, Allocator* a)
 }
 
 
-static inline void *pool_aquire_block(Pool *p, Allocator* a)
+static inline void *pool_aquire_block(Pool *p)
 {
     if (p->free != NULL) {
-        return pool_get_free_block(p, a);
+        return pool_get_free_block(p);
     }
     if (!pool_is_fully_commited(p)) {
         return pool_extend(p);
@@ -180,7 +180,7 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
         pool_claim_thread_frees(p);
         if (p->deferred_free != NULL) {
             pool_move_deferred(p);
-            return pool_get_free_block(p, a);
+            return pool_get_free_block(p);
         }
         return NULL;
     }
