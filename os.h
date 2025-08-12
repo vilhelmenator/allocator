@@ -149,6 +149,7 @@ static inline int thrd_create(thrd_t *thr, thrd_start_t func, void *arg)
 {
     if (!thr)
         return thrd_error;
+    // 
     if (pthread_create(thr, NULL, (void *(*)(void *))func, arg) != 0) {
         return thrd_error;
     }

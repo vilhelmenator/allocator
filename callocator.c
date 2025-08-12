@@ -289,7 +289,7 @@ extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
     Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), true};
     return allocator_malloc(&params);
 }
-extern inline void __attribute__((free)) cfree(void *p)
+extern inline void cfree(void *p)
 {
     if(p == NULL)
     {
@@ -376,8 +376,8 @@ void *crealloc(void *p, size_t s)
         return NULL;
     }
     // if our memory was in the OS slot, we might be able to remap it.
-    if (p > BASE_OS_ALLOC_ADDRESS && p < (void*)OS_ALLOC_END)
-    {       
+    if ((uintptr_t)p > BASE_OS_ALLOC_ADDRESS && (uintptr_t)p < OS_ALLOC_END)
+    {
         // lets try to remap the memory.
         if (remap_memory(p, new_ptr, s)) {
             // we were able to remap the memory, so we can just return the new address.
@@ -409,7 +409,7 @@ void *cmalloc_os(size_t size)
         alloc_hint = BASE_OS_ALLOC_ADDRESS;
     }
     void *ptr = alloc_memory((void *)alloc_hint, size, true);
-    if((uintptr_t)ptr != NULL)
+    if((uintptr_t)ptr != 0)
     {
         // we were able to allocate the memory, .. yay!
         // update the hint.

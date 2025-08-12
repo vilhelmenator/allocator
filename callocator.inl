@@ -218,10 +218,7 @@ static inline void init_base(alloc_base*f)
     f->next = NULL;
 }
 
-// to infer between a pool and an arena.
-// the first bit after the heap header:
-//  1 for an arena.
-//  0 for a pool.
+
 typedef struct Pool_t
 {
     // 56 byte header
@@ -236,6 +233,7 @@ typedef struct Pool_t
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
     // 32 byte body
+    _Atomic(Block*) thread_free;
     int32_t num_used;
     int32_t num_committed;
     int32_t num_available;
@@ -273,7 +271,8 @@ typedef struct Arena_t
     // 64 byte cache line and arena body.
     _Atomic(uint64_t)  in_use;   // which have memory handed out to the app
     _Atomic(uint64_t)  active;   // which are active in cache structs
-    _Atomic(uint64_t)  ranges;
+    _Atomic(uint64_t)  ranges;   // how many chunks follow each allocation
+    _Atomic(uint64_t)  dirty;    // which pools have thread free items in them.
     _Atomic(uint64_t)  zero;
     
 } Arena; // 128 bytes
@@ -425,7 +424,6 @@ static inline bool _is_not_connected_to_list(void *queue, void *node, size_t hea
 static inline void _list_move_to_front(void *queue, void *node, size_t head_offset, size_t tail_offset, size_t prev_offset, size_t next_offset)
 {
     // Get pointers to queue, node, and their fields
-    Queue *q = (Queue *)((uint8_t *)queue + head_offset);
     void **q_head = (void **)((uint8_t *)queue + head_offset);
     void **q_tail = (void **)((uint8_t *)queue + tail_offset);
     void **n_prev = (void **)((uint8_t *)node + prev_offset);
@@ -448,7 +446,6 @@ static inline void _list_move_to_front(void *queue, void *node, size_t head_offs
 
 static inline void _list_move_to_back(void *queue, void *node, size_t head_offset, size_t tail_offset, size_t prev_offset, size_t next_offset)
 {
-    Queue *q = (Queue *)((uint8_t *)queue + head_offset);
     void **q_head = (void **)((uint8_t *)queue + head_offset);
     void **q_tail = (void **)((uint8_t *)queue + tail_offset);
     void **n_prev = (void **)((uint8_t *)node + prev_offset);

@@ -27,8 +27,6 @@ Allocator *allocator_aquire(uintptr_t thread_id, uintptr_t thr_mem)
     Queue *arena_queue = (Queue *)thr_mem;
     thr_mem = ALIGN_CACHE(thr_mem + sizeof(Queue) * PARTITION_COUNT);
     Queue *implicit_queue = (Queue *)thr_mem;
-    thr_mem = (uintptr_t)alloc + DEFAULT_OS_PAGE_SIZE;
-    thr_mem -= ALIGN_CACHE(sizeof(PartitionAllocator));
     
     alloc->pools = pool_queue;
     alloc->arenas = arena_queue;
@@ -130,10 +128,10 @@ internal_alloc allocator_set_os_slot(Allocator *a, uintptr_t p, size_t size)
     a->c_slot.header = (uintptr_t)p;
     a->c_slot.type = SLOT_OS;
     a->c_slot.offset = 0;
-    a->c_slot.end = size;
+    a->c_slot.end = (int32_t)size;
     
     a->c_slot.block_size = 0;
-    a->c_slot.alignment = os_page_size;
+    a->c_slot.alignment = (int32_t)os_page_size;
     a->c_slot.req_size = 0;
 
     return allocator_slot_os_alloc;
@@ -331,7 +329,7 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
     Queue *queue = &alloc->pools[pc];
     alloc_base* start = queue->head;
     
-    while(start != NULL)
+    if(start != NULL)
     {
         if(pool_is_unused((Pool*)start))
         {
@@ -344,8 +342,7 @@ internal_alloc allocator_malloc_pool_find_fit(Allocator* alloc, const uint32_t p
         }
         else if(pool_is_consumed((Pool*)start))
         {
-            alloc_base* next = start->next;
-            start = next;
+            list_move_to_back(queue, start);
         }
     }
     return allocator_slot_alloc_null;
@@ -368,7 +365,13 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
     {
         Arena* arena = (Arena*)start;
         alloc_base* next = start->next;
-    
+
+        uint64_t dirty = atomic_load(&arena->dirty);
+        if(dirty != 0)
+        {
+            // if the arena has dirty blocks, we need to clear them.
+            arena_clear_dirty(arena);
+        }
         uint64_t in_use = atomic_load(&arena->in_use);
         if(in_use != UINT64_MAX)
         {
@@ -893,7 +896,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
     {
         return;
     }
-    if(p > BASE_OS_ALLOC_ADDRESS && p < (void*)OS_ALLOC_END)
+    if((uintptr_t)p > BASE_OS_ALLOC_ADDRESS && (uintptr_t)p < OS_ALLOC_END)
     {
         // this is a memory that was allocated by the OS.
         // we need to free it.
@@ -1013,7 +1016,7 @@ size_t allocator_get_size(Allocator *a, void *p)
     if (p == NULL) {
         return 0;
     }
-    if(p > BASE_OS_ALLOC_ADDRESS && p < (void*)OS_ALLOC_END)
+    if((uintptr_t)p > BASE_OS_ALLOC_ADDRESS && (uintptr_t)p < OS_ALLOC_END)
     {
         // this is a memory that was allocated by the OS.
         // the size is stored in the header.
@@ -1025,7 +1028,6 @@ size_t allocator_get_size(Allocator *a, void *p)
         
         // compute the size of the region.
         size_t area_size = region_size_from_partition_id(pid);
-        alloc_base *d = NULL;
         // If the address is not aligned to the region size, we cannot use it.
         uint32_t c_exp = ARENA_CHUNK_SIZE_EXPONENT(pid);
         uint64_t c_size = ARENA_CHUNK_SIZE(pid);
@@ -1033,7 +1035,6 @@ size_t allocator_get_size(Allocator *a, void *p)
         uint64_t a_size = c_size * 64;
         // If the address is not aligned to the chunk size, we cannot use it.
         Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
-        uint64_t thread_id = atomic_load(&h->thread_id);
         
         int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
         slot_type st = get_base_type((alloc_base*)h);
@@ -1050,13 +1051,17 @@ size_t allocator_get_size(Allocator *a, void *p)
                 // this could be a pool or an implicit list.
                 switch (st) {
                     case SLOT_ARENA:
+                    {
                         // Pools are stored in arenas.
                         // the first pool slot is offset by the arena header.
-                        Pool* p = (Pool*)h + sizeof(Arena);
+                        Pool* p = (Pool*)ALIGN_CACHE((uintptr_t)h + sizeof(Arena));
                         return p->block_size;
+                    }
                     case SLOT_IMPLICIT:
+                    {
                         ImplicitList* il = (ImplicitList*)h;
                         return implicitList_get_block_size(il, p);
+                    }
                     default:
                         return 0;   
                 }
@@ -1091,4 +1096,5 @@ size_t allocator_get_size(Allocator *a, void *p)
             }
         }
     }
+    return 0;
 }

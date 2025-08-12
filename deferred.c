@@ -94,6 +94,17 @@ void arena_use_blocks(Allocator* alloc, Arena *a, int start_bit)
                               memory_order_release);
 }
 
+void arena_set_dirty_blocks(Allocator* alloc, Arena *a, int start_bit)
+{
+    uint64_t ranges = atomic_load(&a->ranges);
+    uint32_t size_in_blocks = get_range((uint32_t)start_bit, ranges);
+    uint64_t area_clear_mask =
+        (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << start_bit;
+    atomic_fetch_or_explicit(&a->dirty,
+                              area_clear_mask,
+                              memory_order_release);
+}
+
 void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit) {
     
     uint64_t ranges = atomic_load(&a->ranges);
@@ -129,6 +140,26 @@ void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit) {
         //    list_remove(queue, a);
         //}
         //partition_allocator_free_blocks(partition_allocator, a, true);
+    }
+}
+
+void arena_clear_dirty(Arena *a)
+{
+    // for every dirty block, we clear the dirty bit.  
+    uint32_t c_size = (uint32_t)ARENA_CHUNK_SIZE(a->partition_id);
+    uint64_t dirty = atomic_load(&a->dirty);
+    if(dirty != 0)
+    {
+        uint64_t new_mask = 0ULL;
+        if(atomic_compare_exchange_strong(&a->dirty, &dirty, new_mask))
+        {
+            int32_t chunk_idx = get_next_mask_idx(dirty, 0);
+            while (chunk_idx != -1) {
+                Pool* pool = (Pool*)((uintptr_t)a + (chunk_idx * c_size));
+                pool_claim_thread_frees(pool);
+                chunk_idx = get_next_mask_idx(dirty, chunk_idx + 1);
+            }
+        }
     }
 }
 
@@ -185,7 +216,9 @@ void deferred_init(Allocator* a, void*p)
                     {
                         // The arena is stored at the start of the region.
                         // the first pool slot is offset by the arena header.
-                        c->start = (uintptr_t)h + sizeof(Arena);
+                        // mark the arena as dirty
+                        arena_set_dirty_blocks(a, h, idx);
+                        c->start = ALIGN_CACHE((uintptr_t)h + sizeof(Arena));
                         c->end = c->start + c_size;
                         d = (alloc_base*)c->start;
                         break;
@@ -221,6 +254,8 @@ void deferred_init(Allocator* a, void*p)
                         }
                         else // we are in a pool
                         {
+                            // mark the arena as dirty
+                            arena_set_dirty_blocks(a, h, idx);
                             c->start = ((uintptr_t)h + idx*c_size);
                             c->end = c->start + c_size;
                             d = (alloc_base*)c->start;
@@ -286,7 +321,18 @@ void deferred_release(Allocator* a, void* p)
             }
             else if(st ==  SLOT_IMPLICIT)
             {
-                implicitList_move_deferred((ImplicitList*)c->start);
+                ImplicitList* il = (ImplicitList*)c->start;
+                // if we emptied the deferred free list,
+                if(c->num == il->num_allocations)
+                {
+                    implicitList_freeAll(il);
+                }
+                else
+                {
+                    // else we move the deferred free list to the back
+                    implicitList_move_deferred(il);
+                }
+                
             }
         }
         else
@@ -295,15 +341,12 @@ void deferred_release(Allocator* a, void* p)
             slot_type st = get_base_type((alloc_base*)c->start);
             if(st == SLOT_POOL)
             {
-                // we are releasing to a pool.
-                alloc_base *d = (alloc_base*)c->start;
-                // just increment the thread free counter.
-                atomic_fetch_add_explicit(&d->thread_free_counter, c->num, memory_order_relaxed);
+                pool_thread_free_batch((Pool*)c->start, c->items.next, (Block*)c->tail, c->num);
             }
             else if(st ==  SLOT_IMPLICIT)
             {
                 // we are releasing to an implicit list as a batch.
-                implicit_list_thread_free_batch((ImplicitList*)c->start, c->items.next, (Block*)c->tail);
+                implicit_list_thread_free_batch((ImplicitList*)c->start, c->items.next, (Block*)c->tail, c->num);
             }
         }
         // reset the deferred free list.

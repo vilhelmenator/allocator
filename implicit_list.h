@@ -52,4 +52,4 @@ void implicitList_extend(ImplicitList *h);
 void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize);
 void implicitList_move_deferred(ImplicitList *h);
 void implicit_list_thread_free(ImplicitList* list, Block* block);
-void implicit_list_thread_free_batch(ImplicitList* list, Block* head, Block* tail);
+void implicit_list_thread_free_batch(ImplicitList* list, Block* head, Block* tail, uint32_t num);

@@ -24,6 +24,10 @@ static const int32_t pool_sizes[] = {
     18432,   20480,   22528,   24576,   26624,   28672,   30720,   32768       // 2k    64
     };    // 256m     // rounds to 4m
 
+void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize);
+void pool_thread_free_batch(Pool* pool, Block* head, Block* tail, uint32_t num);
+void pool_claim_thread_frees(Pool* pool);
+
 static inline uint8_t size_to_pool(const size_t as)
 {
     static const int bmask = ~0x7f;
@@ -40,7 +44,10 @@ static inline uint8_t size_to_pool(const size_t as)
 }
 
 static inline bool pool_is_connected(Pool *p) { return p->prev != NULL || p->next != NULL; }
-static inline bool pool_is_unused(const Pool *p) { return p->num_used == p->thread_free_counter; }
+static inline bool pool_is_unused(const Pool *p) {
+    uint64_t thread_free_count = atomic_load(&p->thread_free_counter);
+    return p->num_used == thread_free_count;
+}
 static inline bool pool_is_fully_commited(const Pool *p) { return p->num_committed >= p->num_available; }
 static inline uint8_t* pool_base_address(Pool *p)
 {
@@ -72,22 +79,19 @@ static inline void pool_post_used(Pool *p, Allocator* a)
     arena_use_blocks(a, arena, pidx);
 }
 
-static inline void pool_set_unused(Pool *p, Allocator* a)
-{
-    pool_post_unused(p, a);
-    // the last piece was returned so make the first item the start of the free
-    p->num_committed = 0; // so we hand out contigous blocks again
-    p->free = NULL;
-    p->thread_free_counter = 0;
-    p->deferred_free = NULL;
-}
-
 static inline void pool_clear(Pool *p)
 {
     p->num_committed = 0; // so we hand out contigous blocks again
     p->free = NULL;
     p->thread_free_counter = 0;
     p->deferred_free = NULL;
+}
+
+static inline void pool_set_unused(Pool *p, Allocator* a)
+{
+    pool_post_unused(p, a);
+    // the last piece was returned so make the first item the start of the free
+    pool_clear(p);
 }
 
 static inline void pool_move_deferred(Pool *p)
@@ -151,7 +155,7 @@ static inline void *pool_get_free_block(Pool *p, Allocator* a)
         return base_addr;
     }
     
-    uint32_t curr_idx = (uint32_t)(size_t)((uint8_t *)p->free - base_addr)/p->block_size;
+    int32_t curr_idx = (int32_t)(size_t)((uint8_t *)p->free - base_addr)/p->block_size;
     if (curr_idx >= p->num_available) {
         p->free = NULL;
         return NULL;
@@ -164,6 +168,7 @@ static inline void *pool_get_free_block(Pool *p, Allocator* a)
     return (void *)(base_addr + (curr_idx * p->block_size));
 }
 
+
 static inline void *pool_aquire_block(Pool *p, Allocator* a)
 {
     if (p->free != NULL) {
@@ -172,6 +177,7 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
     if (!pool_is_fully_commited(p)) {
         return pool_extend(p);
     } else {
+        pool_claim_thread_frees(p);
         if (p->deferred_free != NULL) {
             pool_move_deferred(p);
             return pool_get_free_block(p, a);
@@ -180,6 +186,5 @@ static inline void *pool_aquire_block(Pool *p, Allocator* a)
     }
 }
 
-void pool_init(Pool *p, const uint8_t pidx, const uint32_t block_idx, const int32_t psize);
 
 #endif

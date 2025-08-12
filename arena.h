@@ -54,4 +54,6 @@ void arena_allocate_blocks(Allocator* alloc, Arena *a, int start_bit, int size_i
 void arena_free_blocks(Allocator* alloc, Arena *a, int start_bit);
 void arena_unuse_blocks(Allocator* alloc, Arena *a, int start_bit);
 void arena_use_blocks(Allocator* alloc, Arena *a, int start_bit);
+void arena_set_dirty_blocks(Allocator* alloc, Arena *a, int start_bit);
+void arena_clear_dirty(Arena *a);
 #endif // ARENA_H

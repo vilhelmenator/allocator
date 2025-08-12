@@ -83,11 +83,6 @@ void* implicitList_place_aligned(ImplicitList *h, void *bp,  uint32_t asize, con
 
     list_remove(&h->free_nodes, (QNode*)bp);
     
-    // Set up the aligned block
-    HeapBlock *aligned_hb = (HeapBlock *)user_addr;
-    implicitList_block_set_header(aligned_hb, asize, 1, prefix_size > 0 ? 0 : prev_alloc); 
-    implicitList_block_set_footer(aligned_hb, asize, 1);
-
     uintptr_t suffix_size = bsize - prefix_size - asize;
     // Ensure suffix is at least MIN_BLOCK_SIZE
     if (suffix_size > 0 && suffix_size < MIN_BLOCK_SIZE) {
@@ -95,8 +90,13 @@ void* implicitList_place_aligned(ImplicitList *h, void *bp,  uint32_t asize, con
         asize += suffix_size;
         suffix_size = 0;
     }
-    else 
-    {
+    
+    // Set up the aligned block
+    HeapBlock *aligned_hb = (HeapBlock *)user_addr;
+    implicitList_block_set_header(aligned_hb, asize, 1, prefix_size > 0 ? 0 : prev_alloc); 
+    implicitList_block_set_footer(aligned_hb, asize, 1);
+
+    if(suffix_size > 0){
         HeapBlock *suffix_hb = (HeapBlock *)(user_addr + asize);
         implicitList_block_set_header(suffix_hb, (uint32_t)suffix_size, 0, 1);
         implicitList_block_set_footer(suffix_hb, (uint32_t)suffix_size, 0);
@@ -127,30 +127,24 @@ void implicit_list_claim_thread_frees(ImplicitList* list) {
 
 void implicitList_move_deferred(ImplicitList *h)
 {
-    // for every item in the deferred list.
-    Block *current = h->free_nodes.head;
     // move thread free items to the deferred list.
     implicit_list_claim_thread_frees(h);
-    // move deferred to our free list.
-    h->free_nodes.head = h->deferred_free;
-    Block* c = h->deferred_free;
-    Block* tail = NULL;
-    while(c != NULL)
+    // If there are no deferred blocks, nothing to do.
+    if (!h->deferred_free)
+        return;
+
+    // Find the tail of the deferred list
+    Block* deferred_head = h->deferred_free;
+    Block* deferred_tail = deferred_head;
+    while (deferred_tail->next)
     {
-        tail = c;
-        //
-        HeapBlock *hb = (HeapBlock *)c;
-        int header = implicitList_block_get_header(hb);
-        h->used_memory -= header & ~0x7;
-        c = c->next;
-        h->num_allocations--;
+        Block* next = deferred_tail->next;
+        implicitList_free(h, deferred_tail, true);
+        deferred_tail = next;
     }
-    tail->next = current;
-    h->free_nodes.tail = tail;
+    // Clear deferred_free
     h->deferred_free = NULL;
-    if (h->num_allocations == 0) {
-        implicitList_freeAll(h);
-    }
+    
 }
 
 void *implicitList_find_fit(ImplicitList *h, const uint32_t asize, const uint32_t align)
@@ -397,7 +391,7 @@ void implicit_list_thread_free(ImplicitList* list, Block* block) {
     }
 }
 
-void implicit_list_thread_free_batch(ImplicitList* list, Block* head, Block* tail) {
+void implicit_list_thread_free_batch(ImplicitList* list, Block* head, Block* tail, uint32_t num) {
     // Link the batch to current head
     tail->next = atomic_load_explicit(&list->thread_free, memory_order_relaxed);
     
