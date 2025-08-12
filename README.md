@@ -1,7 +1,7 @@
 # High-Performance General Purpose Allocator
 
 ## Overview
-A two-tiered memory allocator designed for extreme performance, outperforming common allocators like `mi_malloc`. The system combines partition-based bulk memory management with thread-local caching for optimal allocation speed. It reduces OS level fragmentation by managing large virtual memory blocks by the backend, and effectively eliminates any fragmentation at the front-end with proper block management.
+A two-tiered memory allocator designed for extreme performance. The system combines partition-based bulk memory management with thread-local caching for optimal allocation speed. It reduces OS level fragmentation by managing large virtual memory blocks by the backend, and effectively eliminates any fragmentation at the front-end with proper block management.
 
 ## Architecture
 
@@ -116,10 +116,9 @@ This design achieves high performance through:
 - Minimal atomic operations in hot paths
 - Optimized memory layout for cache efficiency
 
-Parts of the allocator that are still in developedment.
-- Large allocations
-- Orphaned thread arenas
-- Purging cached structs back to OS.
+Parts of the allocator that are still in development.
+- Improve the build phase of the project so it can be easily tested by anyone.
+- Better release strategy to reduce the resident pages
 - More tests and better metrics to compare against other allocators
 ---
 
@@ -131,7 +130,7 @@ Parts of the allocator that are still in developedment.
 
 ## mi_malloc test comparisons.
 
-clang *c ../mimalloc-master/src/static.c -I ../mimalloc-master/include -O3 -DMI_DEBUG=0 -o test
+clang -O3 -march=native -flto=thin -fomit-frame-pointer -fno-exceptions -fno-rtti -fvisibility=hidden   -mno-red-zone -ftls-model=initial-exec -O3 -W  -DNDEBUG -g0  -o test  *c ../mimalloc-master/src/static.c -I ../mimalloc-master/include -DMI_DEBUG=0
 
 ./test mi_malloc
 ```
