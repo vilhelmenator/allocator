@@ -8,9 +8,10 @@
 
 extern PartitionAllocator *partition_allocator;
 static _Atomic(size_t) num_threads = (1);
-static inline size_t  get_thread_count(void) {
+/*
+static inline size_t get_thread_count(void) {
     return atomic_load_explicit(&num_threads, memory_order_relaxed);
-}
+}*/
 static inline void incr_thread_count(void)
 {
     atomic_fetch_add_explicit(&num_threads,1,memory_order_relaxed);

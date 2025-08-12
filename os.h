@@ -174,16 +174,16 @@ static inline int thrd_sleep(const struct timespec *ts_in)
     return 0;
 }
 
-static int tls_create(tls_t *key, tls_dtor_t dtor)
+static inline int tls_create(tls_t *key, tls_dtor_t dtor)
 {
     if (!key)
         return thrd_error;
     return (pthread_key_create(key, dtor) == 0) ? thrd_success : thrd_error;
 }
 
-static void tls_delete(tls_t key) { pthread_key_delete(key); }
-static void *tls_get(tls_t key) { return pthread_getspecific(key); }
-static int tls_set(tls_t key, void *val)
+static inline void tls_delete(tls_t key) { pthread_key_delete(key); }
+static inline void *tls_get(tls_t key) { return pthread_getspecific(key); }
+static inline int tls_set(tls_t key, void *val)
 {
     return (pthread_setspecific(key, val) == 0) ? thrd_success : thrd_error;
 }
