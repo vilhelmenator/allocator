@@ -3,6 +3,7 @@
 #ifndef OS_H
 #define OS_H
 #include "callocator.h"
+
 #if defined(_MSC_VER)
 #define WINDOWS
 #endif
@@ -49,7 +50,9 @@ enum { thrd_success, thrd_nomem, thrd_timedout, thrd_busy, thrd_error };
 #include <fibersapi.h>
 #include <process.h>
 #include <windows.h>
-
+static inline uint64_t current_time_ms(void) {
+    return (uint64_t)GetTickCount64();
+}
 #if !defined(__cplusplus)
 #define thread_local __declspec(thread);
 #endif
@@ -129,7 +132,12 @@ static int tls_set(tls_t key, void *val)
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
-
+#include <time.h>
+static inline uint64_t current_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (ts.tv_nsec / 1000000ULL);
+}
 #if !defined(__cplusplus)
 #define thread_local __thread
 #endif
