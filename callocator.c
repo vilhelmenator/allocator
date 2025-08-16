@@ -208,7 +208,7 @@ extern inline void __attribute__((malloc)) *cmalloc(size_t size) {
     {
         return NULL;
     }
-    Allocator_param params = {get_thread_id(), size, sizeof(intptr_t), false};
+    const Allocator_param params = {get_thread_id(), size, sizeof(intptr_t), false};
     return allocator_malloc(&params);
 }
 
@@ -245,7 +245,7 @@ static inline void*_caligned_alloc(size_t alignment, size_t size, bool zero)
         size += rem;
     }
     
-    Allocator_param params = {get_thread_id(), size, alignment, zero};
+    const Allocator_param params = {get_thread_id(), size, alignment, zero};
     return allocator_malloc(&params);
 }
 
@@ -266,7 +266,7 @@ extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
     {
         return NULL;
     }
-    Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), true};
+    const Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), true};
     return allocator_malloc(&params);
 }
 
