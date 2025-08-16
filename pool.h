@@ -9,7 +9,8 @@
 
 extern PartitionAllocator *partition_allocator;
 static const int32_t pool_sizes[] = {
-    // if pool block size is a power of two, it will align to that size.
+    // if a pool block size is a multiple of a power of two, it will align to
+    // the largest power of two that is less than or equal to the size.
     8,       16,      24,      32,      40,      48,      56,      64,          // 64k  8b
     72,      80,      88,      96,      104,     112,     120,     128,         // 128  8b
     144,     160,     176,     192,     208,     224,     240,     256,         // 256  16
