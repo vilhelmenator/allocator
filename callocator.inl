@@ -2,6 +2,11 @@
 #define callocator_inl
 #include "callocator.h"
 
+/*
+ * This file contains inline functions and macros for the custom allocator.
+    * It is designed to be included in other source files to provide
+    * subordinate structures and functions for memory management.
+ */
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -182,18 +187,31 @@ typedef struct {
     Partition partitions[PARTITION_COUNT];
     size_t totalMemory;        // Total memory managed by the allocator
 } PartitionAllocator;
+
+// linked list of free blocks
 typedef struct Block_t
 {
     struct Block_t* next;
 } Block;
 
+typedef struct HeapBlock_t
+{
+    uint8_t *data;
+} HeapBlock;
+
+// the queue structure for sub-allocator caches
 typedef struct Queue_t
 {
     void* head;
     void* tail;
 } Queue;
 
-
+typedef struct QNode_t
+{
+    void* prev;
+    void* next;
+} QNode;
+// base structure for all sub-ordinated allocators
 typedef struct
 {
     _Atomic(intptr_t) thread_free_counter;
@@ -218,10 +236,10 @@ static inline void init_base(alloc_base*f)
     f->next = NULL;
 }
 
-
+// small allocations pool
 typedef struct Pool_t
 {
-    // 56 byte header
+    // 64 byte header
     _Atomic(intptr_t) thread_free_counter;
     Block* deferred_free;
     size_t block_size;
@@ -237,23 +255,12 @@ typedef struct Pool_t
     int32_t num_used;
     int32_t num_committed;
     int32_t num_available;
-
     uint32_t alignment;
     
     Block* free;
-    void*  _mask; // just a placeholder. Will be positioned 8 bytes before the first block.
 } Pool;
 
-typedef struct HeapBlock_t
-{
-    uint8_t *data;
-} HeapBlock;
 
-typedef struct QNode_t
-{
-    void* prev;
-    void* next;
-} QNode;
 
 typedef struct Arena_t
 {
@@ -501,7 +508,38 @@ static inline void _list_enqueue(void *queue, void *node, size_t head_offset, si
     }
 }
 
-void _list_remove(void *queue, void* node, size_t head_offset, size_t prev_offset);
+static inline void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset)
+{
+    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
+    
+    if(tq->head == tq->tail)
+    {
+        tq->head = NULL;
+        tq->tail = NULL;
+    }
+    else
+    {
+        if (tn->prev != NULL) {
+            QNode *temp = (QNode *)((uint8_t *)tn->prev + prev_offset);
+            temp->next = tn->next;
+        }
+        if (tn->next != NULL) {
+            QNode *temp = (QNode *)((uint8_t *)tn->next + prev_offset);
+            temp->prev = tn->prev;
+        }
+        if (node == tq->head) {
+            tq->head = tn->next;
+        }
+        else if (node == tq->tail) {
+            tq->tail = tn->prev;
+        }
+    }
+    
+    tn->next = NULL;
+    tn->prev = NULL;
+}
+
 #define list_append(q, n) _list_append(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_enqueue(q, n) _list_enqueue(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
 #define list_remove(q, n) _list_remove(q, n, offsetof(__typeof__(*q), head), offsetof(__typeof__(*n), prev))
