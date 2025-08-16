@@ -232,21 +232,36 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                 if (atomic_compare_exchange_strong(&block->pending_release, &free_mask, new_mask)) {
                     uint64_t ranges = atomic_load(&block->ranges);
                     int32_t region_idx = get_next_mask_idx(free_mask, 0);
+                    uintptr_t reused_block = 0;
                     while (region_idx != -1) {
                         
                         uintptr_t block_addr = base_addr + (region_idx * (region_size));
                         uint32_t size_in_blocks = get_range((uint32_t)region_idx, ranges);
                         uint64_t area_clear_mask =
                         (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << region_idx;
-                        decommit_memory((void*)block_addr, region_size*size_in_blocks);
-                        atomic_fetch_and(&block->committed, ~area_clear_mask);
-                        if (size_in_blocks > 1) {
-                            uint64_t range_clear_mask = (1ULL << region_idx) | (1ULL << (region_idx + size_in_blocks - 1));
-                            atomic_fetch_and_explicit(&block->ranges,
-                                                      ~range_clear_mask,
-                                                      memory_order_relaxed);
+                        if(reused_block == 0 && size_in_blocks == num_regions)
+                        {
+                            // lets reclaim a region
+                            reused_block = block_addr;  
                         }
+                        else
+                        {
+                            decommit_memory((void*)block_addr, region_size*size_in_blocks);
+                            atomic_fetch_and(&block->committed, ~area_clear_mask);
+                            if (size_in_blocks > 1) {
+                                uint64_t range_clear_mask = (1ULL << region_idx) | (1ULL << (region_idx + size_in_blocks - 1));
+                                atomic_fetch_and_explicit(&block->ranges,
+                                                        ~range_clear_mask,
+                                                        memory_order_relaxed);
+                            }
+                        }
+                        
                         region_idx = get_next_mask_idx(free_mask, region_idx + 1);
+                    }
+                    if(reused_block != 0)
+                    {
+                        // We successfully reclaimed a region
+                        return (void*)reused_block;
                     }
                 }
             }
