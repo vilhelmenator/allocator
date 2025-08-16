@@ -24,7 +24,7 @@ typedef SSIZE_T ssize_t;
 #define SZ_GB (SZ_MB * SZ_KB)
 
 #define DEFAULT_OS_PAGE_SIZE 4096ULL
-
+#define ARENA_TIMEOUT 1000ULL  
 #define PARTITION_COUNT 9
 #define BASE_ADDRESS (2ULL * 1024 * 1024 * 1024 * 1024) // 2TB
 #define BASE_OS_ALLOC_ADDRESS (12ULL * 1024 * 1024 * 1024 * 1024) // 12TB
@@ -39,7 +39,7 @@ typedef SSIZE_T ssize_t;
 #define POOL_BIN_COUNT 80
 #define ARENA_SBIN_COUNT 7 // 1,2,4,8,16,32
 
-#define ARENA_BIN_COUNT (PARTITION_COUNT*ARENA_LEVELS*ARENA_SBIN_COUNT)
+#define ARENA_BIN_COUNT PARTITION_COUNT
 #define MAX_AREAS 64
 #define MAX_THREADS 1024
 #define MIN_BLOCKS_PER_COUNTER_ALLOC 8
@@ -204,6 +204,7 @@ typedef struct Queue_t
 {
     void* head;
     void* tail;
+    uint64_t count;
 } Queue;
 
 typedef struct QNode_t
@@ -281,8 +282,10 @@ typedef struct Arena_t
     _Atomic(uint64_t)  ranges;   // how many chunks follow each allocation
     _Atomic(uint64_t)  dirty;    // which pools have thread free items in them.
     _Atomic(uint64_t)  zero;
+
+    uint64_t last_used; // last time this arena was used.
     
-} Arena; // 128 bytes
+} Arena; 
 
 // Boundary tag allocation structure
 typedef struct ImplicitList_t
@@ -383,17 +386,18 @@ static inline void deferred_add(deferred_free*c, void* p)
 
 typedef struct Allocator_t
 {
+    // per allocator lookup structures
+    alloc_slot_front c_slot;   // contiguous cache struct.
     uintptr_t thread_id;
     int64_t prev_size;  // fast path for the same sizes.
-    
+
+    alloc_slot_back  c_back;   // service cache struct.
+
     // free pools of various sizes.
     Queue *pools;
     Queue *arenas;
     Queue *implicit;
-    
-    // per allocator lookup structures
-    alloc_slot_front c_slot;   // contiguous cache struct.
-    alloc_slot_back  c_back;   // service cache struct.
+
     deferred_free c_deferred;  // release cache structure.
 } Allocator;
 
@@ -483,6 +487,7 @@ static inline void _list_move_to_back(void *queue, void *node, size_t head_offse
 static inline void _list_append(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    tq->count++;
     if (tq->tail != 0) {
         QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
         tn->next = 0;
@@ -497,6 +502,7 @@ static inline void _list_append(void *queue, void *node, size_t head_offset, siz
 static inline void _list_enqueue(void *queue, void *node, size_t head_offset, size_t prev_offset)
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
+    tq->count++;
     if (tq->head != 0) {
         QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
         tn->next = tq->head;
@@ -512,7 +518,7 @@ static inline void _list_remove(void *queue, void *node, size_t head_offset, siz
 {
     Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
     QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
-    
+    tq->count--;
     if(tq->head == tq->tail)
     {
         tq->head = NULL;

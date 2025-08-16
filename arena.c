@@ -46,6 +46,10 @@ void arena_unuse_blocks(Arena *a, int start_bit)
     atomic_fetch_and_explicit(&a->in_use,
                               ~area_clear_mask,
                               memory_order_release);
+    if(a->in_use <= 1)
+    {
+        a->last_used = current_time_ms();
+    }
 }
 
 void arena_use_blocks(Arena *a, int start_bit)
@@ -128,6 +132,7 @@ void arena_clear_dirty(Arena *a)
     }
 }
 
+
 bool arena_free_active(Allocator* alloc, Arena *a, bool decommit)
 {
     // for every dirty block, we clear the dirty bit.
@@ -135,7 +140,7 @@ bool arena_free_active(Allocator* alloc, Arena *a, bool decommit)
     uint64_t in_use = atomic_load(&a->in_use);
     uint64_t active = atomic_load(&a->active);
     if(in_use <= 1 && active != 0)
-    {
+    {   
         uint64_t new_mask = 0ULL;
         if(atomic_compare_exchange_strong(&a->active, &active, new_mask))
         {
@@ -151,7 +156,7 @@ bool arena_free_active(Allocator* alloc, Arena *a, bool decommit)
             list_remove(aqueue, a);
             partition_allocator_free_blocks(partition_allocator, a, decommit);
             return true;
-        }
+        }   
     }
     return false;
 }

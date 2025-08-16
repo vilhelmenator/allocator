@@ -315,7 +315,8 @@ void * allocator_alloc_region(Allocator* alloc, int32_t partition_idx, int32_t n
     }
     // try and release an arena/region that is completely free
     // find an arena to remove
-    allocator_try_release_local_area(alloc);
+    allocator_try_release_local_area(alloc,partition_idx);
+    
     return partition_allocator_get_free_region(partition_allocator, partition_idx, num_regions, region_idx, active);
 }
 
@@ -747,7 +748,7 @@ static inline internal_alloc allocator_load_memory_slot(Allocator *a, size_t as,
 {
     allocator_release_slot(a);
     deferred_release(a, NULL);
-    a->prev_size = (uint64_t)as;
+    
     return allocator_malloc_base(a, ALIGN(as), alignment, zero);
 }
 
@@ -805,7 +806,7 @@ static void *allocator_malloc_slot(Allocator *a, size_t s, void* res)
     return NULL;
 }
 
-void *allocator_malloc(Allocator_param *prm)
+void *allocator_malloc(const Allocator_param *prm)
 {
     size_t s = prm->size;
     size_t align = prm->alignment;
@@ -887,7 +888,7 @@ void *allocator_malloc(Allocator_param *prm)
     
     // get the internal allocation slot
     internal_alloc ialloc = allocator_load_memory_slot(a, s, align, zero);
-    
+    a->prev_size = (uint64_t)s;
     // if we were handed the null allocator
     if(ialloc == allocator_slot_alloc_null)
     {
@@ -934,6 +935,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
         // we need the size of the container.
         if((uintptr_t)p < a->c_deferred.start || (uintptr_t)p >= (a->c_deferred.end))
         {
+            
             deferred_release(a, p);
         }
         else
@@ -963,26 +965,30 @@ void allocator_release_deferred(Allocator* a)
     }
 }
 
-bool allocator_try_release_local_area(Allocator *a)
+bool allocator_try_release_local_area(Allocator *a, int32_t partition_id)
 {
-    // move all deferred back into the container
-    allocator_release_deferred(a);
-    // Try to release all our arena blocks back to the partition allocator
+    uint64_t ct = current_time_ms();
+    // Try to release any local areas that are not in use.
     for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
         Queue* queue = &a->arenas[i];
         Arena* start = queue->head;
-        while (start) {
+        
+        while (start ){
             Arena* next = start->next;
-            if(arena_free_active(a, start, true))
+            if(start->last_used + ARENA_TIMEOUT < ct)
             {
-                return true;
+                if(arena_free_active(a, start, true))
+                {
+                    return true;
+                }
             }
-            
             start = next;
         }
     }
+
     return false;
 }
+
 bool allocator_release_local_areas(Allocator *a)
 {
     // release any cache data

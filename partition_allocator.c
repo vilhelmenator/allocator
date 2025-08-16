@@ -99,6 +99,33 @@ bool partition_allocator_abandon_blocks(PartitionAllocator* palloc,
     
     return true;
 }
+bool partition_allocator_rest_blocks(PartitionAllocator* palloc,
+                                     void* addr) {
+    PartitionLoc loc;
+    if(get_partition_location(palloc, addr, &loc) == -1)
+    {
+        // error... this address is outside of our ranges.
+        return false;
+    }
+    // Return the corresponding
+    Partition* partition = &palloc->partitions[loc.partition];
+    PartitionMasks* block = &partition->blocks[loc.block];
+    uint32_t range = get_range(loc.region, block->ranges);
+    
+    // Update allocation masks
+    uint64_t area_clear_mask = (range == 64)
+        ? ~0ULL
+        : ((1ULL << range) - 1) << loc.region;
+    
+    uint64_t new_mask = 0ULL;
+    uint64_t region_size = partition->blockSize/64;
+    uintptr_t base_addr = (uintptr_t)(BASE_ADDRESS + loc.partition*PARTITION_SIZE +
+                                        (loc.block * partition->blockSize));
+    uintptr_t block_addr = base_addr + (loc.region * (region_size));
+                
+    return reset_memory((void*)block_addr, region_size*range);
+}
+
 bool partition_allocator_free_blocks(PartitionAllocator* palloc,
                                      void* addr,
                                      bool should_decommit) {
@@ -192,7 +219,7 @@ bool partition_allocator_claim_abandoned(PartitionAllocator* palloc,
 // Thread-safe allocation from a partition.
 void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                                                   int32_t partition_idx,
-                                                  int32_t num_regions,
+                                                  uint32_t num_regions,
                                                   int32_t* region_idx,
                                                   bool active) {
     Partition* partition = &allocator->partitions[partition_idx];
@@ -389,7 +416,7 @@ int32_t get_partition_location(PartitionAllocator* allocator, void* addr, Partit
 
 void* partition_allocator_get_free_region(PartitionAllocator* allocator,
                                           int32_t partition_idx,
-                                          int32_t num_regions,
+                                          uint32_t num_regions,
                                           int32_t* region_idx,
                                           bool active )
 {

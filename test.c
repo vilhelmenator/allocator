@@ -1009,24 +1009,24 @@ int main(int argc, char *argv[])
     
     
     printf("Test with immediate free -> size: [8,..8192], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
-    for (int i = 0; i < 14; i++) {
+    for (int i = 3; i < 14; i++) {
         test_size_iter_immediate(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     printf("Test with free -> size: [8192,..8], num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
-    for (int i = 13; i >= 0; i--) {
+    for (int i = 13; i >= 3; i--) {
         test_size_iter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
-    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 10; i++) {
         test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     
-    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test scatter sizes([8,16,32],...[1024,2048,4196]) -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
     for (int i = 0; i < 10; i++) {
         test_size_iter_scatter(1 << i, NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local);
     }
     
-    printf("Test sparse sizes ([rand()%%1024]) with free -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
+    printf("Test sparse sizes ([rand()%%1024]) -> num items: %llu, num_iterations %llu\n", NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS);
 
     test_size_iter_sparse(NUMBER_OF_ITEMS, NUMBER_OF_ITERATIONS, test_local, 1024);
 
