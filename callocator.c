@@ -116,39 +116,6 @@ static Allocator *init_thread_instance(uintptr_t tid)
 }
 
 
-void _list_remove(void *queue, void *node, size_t head_offset, size_t prev_offset)
-{
-    Queue *tq = (Queue *)((uint8_t *)queue + head_offset);
-    QNode *tn = (QNode *)((uint8_t *)node + prev_offset);
-    
-    if(tq->head == tq->tail)
-    {
-        tq->head = NULL;
-        tq->tail = NULL;
-    }
-    else
-    {
-        if (tn->prev != NULL) {
-            QNode *temp = (QNode *)((uint8_t *)tn->prev + prev_offset);
-            temp->next = tn->next;
-        }
-        if (tn->next != NULL) {
-            QNode *temp = (QNode *)((uint8_t *)tn->next + prev_offset);
-            temp->prev = tn->prev;
-        }
-        if (node == tq->head) {
-            tq->head = tn->next;
-        }
-        else if (node == tq->tail) {
-            tq->tail = tn->prev;
-        }
-    }
-    
-    tn->next = NULL;
-    tn->prev = NULL;
-}
-
-
 static inline bool is_main_thread(void)
 {
     if (get_thread_id() == main_thread_id) {
@@ -245,7 +212,7 @@ extern inline void __attribute__((malloc)) *cmalloc(size_t size) {
     return allocator_malloc(&params);
 }
 
-extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, size_t size)
+static inline void*_caligned_alloc(size_t alignment, size_t size, bool zero)
 {
     if(size == 0)
     {
@@ -261,6 +228,8 @@ extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, siz
     if(alignment > os_page_size)
     {
         // we don't care for large alignment asks.
+        // you need to align to something bigger than an OS page
+        // you will have to ask the OS for it!
         return NULL;
     }
     
@@ -276,8 +245,18 @@ extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, siz
         size += rem;
     }
     
-    Allocator_param params = {get_thread_id(), size, alignment, false};
+    Allocator_param params = {get_thread_id(), size, alignment, zero};
     return allocator_malloc(&params);
+}
+
+extern inline void __attribute__((malloc)) *caligned_alloc(size_t alignment, size_t size)
+{
+    return _caligned_alloc(alignment, size, false);
+}
+
+extern inline void __attribute__((malloc)) *zaligned_alloc(size_t alignment, size_t size)
+{
+    return _caligned_alloc(alignment, size, true);
 }
 
 extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
@@ -290,6 +269,7 @@ extern inline void __attribute__((malloc)) *zalloc( size_t num, size_t size )
     Allocator_param params = {get_thread_id(), s, sizeof(intptr_t), true};
     return allocator_malloc(&params);
 }
+
 extern inline void cfree(void *p)
 {
     if(p == NULL)
@@ -300,7 +280,7 @@ extern inline void cfree(void *p)
     if (is_main_thread()) {
         allocator_free(main_instance, p);
     } else {
-        allocator_free_th(thread_instance, p);
+        allocator_free(get_thread_instance(), p);
     }
 }
 
@@ -348,7 +328,46 @@ bool callocator_release(void)
     Allocator *alloc = get_thread_instance();
     return allocator_release_local_areas(alloc);
 }
+void *aligned_crealloc(void *p, size_t alignment, size_t s )
+{
+    
+    // realloc is a bit tricky, we need to allocate a new memory
+    // and copy the old memory into the new memory.
+    if (p == NULL) {
+        return caligned_alloc(alignment, s);
+    }
+    if (s == 0) {
+        cfree(p);
+        return NULL;
+    }
+    // we need query the size of the old memory.
+    //size_t old_size = allocator_get_size(p);
+    size_t old_size = 0;
+    if(allocator_try_resize(p, s, &old_size))
+    {
+        // here we were able to resize the block
+        // with the internal structures, so we don't
+        // need to copy any memory over.
+        return p;
+    }
+    if (old_size == 0) {
+        // we don't know the size of the old memory, so we cannot realloc.
+        return NULL;
+    }
 
+    void *new_ptr = caligned_alloc(alignment, s);
+    if (new_ptr == NULL) {
+        // we were not able to allocate the new memory.
+        // game over, man!!
+        return NULL;
+    }
+    
+    // we were not able to remap the memory
+    memcpy(new_ptr, p, old_size);
+    cfree(p);
+    
+    return new_ptr;
+}
 void *crealloc(void *p, size_t s)
 {
     // realloc is a bit tricky, we need to allocate a new memory
@@ -361,32 +380,27 @@ void *crealloc(void *p, size_t s)
         return NULL;
     }   
     // we need query the size of the old memory.
-    size_t old_size = allocator_get_size(p);
+    //size_t old_size = allocator_get_size(p);
+    size_t old_size = 0;
+    if(allocator_try_resize(p, s, &old_size))
+    {
+        // here we were able to resize the block
+        // with the internal structures, so we don't
+        // need to copy any memory over.
+        return p;
+    }
     if (old_size == 0) {
         // we don't know the size of the old memory, so we cannot realloc.
         return NULL;
     }
-    if (s <= old_size) {
-        // we can just return the old memory, since it is large enough.
-        return p;
-    }
+
     void *new_ptr = cmalloc(s);
     if (new_ptr == NULL) {
         // we were not able to allocate the new memory.
+        // game over, man!!
         return NULL;
     }
-    // if our memory was in the OS slot, we might be able to remap it.
-    if ((uintptr_t)p > BASE_OS_ALLOC_ADDRESS && (uintptr_t)p < OS_ALLOC_END)
-    {
-        // lets try to remap the memory.
-        if (remap_memory(p, new_ptr, s)) {
-            // we were able to remap the memory, so we can just return the new address.
-            // but we need to update the header.
-            uint64_t *header = (uint64_t *)((uintptr_t)p - os_page_size);
-            *(++header) = s;
-            return p;
-        }
-    }
+    
     // we were not able to remap the memory
     memcpy(new_ptr, p, old_size);
     cfree(p);

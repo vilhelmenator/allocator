@@ -1,10 +1,18 @@
 
 #ifndef ARENA_H
 #define ARENA_H
-
+/*
+    * Arena Memory Allocator
+    *    * A memory allocator that manages memory in fixed-size chunks.
+    *    * It supports allocation and deallocation of blocks within arenas.
+    *    * The allocator uses atomic operations for thread safety.
+    *    * It maintains metadata for active, in-use, and dirty blocks.
+    *    * The allocator is designed to be efficient for large memory allocations.
+    * 
+*/
 #include "callocator.inl"
-#include <stdatomic.h>
 
+// Arena structure definition
 #define ARENA_BASE_SIZE_EXPONENT 22
 #define ARENA_SIZE(x) (1ULL << (ARENA_BASE_SIZE_EXPONENT + x))
 #define ARENA_SIZE_EXPONENT(x) (ARENA_BASE_SIZE_EXPONENT + x)
@@ -12,28 +20,7 @@
 #define ARENA_CHUNK_SIZE(x) (1ULL << ((ARENA_BASE_SIZE_EXPONENT + x) - 6))
 static const uint32_t arena_level_offset = ARENA_BASE_SIZE_EXPONENT;
 
-typedef struct arena_size_table_t
-{
-    uint64_t exponents[2];
-    uint64_t sizes[2];
-} arena_size_table;
-typedef struct arena_empty_mask_table_t
-{
-    uint64_t sizes[3];
-} arena_empty_mask_table;
-
-
-uintptr_t new_arena_get_mask_addr(Arena *h, size_t i, size_t j);
-uintptr_t new_arena_get_data_addr(Arena *h, size_t i, size_t j, size_t k);
-
 static inline uintptr_t reserve_range_idx(size_t range, size_t idx) { return ((1ULL << range) - 1ULL) << idx; }
-
-static inline void arena_init_zero(uintptr_t baseptr)
-{
-    *(uint64_t *)baseptr = 1ULL;
-    *(uint64_t *)(baseptr + sizeof(uint64_t)) = 0;
-    *(uint64_t *)(baseptr + sizeof(uint64_t) * 2) = 0;
-}
 
 static inline uint32_t delta_exp_to_idx(uintptr_t a, uintptr_t b, size_t exp)
 {
@@ -56,4 +43,5 @@ void arena_unuse_blocks(Arena *a, int start_bit);
 void arena_use_blocks(Arena *a, int start_bit);
 void arena_set_dirty_blocks(Arena *a, int start_bit);
 void arena_clear_dirty(Arena *a);
+bool arena_free_active(Allocator* alloc, Arena *a, bool decommit);
 #endif // ARENA_H

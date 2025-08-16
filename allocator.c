@@ -50,7 +50,6 @@ void* allocator_slot_alloc_pool(Allocator*a,  const size_t as)
 
 void* allocator_slot_alloc_implicit(Allocator*a,  const size_t as)
 {
-    UNUSED(as);
     //
     // if the size is not a power of two, we need to use the implicit list.
     if(!POWER_OF_TWO(as))
@@ -314,7 +313,9 @@ void * allocator_alloc_region(Allocator* alloc, int32_t partition_idx, int32_t n
     if (partition_idx < 0 || partition_idx >= PARTITION_COUNT) {
         return NULL;
     }
-    
+    // try and release an arena/region that is completely free
+    // find an arena to remove
+    allocator_try_release_local_area(alloc);
     return partition_allocator_get_free_region(partition_allocator, partition_idx, num_regions, region_idx, active);
 }
 
@@ -519,7 +520,7 @@ static inline void allocator_malloc_leq_4m_init(Allocator* alloc, const size_t s
         }
     }
 }
-static inline void allocator_malloc_leq_256m_init(Allocator* alloc, const size_t _size, const size_t alignment, const bool zero)
+static inline void allocator_malloc_leq_32m_init(Allocator* alloc, const size_t _size, const size_t alignment, const bool zero)
 {
     alloc->c_slot.alignment = (uint32_t)alignment;
     alloc->c_slot.is_zero = zero;
@@ -534,7 +535,7 @@ static inline void allocator_malloc_leq_256m_init(Allocator* alloc, const size_t
     bool use_arena = power2;
     if(!power2)
     {
-        if(is_multiple_of_power_in_range((uint32_t)size, &result_power, (1 << 22), (1ULL << 28))){
+        if(is_multiple_of_power_in_range((uint32_t)size, &result_power, (1 << 22), (1ULL << 25))){
             alloc->c_back.num_blocks = (uint32_t)size/result_power;
             if(alloc->c_back.num_blocks > 32)
             {
@@ -564,9 +565,9 @@ static inline void allocator_malloc_leq_256m_init(Allocator* alloc, const size_t
     }
     else
     {
-        size_t idx = bitlength((uint32_t)(size - 1) >> 24);
-        alloc->c_back.min_size = (1 << (22+idx*2));
-        alloc->c_back.max_size = (1 << (24+idx*2));
+        size_t idx = bitlength((uint32_t)(size - 1) >> 23);
+        alloc->c_back.min_size = (1 << (22+idx));
+        alloc->c_back.max_size = (1 << (23+idx));
         alloc->c_back.partition_index = idx + 6;
         alloc->c_slot.type = SLOT_IMPLICIT;
     }
@@ -728,11 +729,11 @@ static inline internal_alloc allocator_malloc_base(Allocator* alloc, size_t size
     {
         allocator_malloc_leq_4m_init(alloc, size, alignment, zero);
     }
-    else if(size < (1ULL << 28)) // 4m < n <= 256m
+    else if(size < (1ULL << 25)) // 4m < n <= 32m
     {
-        allocator_malloc_leq_256m_init(alloc, size, alignment, zero);
+        allocator_malloc_leq_32m_init(alloc, size, alignment, zero);
     }
-    else // n > 256m
+    else // n > 32m
     {
         alloc->c_slot.type = SLOT_OS;
     }
@@ -910,6 +911,7 @@ static inline __attribute__((always_inline)) void _allocator_free(Allocator *a, 
         // we need to free it.
         return cfree_os(p);
     }
+    
     // Lets compare the last memory handed out, to the freed memory
     void* res = (void*)(uintptr_t)(((a->c_slot.header) + a->c_slot.offset) - a->c_slot.req_size);
     if(res == p)
@@ -961,6 +963,26 @@ void allocator_release_deferred(Allocator* a)
     }
 }
 
+bool allocator_try_release_local_area(Allocator *a)
+{
+    // move all deferred back into the container
+    allocator_release_deferred(a);
+    // Try to release all our arena blocks back to the partition allocator
+    for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
+        Queue* queue = &a->arenas[i];
+        Arena* start = queue->head;
+        while (start) {
+            Arena* next = start->next;
+            if(arena_free_active(a, start, true))
+            {
+                return true;
+            }
+            
+            start = next;
+        }
+    }
+    return false;
+}
 bool allocator_release_local_areas(Allocator *a)
 {
     // release any cache data
@@ -970,43 +992,23 @@ bool allocator_release_local_areas(Allocator *a)
     
     // move all deferred back into the container
     allocator_release_deferred(a);
-    bool was_released = true;
+    int32_t active_count = 0;
     // Try to release all our arena blocks back to the partition allocator
     for(int32_t i = 0; i < ARENA_BIN_COUNT; i++){
         Queue* queue = &a->arenas[i];
         Arena* start = queue->head;
         while (start) {
             Arena* next = start->next;
+            if(!arena_free_active(a, start, true))
+            {
+                active_count++;
+            }
             
-            if(start->in_use <= 1)
-            {
-                partition_allocator_free_blocks(partition_allocator, start, true);
-            }
-            else
-            {
-                was_released = false;
-            }
-
             start = next;
         }
     }
-    // If it was completely empty, we dump our cache lists.
-    if (was_released) {
-        for (int j = 0; j < POOL_BIN_COUNT; j++) {
-            if (a->pools[j].head != NULL || a->pools[j].tail != NULL) {
-                a->pools[j].head = NULL;
-                a->pools[j].tail = NULL;
-            }
-        }
-        for (int j = 0; j < ARENA_SBIN_COUNT; j++) {
-            a->arenas[j].head = NULL;
-            a->arenas[j].tail = NULL;
-        }
-    }
-     
-    result |= !was_released;
-
-    return !result;
+   
+    return active_count == 0;
 }
 
 void allocator_free(Allocator *a, void *p)
@@ -1014,9 +1016,127 @@ void allocator_free(Allocator *a, void *p)
     _allocator_free(a, p);
 }
 
-void allocator_free_th(Allocator *a, void *p)
+int allocator_try_resize(void*p, const size_t s, size_t *os)
 {
-    allocator_free(a, p);
+    if (p == NULL) {
+        return 0;
+    }
+    
+    if((uintptr_t)p > BASE_OS_ALLOC_ADDRESS && (uintptr_t)p < OS_ALLOC_END)
+    {
+        // this is a memory that was allocated by the OS.
+        // the size is stored in the header.
+        uint64_t *header = (uint64_t *)((uintptr_t)p - os_page_size);
+        *os = *(header + 1);
+        if(*os <= s)
+        {
+            // we can still use the old memory...
+            return 1;
+        }
+        void* new_ptr = cmalloc_os(s);
+        // lets try to remap the memory.
+        if (remap_memory(p, new_ptr, s)) {
+            // we were able to remap the memory, so we can just return the new address.
+            // but we need to update the header.
+            uint64_t *header = (uint64_t *)((uintptr_t)p - os_page_size);
+            *(++header) = s;
+            return 1;
+        }
+        cfree_os(new_ptr);
+        return 0;
+    }
+    
+    int32_t pid = partition_id_from_addr((uintptr_t)p);
+    if (pid >= 0 && pid < PARTITION_COUNT) {
+        
+        // compute the size of the region.
+        size_t area_size = region_size_from_partition_id(pid);
+        // If the address is not aligned to the region size, we cannot use it.
+        uint32_t c_exp = ARENA_CHUNK_SIZE_EXPONENT(pid);
+        uint64_t c_size = ARENA_CHUNK_SIZE(pid);
+        // c_size is the size of the chunk in bytes.
+        uint64_t a_size = c_size * 64;
+        // If the address is not aligned to the chunk size, we cannot use it.
+        Arena* h =  (Arena*)ALIGN_DOWN_2(p, area_size);
+        
+        int32_t idx = delta_exp_to_idx((uintptr_t)p, (uintptr_t)h, c_exp);
+        slot_type st = get_base_type((alloc_base*)h);
+        bool top_aligned = ((uintptr_t)p & (c_size - 1)) == 0;
+        if(idx == 0)
+        {
+            if(top_aligned)
+            {
+                // the address is aligned to the chunk size.
+                *os = a_size;
+                return 0;
+            }
+            else
+            {
+                // this could be a pool or an implicit list.
+                switch (st) {
+                    case SLOT_ARENA:
+                    {
+                        // Pools are stored in arenas.
+                        // the first pool slot is offset by the arena header.
+                        Pool* p = (Pool*)ALIGN_CACHE((uintptr_t)h + sizeof(Arena));
+                        *os = p->block_size;
+                        return 0;
+                    }
+                    case SLOT_IMPLICIT:
+                    {
+                        *os = implicitList_get_block_size(p);
+                        if(*os <= s)
+                        {
+                            // we are still fitting within the old block.
+                            return 1;
+                        }
+                        return implicitList_resize_block((ImplicitList*)h, p, (int32_t)s);
+                    }
+                    default:
+                        return 0;
+                }
+            }
+        }
+        else
+        {
+            switch (st) {
+                case SLOT_ARENA:
+                    {
+                        // we are in an arena.
+                        if(top_aligned)
+                        {
+                            // the address is aligned to the chunk size.
+                            *os = c_size;
+                            // we can try the next block adjecent to this one..
+                            // if it is free, we can allocate it..
+                            // well, how many blocks are being requested.
+                            return 0;
+                        }
+                        else // we are in a pool
+                        {
+                            Pool* p = (Pool*)h;
+                            *os = p->block_size;
+                            return 0;
+                        }
+                    }
+                    break;
+                case SLOT_IMPLICIT:
+                    {
+                        *os = implicitList_get_block_size(p);
+                        if(*os <= s)
+                        {
+                            // we are still fitting within the old block.
+                            return 1;
+                        }
+                        return implicitList_resize_block((ImplicitList*)h, p, (int32_t)s);
+                    }
+                    break;
+                default:
+                    return 0;
+            }
+        }
+    }
+    return 0;
 }
 
 size_t allocator_get_size(void *p)
