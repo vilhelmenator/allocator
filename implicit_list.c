@@ -1,10 +1,20 @@
 
 
+
 #include "implicit_list.h"
 #include <stdatomic.h>
 
-#define MIN_BLOCK_SIZE (DSIZE + HEADER_FOOTER_OVERHEAD)
+/*
+    This is the implicit list allocator, or bounadry tag allocator.
 
+    Very simple allocator that uses an implicit list to manage free blocks and 
+    can be found in many C libraries and literature.
+
+    We use it to manage medium to large allocations, that do not fit well into 
+    the arenas or pools.
+*/
+
+#define MIN_BLOCK_SIZE (DSIZE + HEADER_FOOTER_OVERHEAD)
 
 static inline void implicitList_block_set_header(HeapBlock *hb, const uint32_t s, const uint32_t v, const uint32_t pa)
 {
@@ -14,18 +24,25 @@ static inline void implicitList_block_set_header(HeapBlock *hb, const uint32_t s
 
 static inline void implicitList_block_set_footer(HeapBlock *hb, const uint32_t s, const uint32_t v)
 {
+    // Set the footer with size and allocated bit,
+    // we don't store the previous allocated bit in the footer.
+    // The footer is at the end of the block, so we calculate the size from the
+    // header and set the footer accordingly.
+    
     const uint32_t size = (*(uint32_t *)((uint8_t *)&hb->data - WSIZE)) & ~0x7;
     *(uint32_t *)((uint8_t *)(&hb->data) + (size)-DSIZE) = (s | v);
 }
 
 static inline HeapBlock *implicitList_block_next(HeapBlock *hb)
 {
+    // Get the next block by reading the size from the header
     const uint32_t size = *(uint32_t *)((uint8_t *)&hb->data - WSIZE) & ~0x7;
     return (HeapBlock *)((uint8_t *)&hb->data + (size));
 }
 
 static inline HeapBlock *implicitList_block_prev(HeapBlock *hb)
 {
+    // Get the previous block by reading the size from the header
     const uint32_t size = *(uint32_t *)((uint8_t *)&hb->data - DSIZE) & ~0x7;
     return (HeapBlock *)((uint8_t *)&hb->data - (size));
 }
@@ -34,6 +51,7 @@ bool implicitList_is_connected(const ImplicitList *h) { return h->prev != NULL |
 
 bool implicitList_has_room(const ImplicitList *h, const size_t s)
 {
+    // Check if the implicit list has enough room for the allocation
     if ((h->used_memory + s + HEADER_FOOTER_OVERHEAD) > h->total_memory) {
         return false;
     }
@@ -45,6 +63,9 @@ bool implicitList_has_room(const ImplicitList *h, const size_t s)
 
 void implicitList_place(ImplicitList *h, void *bp, const uint32_t asize, const int32_t header, const int32_t csize)
 {
+    // remove the block from the free list
+    list_remove(&h->free_nodes, (QNode*)bp);
+    // Place the block at the beginning of the free block
     HeapBlock *hb = (HeapBlock *)bp;
     const uint32_t prev_alloc = (header & 0x3) >> 1;
     if ((csize - asize) >= (MIN_BLOCK_SIZE)) {
@@ -173,7 +194,7 @@ void *implicitList_find_fit(ImplicitList *h, const uint32_t asize, const uint32_
             }   
             else
             {
-                list_remove(&h->free_nodes, current);
+                
                 implicitList_place(h, current, asize, header, bsize);
                 return current;
             }
@@ -185,12 +206,14 @@ void *implicitList_find_fit(ImplicitList *h, const uint32_t asize, const uint32_
 
 void implicitList_freeAll(ImplicitList *h)
 {
+    // Free all blocks in the implicit list
     implicitList_reset(h);
 }
 
 
 void *implicitList_get_block(ImplicitList *h, uint32_t s, uint32_t align)
 {
+    // get a block from the implicit list
     if(align != sizeof(void*))
     {
         // Align the size to the next multiple of align
@@ -222,9 +245,10 @@ void *implicitList_get_block(ImplicitList *h, uint32_t s, uint32_t align)
     return ptr;
 }
 
-bool resize_block(ImplicitList *h, void *bp, int32_t size)
+bool implicitList_resize_block(ImplicitList *h, void *bp, int32_t size)
 {
-    //
+    // we can sometimes resize a block if it is not the last block in the list
+    // and the next block is free.
     HeapBlock *hb = (HeapBlock *)bp;
     int header = implicitList_block_get_header(hb);
     int32_t bsize = header & ~0x7;
@@ -254,6 +278,7 @@ bool resize_block(ImplicitList *h, void *bp, int32_t size)
 
 void *implicitList_coalesce(ImplicitList *h, void *bp)
 {
+    // Coalesce the block with its neighbors if they are free
     HeapBlock *hb = (HeapBlock *)bp;
     int header = implicitList_block_get_header(hb);
     int32_t size = header & ~0x7;
@@ -305,6 +330,7 @@ void *implicitList_coalesce(ImplicitList *h, void *bp)
 
 void implicitList_reset(ImplicitList *h)
 {
+    // Reset the implicit list to its initial state
     uint8_t *blocks = (uint8_t *)h + sizeof(ImplicitList);
     h->free_nodes.head = NULL;
     h->free_nodes.tail = NULL;
@@ -319,6 +345,7 @@ void implicitList_reset(ImplicitList *h)
 
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
 {
+    // free a block in the implicit list
     if (bp == 0)
         return;
 
@@ -329,14 +356,15 @@ void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
     implicitList_block_set_header(hb, size, 0, prev_alloc);
     implicitList_block_set_footer(hb, size, 0);
 
+    // Should we coalesce the block?
     if (should_coalesce) {
         implicitList_coalesce(h, bp);
     } else {
         list_enqueue(&h->free_nodes, (QNode *)bp);
         implicitList_update_max(h, size);
     }
+    
     h->used_memory -= size;
-
     if (--h->num_allocations == 0) {
         implicitList_freeAll(h);
     }
@@ -344,6 +372,12 @@ void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)
 
 void implicitList_extend(ImplicitList *h)
 {
+    // Extend the implicit list with a new block
+
+    // This is called when the implicit list is initialized or reset.
+    // We set up the initial blocks and headers.
+    // The first block is the header, the second is the footer, and the third is
+    // the end marker.
     uint32_t *blocks = (uint32_t *)((uint8_t *)h + sizeof(ImplicitList));
     blocks[0] = 0;
     blocks[1] = DSIZE | 1;
@@ -355,6 +389,12 @@ void implicitList_extend(ImplicitList *h)
 
 void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
 {
+    // Initialize the implicit list with the given partition index and size
+    if (psize < sizeof(ImplicitList) + MIN_BLOCK_SIZE) {
+        // Ensure the partition size is large enough to hold the implicit list
+        return;
+    }
+    // Initialize the implicit list structure
     void *blocks = (uint8_t *)h + sizeof(ImplicitList);
     const uintptr_t section_end = ((uintptr_t)blocks + (psize - 1)) & ~(psize - 1);
     const size_t remaining_size = section_end - (uintptr_t)blocks;
