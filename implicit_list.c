@@ -410,6 +410,7 @@ void implicitList_init(ImplicitList *h, int8_t pidx, const size_t psize)
     h->next = NULL;
     h->prev = NULL;
     h->deferred_free = NULL;
+    h->thread_free = NULL;
     implicitList_extend(h);
 }
 
