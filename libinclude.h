@@ -1,6 +1,11 @@
+// libinclude.h
+/* 
+    include all allocator implementations
+*/
 #include "callocator.c"
 #include "pool.c"
 #include "deferred.c"
 #include "partition_allocator.c"
 #include "allocator.c"
 #include "implicit_list.c"
+#include "arena.c"
