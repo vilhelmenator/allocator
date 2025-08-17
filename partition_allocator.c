@@ -99,7 +99,7 @@ bool partition_allocator_abandon_blocks(PartitionAllocator* palloc,
     
     return true;
 }
-bool partition_allocator_rest_blocks(PartitionAllocator* palloc,
+bool partition_allocator_reset_block(PartitionAllocator* palloc,
                                      void* addr) {
     PartitionLoc loc;
     if(get_partition_location(palloc, addr, &loc) == -1)
@@ -221,6 +221,8 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                                                   int32_t partition_idx,
                                                   uint32_t num_regions,
                                                   int32_t* region_idx,
+                                                  int32_t* is_zero,
+                                                  bool zero,
                                                   bool active) {
     Partition* partition = &allocator->partitions[partition_idx];
     // Find and reserve a free block (atomic CAS loop).
@@ -266,7 +268,7 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                         uint32_t size_in_blocks = get_range((uint32_t)region_idx, ranges);
                         uint64_t area_clear_mask =
                         (size_in_blocks == 64 ? ~0ULL : ((1ULL << size_in_blocks) - 1)) << region_idx;
-                        if(reused_block == 0 && size_in_blocks == num_regions)
+                        if(reused_block == 0 && size_in_blocks == num_regions && !zero)
                         {
                             // lets reclaim a region
                             reused_block = block_addr;  
@@ -288,6 +290,7 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
                     if(reused_block != 0)
                     {
                         // We successfully reclaimed a region
+                        *is_zero = 0;
                         return (void*)reused_block;
                     }
                 }
@@ -328,6 +331,7 @@ void* partition_allocator_allocate_from_partition(PartitionAllocator* allocator,
             }
             // update commit mask.
             *region_idx = bit;
+            *is_zero = 1;
             return (void*)block_addr;
         }
         // CAS failed (another thread took the block); retry.
@@ -418,9 +422,11 @@ void* partition_allocator_get_free_region(PartitionAllocator* allocator,
                                           int32_t partition_idx,
                                           uint32_t num_regions,
                                           int32_t* region_idx,
+                                          int32_t* is_zero,
+                                          bool zero,
                                           bool active )
 {
-    return partition_allocator_allocate_from_partition(allocator, partition_idx, num_regions, region_idx, active);
+    return partition_allocator_allocate_from_partition(allocator, partition_idx, num_regions, region_idx, is_zero, zero, active);
 }
 
 

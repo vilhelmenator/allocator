@@ -44,4 +44,5 @@ void arena_use_blocks(Arena *a, int start_bit);
 void arena_set_dirty_blocks(Arena *a, int start_bit);
 void arena_clear_dirty(Arena *a);
 bool arena_free_active(Allocator* alloc, Arena *a, bool decommit);
+bool arena_reallocate(Arena *a, int32_t start_idx, int32_t size_in_blocks, bool zero);
 #endif // ARENA_H

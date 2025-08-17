@@ -165,6 +165,7 @@ void implicitList_move_deferred(ImplicitList *h)
     }
     // Clear deferred_free
     h->deferred_free = NULL;
+    h->is_zero = false;
     
 }
 
@@ -341,6 +342,7 @@ void implicitList_reset(ImplicitList *h)
     h->max_block = h->total_memory;
     h->used_memory = 0;
     h->deferred_free = NULL;
+    h->is_zero = false;
 }
 
 void implicitList_free(ImplicitList *h, void *bp, bool should_coalesce)

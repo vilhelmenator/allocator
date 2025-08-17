@@ -202,14 +202,18 @@ namespace {
     #endif
 #endif // __cplusplus
 
-extern inline void __attribute__((malloc)) *cmalloc(size_t size) {
+static inline void *_cmalloc(size_t size, bool zero) {
     
     if(size == 0)
     {
         return NULL;
     }
-    const Allocator_param params = {get_thread_id(), size, sizeof(intptr_t), false};
+    const Allocator_param params = {get_thread_id(), size, sizeof(intptr_t), zero};
     return allocator_malloc(&params);
+}
+
+extern inline void __attribute__((malloc)) *cmalloc(size_t size) {
+    return _cmalloc(size, false);
 }
 
 static inline void*_caligned_alloc(size_t alignment, size_t size, bool zero)
@@ -328,13 +332,14 @@ bool callocator_release(void)
     Allocator *alloc = get_thread_instance();
     return allocator_release_local_areas(alloc);
 }
-void *aligned_crealloc(void *p, size_t alignment, size_t s )
+
+static inline void *_aligned_crealloc(void *p, size_t alignment, size_t s, bool zero )
 {
     
     // realloc is a bit tricky, we need to allocate a new memory
     // and copy the old memory into the new memory.
     if (p == NULL) {
-        return caligned_alloc(alignment, s);
+        return _caligned_alloc(alignment, s, zero);
     }
     if (s == 0) {
         cfree(p);
@@ -343,7 +348,7 @@ void *aligned_crealloc(void *p, size_t alignment, size_t s )
     // we need query the size of the old memory.
     //size_t old_size = allocator_get_size(p);
     size_t old_size = 0;
-    if(allocator_try_resize(p, s, &old_size))
+    if(allocator_try_resize(p, s, &old_size, zero))
     {
         // here we were able to resize the block
         // with the internal structures, so we don't
@@ -355,7 +360,7 @@ void *aligned_crealloc(void *p, size_t alignment, size_t s )
         return NULL;
     }
 
-    void *new_ptr = caligned_alloc(alignment, s);
+    void *new_ptr = _caligned_alloc(alignment, s, zero);
     if (new_ptr == NULL) {
         // we were not able to allocate the new memory.
         // game over, man!!
@@ -368,12 +373,23 @@ void *aligned_crealloc(void *p, size_t alignment, size_t s )
     
     return new_ptr;
 }
-void *crealloc(void *p, size_t s)
+
+extern inline void __attribute__((malloc)) *zaligned_crealloc(void *p, size_t alignment, size_t s )
+{
+    return _aligned_crealloc(p, alignment, s, true);
+}
+
+extern inline void __attribute__((malloc)) *aligned_crealloc(void *p, size_t alignment, size_t s )
+{
+    return _aligned_crealloc(p, alignment, s, false);
+}
+
+static inline void *_crealloc(void *p, size_t s, bool zero)
 {
     // realloc is a bit tricky, we need to allocate a new memory
     // and copy the old memory into the new memory.
     if (p == NULL) {
-        return cmalloc(s);
+        return _cmalloc(s, zero);
     }
     if (s == 0) {
         cfree(p);
@@ -382,7 +398,7 @@ void *crealloc(void *p, size_t s)
     // we need query the size of the old memory.
     //size_t old_size = allocator_get_size(p);
     size_t old_size = 0;
-    if(allocator_try_resize(p, s, &old_size))
+    if(allocator_try_resize(p, s, &old_size, zero))
     {
         // here we were able to resize the block
         // with the internal structures, so we don't
@@ -394,7 +410,7 @@ void *crealloc(void *p, size_t s)
         return NULL;
     }
 
-    void *new_ptr = cmalloc(s);
+    void *new_ptr = _cmalloc(s, zero);
     if (new_ptr == NULL) {
         // we were not able to allocate the new memory.
         // game over, man!!
@@ -406,6 +422,16 @@ void *crealloc(void *p, size_t s)
     cfree(p);
     
     return new_ptr;
+}
+
+extern inline void __attribute__((malloc)) *crealloc(void *p, size_t s )
+{
+    return _crealloc(p, s, false);
+}
+
+extern inline void __attribute__((malloc)) *zcrealloc(void *p, size_t s )
+{
+    return _crealloc(p, s, true);
 }
 
 // Allocating memory from the OS that will not conflict with any memory region

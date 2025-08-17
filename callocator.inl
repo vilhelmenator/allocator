@@ -251,13 +251,13 @@ typedef struct Pool_t
     int32_t idx;        // index in the parent section. Shifted up by one to keep the lowest bit zero.
     uint32_t block_idx; // index into the pool queue. What size class do you belong to.
     
-    // 32 byte body
+    // second cache block
     _Atomic(Block*) thread_free;
     int32_t num_used;
     int32_t num_committed;
     int32_t num_available;
     uint32_t alignment;
-    
+    int32_t is_zero; // is the pool zeroed?
     Block* free;
 } Pool;
 
@@ -290,7 +290,7 @@ typedef struct Arena_t
 // Boundary tag allocation structure
 typedef struct ImplicitList_t
 {
-    // 56 byte header
+    // 64 byte header
     _Atomic(intptr_t) thread_id;
     Block* deferred_free;
     size_t block_size;
@@ -307,7 +307,7 @@ typedef struct ImplicitList_t
     uint32_t min_block;    // what is the minum size block available;
     uint32_t max_block;    // what is the maximum size block available;
     uint32_t num_allocations;
-
+    uint32_t is_zero; // is the implicit list zeroed?
     Queue free_nodes;
 
 } ImplicitList;

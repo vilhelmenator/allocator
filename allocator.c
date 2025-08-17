@@ -234,6 +234,7 @@ static inline void allocator_release_pool_slot(Allocator *a)
     {
         if(pool_is_consumed(p))
         {
+            p->is_zero = 0; // Mark pool as not zeroed
             if(is_connected_to_list(queue, p))
             {
                 list_move_to_back(queue, p);
@@ -306,10 +307,9 @@ static inline void allocator_release_slot(Allocator *a)
     }
 }
 
-void * allocator_alloc_region(Allocator* alloc, int32_t partition_idx, int32_t num_regions, int32_t* region_idx, bool zero, bool active)
+void * allocator_alloc_region(Allocator* alloc, int32_t partition_idx, int32_t num_regions, int32_t* region_idx, int32_t* is_zero, bool zero, bool active)
 {
     UNUSED(alloc);
-    UNUSED(zero);
     if (partition_idx < 0 || partition_idx >= PARTITION_COUNT) {
         return NULL;
     }
@@ -317,13 +317,14 @@ void * allocator_alloc_region(Allocator* alloc, int32_t partition_idx, int32_t n
     // find an arena to remove
     allocator_try_release_local_area(alloc,partition_idx);
     
-    return partition_allocator_get_free_region(partition_allocator, partition_idx, num_regions, region_idx, active);
+    return partition_allocator_get_free_region(partition_allocator, partition_idx, num_regions, region_idx, is_zero, zero, active);
 }
 
 internal_alloc allocator_load_region_slot(Allocator *a, bool zero, bool active)
 {
     int32_t region_idx = -1;
-    void* region = allocator_alloc_region(a, AT_FIXED_256, 1, &region_idx, zero, active);
+    int32_t is_zero = 0;
+    void* region = allocator_alloc_region(a, AT_FIXED_256, 1, &region_idx, &is_zero, zero, active);
     if(region)
     {
         return allocator_set_region_slot(a, (uintptr_t)region);
@@ -372,7 +373,6 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
     // active && in_use... in cache and has memory handed out.
     // active && !in_use... in cache but no memory handed out.
     // !active && !in_use... completely free to use.
-    
     while(start != NULL)
     {
         Arena* arena = (Arena*)start;
@@ -402,7 +402,8 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
     if(start == NULL)
     {
         int32_t region_idx = 0;
-        start = allocator_alloc_region(alloc, arena_idx, 1,  &region_idx, zero, true);
+        int32_t is_zero = 0;
+        start = allocator_alloc_region(alloc, arena_idx, 1,  &region_idx, &is_zero, zero, true);
         if(start != NULL)
         {
             *midx = 1<<exp;
@@ -411,7 +412,8 @@ static inline uintptr_t allocator_get_arena_blocks(Allocator* alloc, int32_t are
             arena->partition_id = arena_idx;
             arena->idx = (region_idx << 4)| SLOT_ARENA;
             arena->in_use = 1;
-            
+            arena->zero = is_zero ? ~UINT64_C(0) : 0;
+
             if(!arena_is_connected(arena) && aqueue->head != arena)
             {
                 list_enqueue(aqueue, start);
@@ -595,8 +597,16 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
             {
                 alloc->c_back.header = ALIGN_DOWN_2(start, ARENA_SIZE(alloc->c_back.partition_index));
                 alloc->c_back.index = midx;
+                Arena* arena = (Arena*)alloc->c_back.header;
+                // if bit is set in zero of arena
+                bool is_zero = false;
+                if(arena->zero & (1ULL << midx))
+                {
+                    is_zero = true;
+                }
                 Pool* new_pool = (Pool*)start;
                 pool_init(new_pool, midx, alloc->c_back.exp, (uint32_t)block_size);
+                new_pool->is_zero = is_zero;
                 res = allocator_set_pool_slot(alloc, new_pool);
                 Queue *aqueue = &alloc->pools[alloc->c_back.exp];
                 if(!pool_is_connected(new_pool) && aqueue->head != new_pool)
@@ -636,7 +646,7 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
     {
         const uint32_t as_exp = ARENA_SIZE_EXPONENT(alloc->c_back.partition_index);
         int32_t region_idx = 0;
-        
+        int32_t is_zero = 0;
         Queue* aqueue = &alloc->implicit[alloc->c_back.partition_index];
         alloc_base* start = aqueue->head;
         
@@ -659,6 +669,7 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
                                                                 alloc->c_back.partition_index,
                                                                 1,
                                                                 &region_idx,
+                                                                &is_zero,
                                                                 alloc->c_slot.is_zero,
                                                                 true);
             alloc->c_back.header = ALIGN_DOWN_2(region, PARTITION_SECTION_SIZE(alloc->c_back.partition_index));
@@ -668,6 +679,7 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
             new_bt->thread_id = alloc->thread_id;
             new_bt->partition_id = alloc->c_back.partition_index;
             new_bt->idx = (region_idx << 4)| SLOT_IMPLICIT;
+            new_bt->is_zero = is_zero;
             start = (void*)new_bt;
         }
         
@@ -682,10 +694,12 @@ static inline internal_alloc allocator_malloc_back(Allocator* alloc, size_t alig
     else if(alloc->c_slot.type == SLOT_REGION)
     {
         int32_t region_idx = 0;
+        int32_t is_zero = 0;
         uintptr_t start = (uintptr_t)allocator_alloc_region(alloc,
                                                             alloc->c_back.partition_index,
                                                             1,
                                                             &region_idx,
+                                                            &is_zero,
                                                             alloc->c_slot.is_zero,
                                                             false);
         return allocator_set_region_slot(alloc, start);
@@ -1022,7 +1036,7 @@ void allocator_free(Allocator *a, void *p)
     _allocator_free(a, p);
 }
 
-int allocator_try_resize(void*p, const size_t s, size_t *os)
+int allocator_try_resize(void*p, const size_t s, size_t *os, bool zero)
 {
     if (p == NULL) {
         return 0;
@@ -1116,6 +1130,7 @@ int allocator_try_resize(void*p, const size_t s, size_t *os)
                             // we can try the next block adjecent to this one..
                             // if it is free, we can allocate it..
                             // well, how many blocks are being requested.
+                            arena_reallocate(h, idx, s, zero);
                             return 0;
                         }
                         else // we are in a pool
